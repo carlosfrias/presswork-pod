@@ -10,15 +10,6 @@ jobs:
   ts:
     name: TS — lint, typecheck, test
     runs-on: ubuntu-latest
-    if: |
-      contains(github.event.head_commit.modified, 'packages/shared/') ||
-      contains(github.event.head_commit.modified, 'packages/listing/') ||
-      contains(github.event.head_commit.modified, 'packages/fulfillment/') ||
-      contains(github.event.head_commit.modified, 'package.json') ||
-      contains(github.event.head_commit.modified, 'package-lock.json') ||
-      contains(github.event.head_commit.modified, 'infra/') ||
-      contains(github.event.head_commit.modified, '.github/workflows/ci.yml') ||
-      github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
 
@@ -45,15 +36,6 @@ jobs:
   python:
     name: Python — lint, typecheck, test
     runs-on: ubuntu-latest
-    if: |
-      contains(github.event.head_commit.modified, 'packages/scout/') ||
-      contains(github.event.head_commit.modified, 'packages/design/') ||
-      contains(github.event.head_commit.modified, 'packages/shared_py/') ||
-      contains(github.event.head_commit.modified, 'pyproject.toml') ||
-      contains(github.event.head_commit.modified, 'requirements') ||
-      contains(github.event.head_commit.modified, 'infra/') ||
-      contains(github.event.head_commit.modified, '.github/workflows/ci.yml') ||
-      github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
 
