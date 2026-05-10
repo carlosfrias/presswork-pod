@@ -182,3 +182,62 @@ def test_enforcement_is_conditional_not_global(mocker):
     _mock_client(mocker, json.dumps(_VALID_PROMPT))
     result = build_flux_prompt(_SAMPLE_BRIEF)
     assert isinstance(result, FluxPrompt)
+
+
+# --- Anti-abstract / anti-wallpaper enforcement ------------------------------
+
+
+def test_base_system_prompt_includes_anti_abstract_rules(mocker):
+    client = _mock_client(mocker, json.dumps(_VALID_PROMPT))
+    build_flux_prompt(_SAMPLE_BRIEF)
+    kwargs = client.messages.create.call_args.kwargs
+    system_text = kwargs["system"][0]["text"].lower()
+    assert "wallpaper" in system_text
+    assert "focal subject" in system_text
+
+
+@pytest.mark.parametrize(
+    "bad_term",
+    [
+        "wallpaper pattern",
+        "all-over floral",
+        "seamless pattern",
+        "tileable design",
+        "color field",
+        "gradient wash",
+    ],
+)
+def test_abstract_phrasing_in_prompt_is_rejected(mocker, bad_term):
+    bad = {**_VALID_PROMPT, "prompt": _VALID_PROMPT["prompt"] + " " + bad_term}
+    _mock_client(mocker, json.dumps(bad))
+    with pytest.raises(ValueError, match="forbidden abstract/wallpaper phrasing"):
+        build_flux_prompt(_SAMPLE_BRIEF)
+
+
+def test_abstract_phrasing_in_style_descriptors_is_rejected(mocker):
+    bad = {**_VALID_PROMPT, "style_descriptors": ["minimalist", "color field", "muted"]}
+    _mock_client(mocker, json.dumps(bad))
+    with pytest.raises(ValueError, match="forbidden abstract/wallpaper phrasing"):
+        build_flux_prompt(_SAMPLE_BRIEF)
+
+
+def test_abstract_phrasing_in_negative_prompt_is_allowed(mocker):
+    # Negative prompt is the correct place to tell FLUX what to avoid.
+    ok = {
+        **_VALID_PROMPT,
+        "negative_prompt": "wallpaper pattern, repeating motif, color field, tileable",
+    }
+    _mock_client(mocker, json.dumps(ok))
+    result = build_flux_prompt(_SAMPLE_BRIEF)
+    assert isinstance(result, FluxPrompt)
+    assert "wallpaper" in (result.negative_prompt or "")
+
+
+def test_anti_abstract_rule_applies_to_subject_centric_briefs_too(mocker):
+    bad = {
+        **_SUBJECT_VALID_PROMPT,
+        "prompt": _SUBJECT_VALID_PROMPT["prompt"] + " on a tileable wallpaper background",
+    }
+    _mock_client(mocker, json.dumps(bad))
+    with pytest.raises(ValueError, match="forbidden abstract/wallpaper phrasing"):
+        build_flux_prompt(_NURSE_BRIEF)

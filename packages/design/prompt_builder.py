@@ -13,6 +13,12 @@ Rules (non-negotiable):
 - The prompt MUST include ALL of these exact phrases:
   "print on demand design", "transparent background", "high resolution", "vector-style"
 - NEVER include: artist names, brand names, living people, copyrighted characters
+- NEVER produce wallpaper patterns, repeating motifs, all-over florals, abstract color fields,
+  gradient washes, or seamless/tileable backgrounds. The downstream background remover cannot
+  process these and apparel printing needs a clear focal subject.
+- Every design must have a recognizable focal subject — a figure, object, icon, or piece of
+  typography. When the brief sounds abstract or decorative, translate that aesthetic into a
+  single iconic motif rendered as a clear centered subject, not as a wallpaper pattern.
 - Translate style keywords and color palette into purely descriptive, FLUX-safe language
 - Focus on composition, mood, color, and texture — not specific named references
 
@@ -60,6 +66,23 @@ REQUIRED_SUBJECT_TERMS: tuple[str, ...] = (
     "clear focal point",
 )
 
+# Phrasing that indicates abstract / wallpaper-style output. Forbidden in the FLUX
+# prompt and style_descriptors for every brief — rembg cannot cleanly process these
+# and POD apparel needs a clear subject. Allowed in negative_prompt (that's its job).
+FORBIDDEN_ABSTRACT_TERMS: tuple[str, ...] = (
+    "wallpaper",
+    "all-over",
+    "all over pattern",
+    "repeating pattern",
+    "repeating motif",
+    "seamless pattern",
+    "tileable",
+    "color field",
+    "color-field",
+    "gradient wash",
+    "abstract wash",
+)
+
 _SUBJECT_CENTRIC_PATTERN = re.compile(
     r"\b(?:" + "|".join(re.escape(kw) for kw in SUBJECT_CENTRIC_KEYWORDS) + r")\b",
     re.IGNORECASE,
@@ -80,6 +103,17 @@ def _require_subject_terms(flux: FluxPrompt) -> None:
     if missing:
         raise ValueError(
             f"FLUX prompt missing required subject-centered phrasing for subject-centric brief: {missing}"
+        )
+
+
+def _reject_abstract_phrasing(flux: FluxPrompt) -> None:
+    # Only check the positive prompt + style_descriptors. negative_prompt is allowed
+    # (and encouraged) to contain these terms — that is its purpose.
+    haystack = (flux.prompt + " " + " ".join(flux.style_descriptors)).lower()
+    hits = [t for t in FORBIDDEN_ABSTRACT_TERMS if t in haystack]
+    if hits:
+        raise ValueError(
+            f"FLUX prompt contains forbidden abstract/wallpaper phrasing: {hits}"
         )
 
 
@@ -129,6 +163,7 @@ def build_flux_prompt(brief: TrendBrief) -> FluxPrompt:
 
     flux = FluxPrompt.model_validate(data)
 
+    _reject_abstract_phrasing(flux)
     if subject_centric:
         _require_subject_terms(flux)
 
