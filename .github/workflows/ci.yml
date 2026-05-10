@@ -24,11 +24,8 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Typecheck (build all — tsc -b is the typecheck)
-        run: |
-          npm run build --workspace=packages/shared
-          npm run build --workspace=packages/listing
-          npm run build --workspace=packages/fulfillment
+      - name: Typecheck
+        run: npm run typecheck
 
       - name: Test
         run: npm run test:ts
