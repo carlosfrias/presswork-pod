@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { createHmac } from "node:crypto";
-import { verifyPrintifyWebhook, handlePrintifyWebhook } from "./printify-webhook.js";
+import { verifyPrintifyWebhook } from "./printify-webhook.js";
 import type { Request, Response } from "express";
 import type { Db } from "@presswork/shared";
 
@@ -44,6 +44,7 @@ function makeValidEnv(extra: Record<string, string> = {}) {
     ETSY_REFRESH_TOKEN: "refresh-token",
     ETSY_SHIPPING_PROFILE_ID: "99",
     ETSY_PRODUCTION_PARTNER_ID: "999001",
+    ETSY_READINESS_STATE_ID: "1",
     FAL_KEY: "fal-key",
     PRINTIFY_API_TOKEN: "printify-token",
     PRINTIFY_SHOP_ID: "shop-1",

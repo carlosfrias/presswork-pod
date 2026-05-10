@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { Request, Response } from "express";
 import { z } from "zod";
-import { type Db, getLogger, getSettings, printifyFetch, submitTracking } from "@presswork/shared";
+import { type Db, getLogger, getSettings, printifyFetch, submitTracking, normalizeEtsyCarrierName, notifySlack } from "@presswork/shared";
 
 // Minimal webhook payload — only fields we act on
 const PrintifyWebhookPayloadSchema = z.object({
@@ -129,18 +129,32 @@ export async function handlePrintifyWebhook(
       .update({ tracking_number: shipment.number, tracking_url: shipment.url ?? "", status: "shipped" })
       .eq("id", order.id);
 
-    try {
-      await submitTracking(db, order.etsy_order_id, {
-        tracking_code: shipment.number,
-        carrier_name: shipment.carrier ?? "",
-      });
-    } catch (err) {
-      log.error({
+    const normalizedCarrier = normalizeEtsyCarrierName(shipment.carrier);
+    if (!normalizedCarrier) {
+      log.warn({
         agent: "fulfillment",
-        action: "printify_webhook_submit_tracking_error",
+        action: "printify_webhook_unknown_carrier",
         record_id: order.id,
-        error: String(err),
+        raw_carrier: shipment.carrier,
       });
+      await notifySlack(
+        `Unknown carrier "${shipment.carrier}" for order ${order.id} — tracking NOT submitted to Etsy`,
+        { severity: "warn" }
+      );
+    } else {
+      try {
+        await submitTracking(db, order.etsy_order_id, {
+          tracking_code: shipment.number,
+          carrier_name: normalizedCarrier,
+        });
+      } catch (err) {
+        log.error({
+          agent: "fulfillment",
+          action: "printify_webhook_submit_tracking_error",
+          record_id: order.id,
+          error: String(err),
+        });
+      }
     }
 
     log.info({

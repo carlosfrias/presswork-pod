@@ -12,6 +12,7 @@ const validEnv = {
   ETSY_REFRESH_TOKEN: "refresh-token",
   ETSY_SHIPPING_PROFILE_ID: "99",
   ETSY_PRODUCTION_PARTNER_ID: String(PARTNER_ID),
+  ETSY_READINESS_STATE_ID: "42",
   FAL_KEY: "fal-key",
   PRINTIFY_API_TOKEN: "printify-token",
   PRINTIFY_SHOP_ID: "shop-99",
@@ -114,9 +115,11 @@ describe("publishOne", () => {
         createDraftListing,
         uploadListingImage: vi.fn().mockResolvedValue(undefined),
         activateListing: vi.fn().mockResolvedValue(undefined),
+        getTaxonomyId: vi.fn().mockResolvedValue(68887043),
         getSettings: vi.fn().mockReturnValue({
           HUMAN_REVIEW_ENABLED: false,
           ETSY_SHIPPING_PROFILE_ID: 99,
+          ETSY_READINESS_STATE_ID: 42,
           ETSY_PRODUCTION_PARTNER_ID:
             overrides && "partnerId" in overrides ? overrides.partnerId : PARTNER_ID,
         }),
@@ -156,6 +159,27 @@ describe("publishOne", () => {
     );
     expect(dpUpdates).toHaveLength(1);
     expect(dpUpdates[0]?.data["mockups_from_actual_design"]).toBe(true);
+  });
+
+  it("forwards readiness_state_id and dynamic taxonomy_id to createDraftListing", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    const { createDraftListing } = mockSharedAndEtsy();
+
+    const db = makeDb([]);
+    const { publishOne } = await import("./publisher.js");
+    await publishOne(db, design, brief);
+
+    expect(createDraftListing).toHaveBeenCalledTimes(1);
+    const arg = createDraftListing.mock.calls[0]?.[1] as { readiness_state_id?: number; taxonomy_id?: number };
+    expect(arg.readiness_state_id).toBe(42);
+    expect(arg.taxonomy_id).toBe(68887043); // from getTaxonomyId mock
   });
 
   it("forwards production_partner_ids to createDraftListing (compliance rule 1)", async () => {

@@ -15,6 +15,12 @@ const SettingsSchema = z.object({
   // every listing. Register Printify in Etsy Shop Manager → Production Partners,
   // then put the returned numeric ID here. See compliance section in CLAUDE.md.
   ETSY_PRODUCTION_PARTNER_ID: z.coerce.number().int().positive(),
+  // Required on all physical listings as of Sep 30 2025 (Processing Profiles migration).
+  // Run scripts/get_etsy_readiness_state.ts once to get this ID, then paste it here.
+  ETSY_READINESS_STATE_ID: z.coerce.number().int().positive(),
+  // Provided by Etsy when the webhook subscription is created. Format: whsec_<base64>.
+  // Required for live webhook verification; optional so tests without webhooks don't fail.
+  ETSY_WEBHOOK_SECRET: z.string().min(1).optional(),
 
   // fal.ai
   FAL_KEY: z.string().min(1),

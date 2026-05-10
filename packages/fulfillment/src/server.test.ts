@@ -3,16 +3,21 @@ import request from "supertest";
 import { createHmac } from "node:crypto";
 import { createApp } from "./server.js";
 
-const SECRET = "etsy-secret";
+// whsec_ prefix + base64("etsy-webhook-secret")
+const SECRET = "whsec_ZXRzeS13ZWJob29rLXNlY3JldA==";
+const MSG_ID = "msg_test_svix_001";
+
 const validEnv = {
   ANTHROPIC_API_KEY: "sk-ant-test",
   ETSY_API_KEY: "etsy-key",
-  ETSY_API_SECRET: SECRET,
+  ETSY_API_SECRET: "etsy-api-secret",
+  ETSY_WEBHOOK_SECRET: SECRET,
   ETSY_SHOP_ID: "99",
   ETSY_ACCESS_TOKEN: "access-token",
   ETSY_REFRESH_TOKEN: "refresh-token",
   ETSY_SHIPPING_PROFILE_ID: "99",
   ETSY_PRODUCTION_PARTNER_ID: "999001",
+  ETSY_READINESS_STATE_ID: "1",
   FAL_KEY: "fal-key",
   PRINTIFY_API_TOKEN: "printify-token",
   PRINTIFY_SHOP_ID: "shop-1",
@@ -30,8 +35,12 @@ function makePayload(receiptId: number) {
   return Buffer.from(JSON.stringify({ receipt_id: receiptId }));
 }
 
-function signPayload(body: Buffer, secret: string): string {
-  return createHmac("sha256", secret).update(body).digest("hex");
+function svixSign(secret: string, id: string, ts: string, body: Buffer): string {
+  const decoded = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
+  const sig = createHmac("sha256", decoded)
+    .update(`${id}.${ts}.${body.toString("utf8")}`)
+    .digest("base64");
+  return `v1,${sig}`;
 }
 
 const NOW_TS = String(Math.floor(Date.now() / 1000));
@@ -57,18 +66,19 @@ describe("createApp", () => {
     expect(res.body).toEqual({ ok: true });
   });
 
-  it("valid HMAC → 200, processOrder called with extracted receipt id", async () => {
+  it("valid Svix signature → 200, processOrder called with extracted receipt id", async () => {
     const processOrder = vi.fn().mockResolvedValue({ outcome: "created", orderId: "order-1" });
     const app = createApp({ db: {} as never, processOrder });
 
     const body = makePayload(42);
-    const sig = signPayload(body, SECRET);
+    const sig = svixSign(SECRET, MSG_ID, NOW_TS, body);
 
     const res = await request(app)
       .post("/webhook/etsy-order")
       .set("content-type", "application/octet-stream")
-      .set("x-etsy-signature", sig)
-      .set("x-etsy-request-timestamp", NOW_TS)
+      .set("webhook-id", MSG_ID)
+      .set("webhook-timestamp", NOW_TS)
+      .set("webhook-signature", sig)
       .send(body);
 
     expect(res.status).toBe(200);
@@ -76,7 +86,7 @@ describe("createApp", () => {
     expect(processOrder).toHaveBeenCalledWith(expect.anything(), "42");
   });
 
-  it("invalid HMAC → 401, processOrder NOT called", async () => {
+  it("invalid Svix signature → 401, processOrder NOT called", async () => {
     const processOrder = vi.fn();
     const app = createApp({ db: {} as never, processOrder });
 
@@ -85,8 +95,9 @@ describe("createApp", () => {
     const res = await request(app)
       .post("/webhook/etsy-order")
       .set("content-type", "application/octet-stream")
-      .set("x-etsy-signature", "badsignature")
-      .set("x-etsy-request-timestamp", NOW_TS)
+      .set("webhook-id", MSG_ID)
+      .set("webhook-timestamp", NOW_TS)
+      .set("webhook-signature", "v1,badsignature")
       .send(body);
 
     expect(res.status).toBe(401);
@@ -102,7 +113,8 @@ describe("createApp", () => {
     const res = await request(app)
       .post("/webhook/etsy-order")
       .set("content-type", "application/octet-stream")
-      .set("x-etsy-request-timestamp", NOW_TS)
+      .set("webhook-id", MSG_ID)
+      .set("webhook-timestamp", NOW_TS)
       .send(body);
 
     expect(res.status).toBe(401);
@@ -114,14 +126,15 @@ describe("createApp", () => {
     const app = createApp({ db: {} as never, processOrder });
 
     const body = makePayload(42);
-    const sig = signPayload(body, SECRET);
     const oldTs = String(Math.floor(Date.now() / 1000) - 400);
+    const sig = svixSign(SECRET, MSG_ID, oldTs, body);
 
     const res = await request(app)
       .post("/webhook/etsy-order")
       .set("content-type", "application/octet-stream")
-      .set("x-etsy-signature", sig)
-      .set("x-etsy-request-timestamp", oldTs)
+      .set("webhook-id", MSG_ID)
+      .set("webhook-timestamp", oldTs)
+      .set("webhook-signature", sig)
       .send(body);
 
     expect(res.status).toBe(401);
@@ -136,14 +149,15 @@ describe("createApp", () => {
     const app = createApp({ db: {} as never, processOrder });
 
     const body = makePayload(42);
-    const sig = signPayload(body, SECRET);
+    const sig = svixSign(SECRET, MSG_ID, NOW_TS, body);
 
     for (let i = 0; i < 2; i++) {
       const res = await request(app)
         .post("/webhook/etsy-order")
         .set("content-type", "application/octet-stream")
-        .set("x-etsy-signature", sig)
-        .set("x-etsy-request-timestamp", NOW_TS)
+        .set("webhook-id", MSG_ID)
+        .set("webhook-timestamp", NOW_TS)
+        .set("webhook-signature", sig)
         .send(body);
       expect(res.status).toBe(200);
     }
@@ -156,13 +170,14 @@ describe("createApp", () => {
     const app = createApp({ db: {} as never, processOrder });
 
     const body = makePayload(42);
-    const sig = signPayload(body, SECRET);
+    const sig = svixSign(SECRET, MSG_ID, NOW_TS, body);
 
     const res = await request(app)
       .post("/webhook/etsy-order")
       .set("content-type", "application/octet-stream")
-      .set("x-etsy-signature", sig)
-      .set("x-etsy-request-timestamp", NOW_TS)
+      .set("webhook-id", MSG_ID)
+      .set("webhook-timestamp", NOW_TS)
+      .set("webhook-signature", sig)
       .send(body);
 
     expect(res.status).toBe(200);
