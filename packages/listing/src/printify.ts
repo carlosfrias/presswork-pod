@@ -11,6 +11,7 @@ export class PrintifyError extends Error {
 interface CreateProductInput {
   imageUrl: string;
   blueprintId: number;
+  printProviderId: number;
   variantIds: number[];
   title: string;
 }
@@ -47,18 +48,60 @@ async function printifyFetch(
   );
 }
 
+// POST /v1/uploads/images.json — registers an image into the Printify media
+// library and returns its upload id. That id is what print_areas[].placeholders[]
+// .images[].id expects when creating a product. Passing the public URL directly
+// into print_areas does NOT work (Printify rejects it as an unknown image id).
+export async function uploadImageByUrl(
+  imageUrl: string,
+  fileName: string
+): Promise<string> {
+  const { PRINTIFY_API_TOKEN } = getSettings();
+
+  const data = (await printifyFetch(
+    "/uploads/images.json",
+    { method: "POST", body: JSON.stringify({ file_name: fileName, url: imageUrl }) },
+    PRINTIFY_API_TOKEN
+  )) as { id?: string };
+
+  if (!data.id) {
+    throw new PrintifyError("Printify upload returned no id");
+  }
+  return data.id;
+}
+
+function deriveFileNameFromUrl(url: string): string {
+  try {
+    const path = new URL(url).pathname;
+    const last = path.split("/").filter(Boolean).pop();
+    return last && last.length > 0 ? last : "design.png";
+  } catch {
+    return "design.png";
+  }
+}
+
 export async function createHiddenProduct(
   input: CreateProductInput
 ): Promise<{ productId: string; mockupUrls: string[] }> {
   const { PRINTIFY_API_TOKEN, PRINTIFY_SHOP_ID } = getSettings();
 
+  // Two-step: register the image with Printify first, then reference its id
+  // (not the URL) inside print_areas.
+  const uploadId = await uploadImageByUrl(
+    input.imageUrl,
+    deriveFileNameFromUrl(input.imageUrl)
+  );
+
   const body = {
     title: input.title,
     blueprint_id: input.blueprintId,
-    print_provider_id: 1, // default print provider for the blueprint
+    print_provider_id: input.printProviderId,
     variants: input.variantIds.map((id) => ({
       id,
-      price: 0, // price is set on the Etsy listing, not on the Printify product
+      // Printify requires variants.*.price > 0 (cents). The buyer-facing price
+      // lives on the Etsy listing; this is a hidden Printify product so the
+      // value is internal metadata only — but the API still validates it.
+      price: 2499,
       is_enabled: true,
     })),
     print_areas: [
@@ -67,7 +110,7 @@ export async function createHiddenProduct(
         placeholders: [
           {
             position: "front",
-            images: [{ id: input.imageUrl, x: 0.5, y: 0.5, scale: 1, angle: 0 }],
+            images: [{ id: uploadId, x: 0.5, y: 0.5, scale: 1, angle: 0 }],
           },
         ],
       },

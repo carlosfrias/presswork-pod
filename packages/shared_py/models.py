@@ -86,6 +86,7 @@ class DesignPackage(BaseModel):
     # writes the Printify-generated mockup URLs back to this row.
     mockups_from_actual_design: bool = False
     printify_blueprint_id: int | None = None
+    printify_print_provider_id: int | None = None
     printify_variant_ids: list[int] | None = None
     fal_prompt: str | None = None
     fal_prompt_hash: str | None = None
@@ -101,6 +102,7 @@ class DesignPackageCreate(BaseModel):
     mockup_urls: list[str] | None = None
     mockups_from_actual_design: bool = False
     printify_blueprint_id: int | None = None
+    printify_print_provider_id: int | None = None
     printify_variant_ids: list[int] | None = None
     fal_prompt: str | None = None
     metadata: Any | None = None

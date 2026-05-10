@@ -36,6 +36,7 @@ export const DesignPackageSchema = z.object({
   image_url: z.string().nullable().optional(),
   mockup_urls: z.array(z.string()).nullable().optional(),
   printify_blueprint_id: z.number().int().nullable().optional(),
+  printify_print_provider_id: z.number().int().nullable().optional(),
   printify_variant_ids: z.array(z.number().int()).nullable().optional(),
   fal_prompt: z.string().nullable().optional(),
   fal_prompt_hash: z.string().nullable().optional(),
