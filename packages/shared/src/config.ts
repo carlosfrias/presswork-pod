@@ -11,6 +11,10 @@ const SettingsSchema = z.object({
   ETSY_ACCESS_TOKEN: z.string().min(1),
   ETSY_REFRESH_TOKEN: z.string().min(1),
   ETSY_SHIPPING_PROFILE_ID: z.coerce.number().int(),
+  // Etsy production-partner ID for Printify. Required by Etsy POD policy on
+  // every listing. Register Printify in Etsy Shop Manager → Production Partners,
+  // then put the returned numeric ID here. See compliance section in CLAUDE.md.
+  ETSY_PRODUCTION_PARTNER_ID: z.coerce.number().int().positive(),
 
   // fal.ai
   FAL_KEY: z.string().min(1),

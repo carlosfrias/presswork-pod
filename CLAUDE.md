@@ -126,6 +126,7 @@ ETSY_API_SECRET=
 ETSY_SHOP_ID=
 ETSY_ACCESS_TOKEN=          # OAuth 2.0, refresh manually or via refresh flow
 ETSY_REFRESH_TOKEN=
+ETSY_PRODUCTION_PARTNER_ID= # Numeric ID from Etsy Shop Manager → Production Partners (Printify). Required.
 
 # fal.ai
 FAL_KEY=
@@ -186,6 +187,7 @@ CREATE TABLE design_packages (
   printify_blueprint_id INT,   -- product type ID in Printify catalog
   printify_variant_ids INT[],  -- size/color variants to list
   fal_prompt TEXT,             -- store prompt for audit/iteration
+  mockups_from_actual_design BOOLEAN NOT NULL DEFAULT false, -- compliance rule 4
   metadata JSONB,
   error_message TEXT,
   retry_count INT DEFAULT 0
@@ -316,7 +318,7 @@ Never reference specific shop names, artist names, or existing IP."""
 5. Upload to Supabase Storage (`designs/` bucket)
 6. Insert `design_packages` row (with `printify_blueprint_id` + `printify_variant_ids` declaring intended product), update `trend_briefs.status = 'done'`
 
-Note: Mockup generation is the **Listing Agent's** responsibility, not Design's. Printify has no standalone "generate mockup" endpoint — mockups only exist as a side-effect of creating a Printify product, which Listing already needs to do. Design ends at "print-ready PNG uploaded + DB row written"; `design_packages.mockup_urls` is populated later by Listing.
+Note: Mockup generation is the **Listing Agent's** responsibility, not Design's. Printify has no standalone "generate mockup" endpoint — mockups only exist as a side-effect of creating a Printify product, which Listing already needs to do. Design ends at "print-ready PNG uploaded + DB row written"; `design_packages.mockup_urls` and the `mockups_from_actual_design` provenance flag are populated later by Listing. See `## Etsy Seller Policy Compliance` rule 4 for why the provenance flag exists.
 
 **FLUX prompt rules (enforce strictly):**
 - Always: `"print on demand design, transparent background, high resolution, vector-style"`
@@ -346,33 +348,24 @@ result = fal_client.run(
 
 **Logic flow:**
 1. Fetch `design_packages` where `status = 'done'` + joined `trend_briefs`
-2. Call Claude Sonnet → generate title, description, tags as structured JSON
-3. Validate: description MUST contain AI disclosure text (see Business Rules)
-4. Validate: `price_usd >= print_cost × 2.5` — reject if under floor
-5. **Create the Printify product** (POST `/v1/shops/{shop_id}/products.json`) using `image_url` + `printify_blueprint_id` + `printify_variant_ids` from the design_packages row. Set `is_visible=false` so it stays a draft on Printify until Etsy publishing succeeds. Read the auto-generated mockup image URLs from the response and write them back to `design_packages.mockup_urls` for audit/observability.
-6. If `HUMAN_REVIEW_ENABLED=true`: insert `listings` row with `status = 'needs_review'` and stop. Owner approves via admin script or future dashboard.
-7. If `HUMAN_REVIEW_ENABLED=false` (or after approval): create draft listing via Etsy API (POST `/application/shops/{shop_id}/listings`)
-8. Upload the Printify mockup images to the Etsy listing (POST `/application/shops/{shop_id}/listings/{id}/images`)
-9. Activate listing (PATCH status to `active`); flip the Printify product to `is_visible=true`
-10. Update `listings` row with `etsy_listing_id`, set `is_active = true`
+2. Validate: `price_usd >= print_cost × 2.5` — reject if under floor (`pricing.ts → validatePricingFloor`)
+3. Validate: `ETSY_PRODUCTION_PARTNER_ID` is set (`compliance.ts → validateProductionPartnerId`) — fail fast before spending Claude tokens
+4. Call Claude Sonnet → generate title, description, tags as structured JSON. The system prompt enforces the AI disclosure, forbidden-terms blocklist, and no-off-platform rules — see `## Etsy Seller Policy Compliance`
+5. Validate copy compliance (`compliance.ts → validateCopyCompliance`): AI disclosure present verbatim, no forbidden terms in title/description/tags, no external URLs/handles/off-platform phrasing. Hard reject on failure.
+6. **Create the Printify product** (POST `/v1/shops/{shop_id}/products.json`) using `image_url` + `printify_blueprint_id` + `printify_variant_ids` from the design_packages row. Set `is_visible=false` so it stays a draft on Printify until Etsy publishing succeeds. Read the auto-generated mockup image URLs from the response and write them back to `design_packages.mockup_urls`, AND set `mockups_from_actual_design = true` in the same write — these mockups by construction depict our actual design (compliance rule 4).
+7. If `HUMAN_REVIEW_ENABLED=true`: set `listings.status = 'needs_review'` and stop. Owner approves via admin script or future dashboard, advancing status to `pending_publish`.
+8. If `HUMAN_REVIEW_ENABLED=false` (or on resume after approval): re-run the full compliance gate inside `executeEtsyPublish()` (defense-in-depth) and create draft listing via Etsy API (POST `/application/shops/{shop_id}/listings`) with `production_partner_ids: [ETSY_PRODUCTION_PARTNER_ID]`, `who_made: "i_did"`, `when_made: "made_to_order"`, `is_supply: false`
+9. Upload the Printify mockup images to the Etsy listing (POST `/application/shops/{shop_id}/listings/{id}/images`)
+10. Activate listing (PATCH status to `active`); flip the Printify product to `is_visible=true`
+11. Update `listings` row with `etsy_listing_id`, set `is_active = true`
 
-**Claude copywriting prompt:**
-```typescript
-const system = `You are an expert Etsy SEO copywriter for print-on-demand products.
-Given a design brief, produce optimized Etsy listing copy.
-Respond ONLY with valid JSON:
-{
-  "title": string,       // max 140 chars, lead with primary keyword
-  "description": string, // 150-300 words, conversational, keyword-rich
-  "tags": string[]       // exactly 13 tags, mix of exact-match and long-tail
-}
-Do not use all-caps. Do not use excessive punctuation. Sound human.`
-```
+**Claude copywriting prompt:** the production system prompt lives in `packages/listing/src/copywriter.ts`. It instructs Claude to produce JSON `{title, description, tags}` and enumerates the four Etsy seller-policy rules it must obey (AI disclosure, no manual-creation language, no false uniqueness/scarcity, no off-Etsy redirection). Update both the prompt and the corresponding validators in `compliance.ts` together — they are a coupled enforcement pair.
 
 **Etsy API notes:**
 - OAuth 2.0 — access token expires every hour, implement refresh flow
 - `taxonomy_id` required — map niche → Etsy taxonomy ID in a lookup table
 - `shipping_profile_id` — create one standard profile manually, reuse the ID
+- `production_partner_ids` required — `[ETSY_PRODUCTION_PARTNER_ID]`; see compliance rule 1
 - `who_made: "i_did"`, `when_made: "made_to_order"`, `is_supply: false`
 
 ---
@@ -627,11 +620,84 @@ All services share the same env var group in Railway. No service needs to know a
 ## Key Business Rules (Do Not Violate)
 
 1. **Never copy existing designs.** FLUX prompts must be derived from style keywords only. If Claude identifies a prompt that names a specific artist or existing product, reject and regenerate.
-2. **AI-generated art disclosure.** Etsy requires disclosure. Every listing description must include: *"This design was created using AI image generation tools."*
+2. **AI-generated art disclosure.** Etsy requires disclosure. Every listing description must include the exact `AI_DISCLOSURE_TEXT` constant from `packages/shared/src/constants.ts`. See `## Etsy Seller Policy Compliance` below for the full rule.
 3. **Pricing floor.** Never list below `print_cost × 2.5`. Enforce in `publisher.ts` before listing goes live. Factor in Etsy's 6.5% transaction fee + 3% + $0.25 payment processing fee + $0.20 listing fee.
 4. **Etsy rate limits.** Max 10 req/sec, 10,000 req/day. All Etsy API clients must use a shared rate-limiter (use `bottleneck` package in TS, `asyncio.Semaphore` in Python).
 5. **Idempotency.** If a webhook fires twice for the same order, the second run must detect the existing `printify_order_id` and skip — never double-order.
 6. **Row locking.** When polling for pending rows, use `SELECT ... FOR UPDATE SKIP LOCKED` to prevent two agent instances from grabbing the same row.
+
+---
+
+## Etsy Seller Policy Compliance
+
+These six rules implement Etsy's Seller Policy for AI-generated print-on-demand goods. They are **non-negotiable legal requirements**, not stylistic preferences. Each one is a hard gate enforced in code — listings that fail any check must never reach Etsy's API.
+
+When you change anything in the Listing Agent, the copywriter prompt, or the publish pipeline, re-read this section and verify every rule still holds end to end.
+
+### 1. Production Partner Disclosure (required Etsy API field)
+
+Every Etsy listing must declare Printify as a production partner via the `production_partner_ids` field on the listings endpoint — disclosure in description text alone is insufficient.
+
+- **Setup:** Register Printify in Etsy Shop Manager → Settings → Production Partners. Etsy returns a numeric production-partner ID. Store it in `ETSY_PRODUCTION_PARTNER_ID` (see `.env.example`).
+- **Validation:** `validateProductionPartnerId()` in `packages/listing/src/compliance.ts` runs twice per publish (once before any external calls, once immediately before `createDraftListing`). Missing/zero/non-numeric ID throws `ComplianceError` and aborts publishing.
+- **Wire-up:** `publisher.ts → executeEtsyPublish()` always passes `production_partner_ids: [ETSY_PRODUCTION_PARTNER_ID]` into `createDraftListing()`. The Zod schema `EtsyListingCreateInputSchema` in `packages/shared/src/etsy-api.ts` requires the field; a missing field is a programmer error caught at parse time.
+
+### 2. AI Disclosure in Every Listing
+
+The exact text in `AI_DISCLOSURE_TEXT` (see `packages/shared/src/constants.ts`) must appear verbatim in every listing description. Currently:
+
+> "This design was created using AI image generation tools, hand-selected and quality-reviewed by our team before printing."
+
+- **Generation:** The Listing Agent's copywriter system prompt (`packages/listing/src/copywriter.ts`) instructs Claude to end every description with this sentence verbatim.
+- **Validation (response shape):** `ListingCopySchema` in `packages/shared/src/types.ts` rejects any Claude response whose `description` doesn't contain the disclosure substring. The `CopywriterError` aborts the publish flow.
+- **Validation (last-mile):** `validateAiDisclosure()` in `compliance.ts` runs again inside `publisher.ts` after copy generation and again inside `executeEtsyPublish()`, so any path (resume, retry, future code change) that reaches Etsy must satisfy it.
+
+### 3. Listing Copy Restrictions
+
+POD products may not be described as handmade, unique, or scarce. The full forbidden-terms list lives in `FORBIDDEN_LISTING_TERMS` in `packages/shared/src/constants.ts` and includes (case-insensitive, whole-word match):
+
+- Manual-creation claims: `handmade`, `hand-made`, `handcrafted`, `hand-drawn`, `hand-painted`, `hand-sewn`, `hand-stitched` and variants
+- False uniqueness/scarcity: `unique`, `one of a kind`, `OOAK`, `limited edition`, `limited availability`, `limited quantity`, `exclusive offer`, `only a few left`, `while supplies last`
+
+Always set on the Etsy create-listing call: `who_made: "i_did"`, `when_made: "made_to_order"`, `is_supply: false`. These are the literal API values that flag a listing as designer-created made-to-order POD on Etsy. Constants live in `packages/listing/src/constants.ts → LISTING_DEFAULTS`.
+
+- **Generation:** Copywriter system prompt explicitly enumerates the forbidden terms and instructs Claude to avoid them.
+- **Validation:** `validateNoForbiddenTerms()` in `compliance.ts` scans the title, description, and tags for whole-word matches. Throws `ComplianceError` on any hit. The AI disclosure substring is stripped before scanning so its "hand-selected" wording (selection, not creation) does not trip the manual-creation blocklist.
+
+### 4. Image Requirements (mockups must come from the actual design)
+
+Every listing image must be a Printify mockup generated from the actual design PNG. Generic stock photos and unrelated lifestyle shots are forbidden.
+
+- **Provenance flag:** `design_packages.mockups_from_actual_design BOOLEAN NOT NULL DEFAULT false` (added in `infra/supabase/migrations/007_design_packages_mockups_provenance.sql`).
+- **Setting the flag:** The Listing Agent flips it to `true` in the same DB write that populates `mockup_urls`, immediately after `createHiddenProduct()` succeeds — those mockups are by construction Printify-generated from the design's `image_url`.
+- **Validation:** `validateMockupProvenance()` in `compliance.ts` runs inside `executeEtsyPublish()` before `createDraftListing()`. If `mockups_from_actual_design` is not `true`, publishing aborts. `resumePublish()` re-reads the flag from the DB so retries cannot bypass it.
+
+### 5. Single Shop Rule
+
+Only one Etsy shop, **`BassetAndBirch`**, is permitted. Never create duplicate shops, alternate accounts, or additional storefronts to circumvent Etsy policies, test different niches, or split product categories. All products go through one shop.
+
+- **Configuration:** `ETSY_SHOP_NAME` constant in `packages/shared/src/constants.ts`. The `ETSY_SHOP_ID` env var must always resolve to this shop.
+- **Operational rule:** Do not add a second shop ID, second `ETSY_*_TOKEN` set, or second Printify shop binding. If a future product line needs separation, request a category/tag-based separation inside the existing shop, not a new shop.
+
+### 6. No Off-Platform Transactions
+
+Listing copy may not include external URLs, social-media handles, domain names, or any phrasing that asks buyers to purchase, contact, or follow the seller outside of Etsy.
+
+- **Generation:** Copywriter system prompt forbids URLs, `@username` handles, and off-platform phrasing.
+- **Validation:** `validateNoOffPlatform()` in `compliance.ts` checks the combined title/description/tags for `EXTERNAL_URL_PATTERN`, `SOCIAL_HANDLE_PATTERN`, and the `OFF_PLATFORM_PHRASES` blocklist (all in `packages/shared/src/constants.ts`).
+
+### Where each rule is enforced (quick reference)
+
+| Rule | Constant / schema | Validator | Call site |
+|---|---|---|---|
+| 1. Production partner | `ETSY_PRODUCTION_PARTNER_ID` env, `EtsyListingCreateInputSchema` | `validateProductionPartnerId()` | `publishOne()` + `executeEtsyPublish()` |
+| 2. AI disclosure | `AI_DISCLOSURE_TEXT`, `ListingCopySchema` | `validateAiDisclosure()` | copywriter + `executeEtsyPublish()` |
+| 3. Forbidden terms | `FORBIDDEN_LISTING_TERMS` | `validateNoForbiddenTerms()` | `validateCopyCompliance()` in `publishOne()` + `executeEtsyPublish()` |
+| 4. Mockup provenance | `design_packages.mockups_from_actual_design` | `validateMockupProvenance()` | `executeEtsyPublish()` |
+| 5. Single shop | `ETSY_SHOP_NAME`, `ETSY_SHOP_ID` | (operational, not runtime) | All Etsy API wrappers |
+| 6. No off-platform | `EXTERNAL_URL_PATTERN`, `SOCIAL_HANDLE_PATTERN`, `OFF_PLATFORM_PHRASES` | `validateNoOffPlatform()` | `validateCopyCompliance()` in `publishOne()` + `executeEtsyPublish()` |
+
+All validators live in `packages/listing/src/compliance.ts` and throw `ComplianceError`, which the publisher treats exactly like `PricingFloorError` — the listing never reaches Etsy.
 
 ---
 

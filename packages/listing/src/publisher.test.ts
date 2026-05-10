@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { Db, DesignPackage, TrendBrief } from "@presswork/shared";
+import { AI_DISCLOSURE_TEXT, type Db, type DesignPackage, type TrendBrief } from "@presswork/shared";
+
+const PARTNER_ID = 88123;
 
 const validEnv = {
   ANTHROPIC_API_KEY: "sk-ant-test",
@@ -9,6 +11,7 @@ const validEnv = {
   ETSY_ACCESS_TOKEN: "access-token",
   ETSY_REFRESH_TOKEN: "refresh-token",
   ETSY_SHIPPING_PROFILE_ID: "99",
+  ETSY_PRODUCTION_PARTNER_ID: String(PARTNER_ID),
   FAL_KEY: "fal-key",
   PRINTIFY_API_TOKEN: "printify-token",
   PRINTIFY_SHOP_ID: "shop-99",
@@ -21,6 +24,10 @@ const validEnv = {
   LOG_LEVEL: "info",
   HUMAN_REVIEW_ENABLED: "false",
 };
+
+const COMPLIANT_DESCRIPTION = `A great cat tee for cat lovers everywhere. Soft, comfy, and ready to ship. ${AI_DISCLOSURE_TEXT}`;
+const COMPLIANT_TAGS = Array(13).fill("cat tee");
+const COMPLIANT_TITLE = "Funny Cat T-Shirt for Cat Lovers Soft Cotton Tee";
 
 const LISTING_ID = "00000000-0000-0000-0000-000000000099";
 const PRODUCT_ID = "printify-product-abc";
@@ -84,37 +91,51 @@ describe("publishOne", () => {
     vi.restoreAllMocks();
   });
 
-  it("persists printify_product_id on the listings row after Printify product creation", async () => {
-    vi.doMock("./copywriter.js", () => ({
-      writeCopy: vi.fn().mockResolvedValue({
-        title: "Cat Tee",
-        description: "A great design. This design was created using AI image generation tools.",
-        tags: Array(13).fill("tag"),
-      }),
-    }));
-
+  function mockPrintify(productId = PRODUCT_ID) {
     vi.doMock("./printify.js", () => ({
       createHiddenProduct: vi.fn().mockResolvedValue({
-        productId: PRODUCT_ID,
+        productId,
         mockupUrls: ["https://example.com/mockup.jpg"],
       }),
       setProductVisible: vi.fn().mockResolvedValue(undefined),
     }));
+  }
+
+  function mockSharedAndEtsy(overrides?: { partnerId?: number | null }) {
+    const createDraftListing = vi
+      .fn()
+      .mockResolvedValue({ listing_id: 777, state: "draft", title: COMPLIANT_TITLE });
 
     vi.doMock("@presswork/shared", async () => {
       const actual = await vi.importActual<typeof import("@presswork/shared")>("@presswork/shared");
       return {
         ...actual,
-        createDraftListing: vi.fn().mockResolvedValue({ listing_id: 777, state: "draft", title: "Cat Tee" }),
+        createDraftListing,
         uploadListingImage: vi.fn().mockResolvedValue(undefined),
         activateListing: vi.fn().mockResolvedValue(undefined),
         getSettings: vi.fn().mockReturnValue({
           HUMAN_REVIEW_ENABLED: false,
           ETSY_SHIPPING_PROFILE_ID: 99,
+          ETSY_PRODUCTION_PARTNER_ID:
+            overrides && "partnerId" in overrides ? overrides.partnerId : PARTNER_ID,
         }),
         getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn() }),
       };
     });
+
+    return { createDraftListing };
+  }
+
+  it("persists printify_product_id and sets mockups_from_actual_design=true after Printify product creation", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    mockSharedAndEtsy();
 
     const updates: Array<{ table: string; data: Record<string, unknown> }> = [];
     const db = makeDb(updates);
@@ -127,5 +148,104 @@ describe("publishOne", () => {
     );
     expect(listingUpdatesWithProductId).toHaveLength(1);
     expect(listingUpdatesWithProductId[0]?.data.printify_product_id).toBe(PRODUCT_ID);
+
+    // Compliance rule 4: provenance flag must be flipped true on the design_packages row
+    const dpUpdates = updates.filter(
+      (u) => u.table === "design_packages" && "mockups_from_actual_design" in u.data
+    );
+    expect(dpUpdates).toHaveLength(1);
+    expect(dpUpdates[0]?.data["mockups_from_actual_design"]).toBe(true);
+  });
+
+  it("forwards production_partner_ids to createDraftListing (compliance rule 1)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    const { createDraftListing } = mockSharedAndEtsy();
+
+    const db = makeDb([]);
+    const { publishOne } = await import("./publisher.js");
+    await publishOne(db, design, brief);
+
+    expect(createDraftListing).toHaveBeenCalledTimes(1);
+    const arg = createDraftListing.mock.calls[0]?.[1] as { production_partner_ids?: number[] };
+    expect(arg.production_partner_ids).toEqual([PARTNER_ID]);
+  });
+
+  it("rejects publish when copy contains a forbidden term (compliance rule 3)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: "Handmade Cat Tee Unique Gift",
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    mockSharedAndEtsy();
+
+    const db = makeDb([]);
+    const { publishOne } = await import("./publisher.js");
+    const { ComplianceError } = await import("./compliance.js");
+
+    await expect(publishOne(db, design, brief)).rejects.toThrow(ComplianceError);
+  });
+
+  it("rejects publish when description is missing the AI disclosure (compliance rule 2)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: "A great cat tee. No disclosure here at all.",
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    mockSharedAndEtsy();
+
+    const db = makeDb([]);
+    const { publishOne } = await import("./publisher.js");
+    const { ComplianceError } = await import("./compliance.js");
+
+    await expect(publishOne(db, design, brief)).rejects.toThrow(ComplianceError);
+  });
+
+  it("rejects publish when copy contains an external URL (compliance rule 6)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: `${COMPLIANT_DESCRIPTION} Visit https://mystore.example.com for more.`,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    mockSharedAndEtsy();
+
+    const db = makeDb([]);
+    const { publishOne } = await import("./publisher.js");
+    const { ComplianceError } = await import("./compliance.js");
+
+    await expect(publishOne(db, design, brief)).rejects.toThrow(ComplianceError);
+  });
+
+  it("rejects publish when ETSY_PRODUCTION_PARTNER_ID is missing (compliance rule 1)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    mockSharedAndEtsy({ partnerId: null });
+
+    const db = makeDb([]);
+    const { publishOne } = await import("./publisher.js");
+    const { ComplianceError } = await import("./compliance.js");
+
+    await expect(publishOne(db, design, brief)).rejects.toThrow(ComplianceError);
   });
 });

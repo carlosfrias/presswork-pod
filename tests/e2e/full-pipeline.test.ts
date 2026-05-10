@@ -15,6 +15,7 @@ import { setupServer } from "msw/node";
 import request from "supertest";
 import { createHmac } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
+import { AI_DISCLOSURE_TEXT } from "@presswork/shared";
 
 const RUN = process.env["INTEGRATION"] === "1";
 const describeIf = RUN ? describe : describe.skip;
@@ -25,11 +26,15 @@ const ETSY_LISTING_ID = 777001;
 const RECEIPT_ID = "e2e-receipt-001";
 const SECRET = process.env["ETSY_API_SECRET"] ?? "test-secret";
 
+// Required for compliance rule 1; tests inject a fake numeric ID.
+process.env["ETSY_PRODUCTION_PARTNER_ID"] =
+  process.env["ETSY_PRODUCTION_PARTNER_ID"] ?? "999001";
+
 const VALID_COPY = {
-  title: "E2E Test Cat Tee",
+  title: "Cat Tee for Cat Lovers Soft Cotton Crewneck Shirt",
   description: [
     "A great shirt for cat lovers.",
-    "This design was created using AI image generation tools.",
+    AI_DISCLOSURE_TEXT,
     "Perfect for any cat person.",
   ].join(" "),
   tags: ["cat shirt", "cat tee", "funny cat", "cat lover", "unisex",

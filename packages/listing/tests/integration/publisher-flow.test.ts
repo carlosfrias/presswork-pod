@@ -8,6 +8,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 import { createClient } from "@supabase/supabase-js";
+import { AI_DISCLOSURE_TEXT } from "@presswork/shared";
 
 const RUN = process.env["INTEGRATION"] === "1";
 const describeIf = RUN ? describe : describe.skip;
@@ -16,11 +17,16 @@ const SHOP_ID = process.env["ETSY_SHOP_ID"] ?? "99";
 const PRODUCT_ID = "printify-integration-product-1";
 const ETSY_LISTING_ID = 888001;
 
+// Etsy compliance: production_partner_ids field is required on every listing.
+// The integration env must provide a numeric ID; tests inject a fake one.
+process.env["ETSY_PRODUCTION_PARTNER_ID"] =
+  process.env["ETSY_PRODUCTION_PARTNER_ID"] ?? "999001";
+
 const VALID_COPY = {
-  title: "Integration Test Cat Tee",
+  title: "Cat Tee for Cat Lovers Soft Cotton Crewneck",
   description: [
     "A great shirt for cat lovers.",
-    "This design was created using AI image generation tools.",
+    AI_DISCLOSURE_TEXT,
     "Perfect gift for any occasion.",
   ].join(" "),
   tags: ["cat shirt", "cat tee", "funny cat", "cat lover", "unisex",
@@ -175,10 +181,13 @@ describeIf("listing publisher integration", () => {
 
     const { data: dp } = await supabase
       .from("design_packages")
-      .select("mockup_urls")
+      .select("mockup_urls, mockups_from_actual_design")
       .eq("id", designPackageId)
       .single();
-    expect((dp as { mockup_urls: string[] }).mockup_urls).toHaveLength(2);
+    const dpRow = dp as { mockup_urls: string[]; mockups_from_actual_design: boolean };
+    expect(dpRow.mockup_urls).toHaveLength(2);
+    // Compliance rule 4: provenance flag must be flipped true when mockups are written
+    expect(dpRow.mockups_from_actual_design).toBe(true);
   });
 
   it("human review path: pauses at needs_review, then resumePublish completes", async () => {

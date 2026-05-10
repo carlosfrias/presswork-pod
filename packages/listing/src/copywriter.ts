@@ -28,8 +28,30 @@ Respond ONLY with valid JSON:
 }
 Do not use all-caps. Do not use excessive punctuation. Sound human.
 
-The description MUST contain this exact sentence verbatim:
-"${AI_DISCLOSURE_TEXT}"`;
+ETSY SELLER POLICY — these rules are non-negotiable. Listings that violate any of
+them will be rejected before publishing.
+
+1. AI disclosure (required). The description MUST end with this exact sentence,
+   verbatim, as the final sentence:
+   "${AI_DISCLOSURE_TEXT}"
+
+2. No manual-creation language. These are print-on-demand products produced by a
+   third-party fulfillment partner. NEVER use any of: "handmade", "hand made",
+   "hand-made", "handcrafted", "hand-crafted", "hand-drawn", "hand-painted",
+   "hand-sewn", "hand-stitched", or any variation that implies the product was
+   created by hand.
+
+3. No false uniqueness or scarcity. NEVER use "unique", "one of a kind",
+   "one-of-a-kind", "OOAK", "limited edition", "limited availability",
+   "limited quantity", "exclusive offer", "only a few left", or "while supplies
+   last". POD inventory is not finite, and identical items can be reordered.
+
+4. No off-Etsy redirection. NEVER include URLs, social-media handles (e.g.
+   @username), domain names (instagram.com, facebook.com, etc.), or phrasing
+   that asks buyers to purchase, contact, or follow you anywhere outside Etsy.
+   No "DM us", "follow us on", "visit our website", "buy direct", etc.
+
+Write copy that is engaging and SEO-rich while staying inside these rules.`;
 
 export async function writeCopy(
   brief: TrendBrief,

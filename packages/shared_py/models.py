@@ -80,6 +80,11 @@ class DesignPackage(BaseModel):
     status: DesignPackageStatus
     image_url: str | None = None
     mockup_urls: list[str] | None = None
+    # True iff mockup_urls came from a Printify product built on top of image_url.
+    # Etsy image policy: listing images must be of the actual design — never generic
+    # stock or unrelated lifestyle shots. Listing Agent flips this to True when it
+    # writes the Printify-generated mockup URLs back to this row.
+    mockups_from_actual_design: bool = False
     printify_blueprint_id: int | None = None
     printify_variant_ids: list[int] | None = None
     fal_prompt: str | None = None
@@ -94,6 +99,7 @@ class DesignPackageCreate(BaseModel):
     status: DesignPackageStatus = "pending"
     image_url: str | None = None
     mockup_urls: list[str] | None = None
+    mockups_from_actual_design: bool = False
     printify_blueprint_id: int | None = None
     printify_variant_ids: list[int] | None = None
     fal_prompt: str | None = None

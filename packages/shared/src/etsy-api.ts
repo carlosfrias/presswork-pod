@@ -122,6 +122,10 @@ export const EtsyListingCreateInputSchema = z.object({
   description: z.string(),
   price: z.number().positive(),
   tags: z.array(z.string()).max(13),
+  // Required by Etsy POD policy. Must be the numeric ID returned when the
+  // production partner (Printify) was registered in Etsy Shop Manager.
+  // Validated as non-empty by the Listing Agent before this call is made.
+  production_partner_ids: z.array(z.number().int().positive()).min(1),
   materials: z.array(z.string()).optional(),
   processing_min: z.number().int().optional(),
   processing_max: z.number().int().optional(),

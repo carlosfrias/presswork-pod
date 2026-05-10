@@ -9,6 +9,7 @@ const validEnv = {
   ETSY_ACCESS_TOKEN: "seed-access",
   ETSY_REFRESH_TOKEN: "seed-refresh",
   ETSY_SHIPPING_PROFILE_ID: "99",
+  ETSY_PRODUCTION_PARTNER_ID: "999001",
   FAL_KEY: "fal-key",
   PRINTIFY_API_TOKEN: "printify-token",
   PRINTIFY_SHOP_ID: "shop-1",

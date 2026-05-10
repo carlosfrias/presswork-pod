@@ -12,6 +12,11 @@ import {
 import { writeCopy } from "./copywriter.js";
 import { validatePricingFloor } from "./pricing.js";
 import { createHiddenProduct, setProductVisible } from "./printify.js";
+import {
+  validateCopyCompliance,
+  validateMockupProvenance,
+  validateProductionPartnerId,
+} from "./compliance.js";
 import { GILDAN_64000_PRINT_COST_USD, ETSY_TAXONOMY_ID_TSHIRT } from "./constants.js";
 
 export class PublisherError extends Error {
@@ -27,16 +32,26 @@ export async function publishOne(
   brief: TrendBrief
 ): Promise<{ listingId: string }> {
   const log = getLogger("listing");
-  const { HUMAN_REVIEW_ENABLED } = getSettings();
+  const { HUMAN_REVIEW_ENABLED, ETSY_PRODUCTION_PARTNER_ID } = getSettings();
   const t0 = Date.now();
 
   // Step 1: pricing floor check
   const priceUsd = brief.price_target_usd ?? 0;
   validatePricingFloor(priceUsd, GILDAN_64000_PRINT_COST_USD);
 
+  // Step 1b: Etsy compliance pre-checks that don't need any external calls.
+  // Production partner ID must be configured before we even spend a Claude token.
+  validateProductionPartnerId(ETSY_PRODUCTION_PARTNER_ID);
+
   // Step 2: generate copy via Claude
   log.info({ action: "generate_copy", record_id: design.id, status: "started" });
   const copy = await writeCopy(brief, design);
+
+  // Step 2b: Hard gate copy against Etsy seller-policy rules. ListingCopySchema
+  // already enforces the AI disclosure on the Claude response shape; this catches
+  // anything that slipped past (e.g. forbidden terms in title/tags, off-platform
+  // language) before we touch Printify or Etsy.
+  validateCopyCompliance(copy);
 
   // Step 3: insert listings row at 'pending'
   const { data: listingRow, error: insertErr } = await db
@@ -67,10 +82,13 @@ export async function publishOne(
       title: copy.title,
     });
 
-    // Step 5: write mockup URLs back to the design_package and persist productId on the listing
+    // Step 5: write mockup URLs back to the design_package and persist productId on the listing.
+    // mockups_from_actual_design is set true here because Printify generated these mockups by
+    // compositing this design's image_url onto blueprint variants — they are by construction
+    // images of the actual design, satisfying the Etsy image-policy gate enforced below.
     await db
       .from("design_packages")
-      .update({ mockup_urls: mockupUrls })
+      .update({ mockup_urls: mockupUrls, mockups_from_actual_design: true })
       .eq("id", design.id);
 
     await db
@@ -92,8 +110,9 @@ export async function publishOne(
 
     await db.from("listings").update({ status: "pending_publish" }).eq("id", listingId);
 
-    // Steps 7–12: Etsy publish flow
-    await executeEtsyPublish(db, listingId, productId, copy, priceUsd, mockupUrls);
+    // Steps 7–12: Etsy publish flow. We pass mockupsFromActualDesign=true because we
+    // just set it true above; resumePublish reads the current DB value instead.
+    await executeEtsyPublish(db, listingId, productId, copy, priceUsd, mockupUrls, true);
 
     log.info({
       action: "listing_published",
@@ -142,9 +161,17 @@ async function executeEtsyPublish(
   productId: string,
   copy: ListingCopy,
   priceUsd: number,
-  mockupUrls: string[]
+  mockupUrls: string[],
+  mockupsFromActualDesign: boolean
 ): Promise<void> {
-  const { ETSY_SHIPPING_PROFILE_ID } = getSettings();
+  const { ETSY_SHIPPING_PROFILE_ID, ETSY_PRODUCTION_PARTNER_ID } = getSettings();
+
+  // Last-line compliance gates immediately before talking to Etsy. These guard
+  // against any state where the DB row drifted (e.g. resumePublish picking up
+  // stale data) or a config change between the queue insert and the publish.
+  validateProductionPartnerId(ETSY_PRODUCTION_PARTNER_ID);
+  validateMockupProvenance(mockupsFromActualDesign);
+  validateCopyCompliance(copy);
 
   const { listing_id: etsyListingId } = await createDraftListing(db, {
     taxonomy_id: ETSY_TAXONOMY_ID_TSHIRT,
@@ -152,6 +179,7 @@ async function executeEtsyPublish(
     when_made: "made_to_order",
     is_supply: false,
     shipping_profile_id: ETSY_SHIPPING_PROFILE_ID,
+    production_partner_ids: [ETSY_PRODUCTION_PARTNER_ID],
     title: copy.title,
     description: copy.description,
     price: priceUsd,
@@ -205,16 +233,27 @@ export async function resumePublish(db: Db, listingId: string): Promise<void> {
     throw new PublisherError(`Listing ${listingId} has no printify_product_id`);
   }
 
-  // Fetch mockup_urls from the joined design_packages row
+  // Fetch mockup_urls + provenance flag from the joined design_packages row.
+  // The provenance flag must travel with the mockups so the downstream Etsy
+  // publish can re-verify image-policy compliance even on a resumed/retried run.
   const { data: designRow } = await db
     .from("listings")
-    .select("design_packages(mockup_urls)")
+    .select("design_packages(mockup_urls,mockups_from_actual_design)")
     .eq("id", listingId)
     .single();
 
-  const mockupUrls: string[] =
-    (designRow as { design_packages?: { mockup_urls?: string[] | null } | null } | null)
-      ?.design_packages?.mockup_urls ?? [];
+  const designJoin =
+    (
+      designRow as {
+        design_packages?: {
+          mockup_urls?: string[] | null;
+          mockups_from_actual_design?: boolean | null;
+        } | null;
+      } | null
+    )?.design_packages ?? null;
+
+  const mockupUrls: string[] = designJoin?.mockup_urls ?? [];
+  const mockupsFromActualDesign: boolean = designJoin?.mockups_from_actual_design ?? false;
 
   const copy: ListingCopy = {
     title: listing.title ?? "",
@@ -223,7 +262,15 @@ export async function resumePublish(db: Db, listingId: string): Promise<void> {
   };
 
   try {
-    await executeEtsyPublish(db, listingId, listing.printify_product_id, copy, listing.price_usd ?? 0, mockupUrls);
+    await executeEtsyPublish(
+      db,
+      listingId,
+      listing.printify_product_id,
+      copy,
+      listing.price_usd ?? 0,
+      mockupUrls,
+      mockupsFromActualDesign
+    );
     log.info({
       action: "resume_publish_complete",
       record_id: listingId,
