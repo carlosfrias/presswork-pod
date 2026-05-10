@@ -41,13 +41,18 @@ export function createApp(deps: AppDeps): Express {
 
   app.post("/webhook/etsy-order", async (req, res) => {
     const log = getLogger("fulfillment");
-    const { ETSY_API_SECRET } = getSettings();
+    const { ETSY_WEBHOOK_SECRET } = getSettings();
 
     const rawBody = req.body as Buffer;
-    const sigHeader = req.headers["x-etsy-signature"] as string | undefined;
-    const tsHeader = req.headers["x-etsy-request-timestamp"] as string | undefined;
-
-    const verification = verifyEtsyWebhook(rawBody, sigHeader, tsHeader, ETSY_API_SECRET);
+    const verification = verifyEtsyWebhook(
+      rawBody,
+      {
+        id: req.headers["webhook-id"] as string | undefined,
+        timestamp: req.headers["webhook-timestamp"] as string | undefined,
+        signature: req.headers["webhook-signature"] as string | undefined,
+      },
+      ETSY_WEBHOOK_SECRET
+    );
     if (!verification.valid) {
       log.warn({
         agent: "fulfillment",

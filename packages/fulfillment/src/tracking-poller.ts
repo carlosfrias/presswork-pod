@@ -1,4 +1,4 @@
-import { type Db, getLogger, submitTracking, notifySlack } from "@presswork/shared";
+import { type Db, getLogger, submitTracking, notifySlack, normalizeEtsyCarrierName } from "@presswork/shared";
 import { getOrder } from "./printify-orders.js";
 import { MAX_RETRIES } from "./constants.js";
 
@@ -51,11 +51,25 @@ export async function pollTracking(db: Db): Promise<PollTrackingResult> {
           })
           .eq("id", order.id);
 
-        // Post tracking back to Etsy
-        await submitTracking(db, order.etsy_order_id, {
-          tracking_code: detail.tracking.number,
-          carrier_name: detail.tracking.carrier,
-        });
+        // Post tracking back to Etsy (normalize carrier to Etsy's accepted enum)
+        const normalizedCarrier = normalizeEtsyCarrierName(detail.tracking.carrier);
+        if (!normalizedCarrier) {
+          log.warn({
+            agent: "fulfillment",
+            action: "unknown_carrier",
+            record_id: order.id,
+            raw_carrier: detail.tracking.carrier,
+          });
+          await notifySlack(
+            `Unknown carrier "${detail.tracking.carrier}" for order ${order.id} — tracking NOT submitted to Etsy`,
+            { severity: "warn" }
+          );
+        } else {
+          await submitTracking(db, order.etsy_order_id, {
+            tracking_code: detail.tracking.number,
+            carrier_name: normalizedCarrier,
+          });
+        }
 
         log.info({
           agent: "fulfillment",

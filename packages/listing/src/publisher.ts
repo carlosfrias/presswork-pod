@@ -6,6 +6,7 @@ import {
   createDraftListing,
   uploadListingImage,
   activateListing,
+  getTaxonomyId,
   getLogger,
   getSettings,
 } from "@presswork/shared";
@@ -17,7 +18,7 @@ import {
   validateMockupProvenance,
   validateProductionPartnerId,
 } from "./compliance.js";
-import { GILDAN_64000_PRINT_COST_USD, ETSY_TAXONOMY_ID_TSHIRT } from "./constants.js";
+import { GILDAN_64000_PRINT_COST_USD } from "./constants.js";
 
 export class PublisherError extends Error {
   constructor(message: string) {
@@ -172,7 +173,7 @@ async function executeEtsyPublish(
   mockupUrls: string[],
   mockupsFromActualDesign: boolean
 ): Promise<void> {
-  const { ETSY_SHIPPING_PROFILE_ID, ETSY_PRODUCTION_PARTNER_ID } = getSettings();
+  const { ETSY_SHIPPING_PROFILE_ID, ETSY_PRODUCTION_PARTNER_ID, ETSY_READINESS_STATE_ID } = getSettings();
 
   // Last-line compliance gates immediately before talking to Etsy. These guard
   // against any state where the DB row drifted (e.g. resumePublish picking up
@@ -181,12 +182,14 @@ async function executeEtsyPublish(
   validateMockupProvenance(mockupsFromActualDesign);
   validateCopyCompliance(copy);
 
+  const taxonomyId = await getTaxonomyId(db, "tshirt");
   const { listing_id: etsyListingId } = await createDraftListing(db, {
-    taxonomy_id: ETSY_TAXONOMY_ID_TSHIRT,
+    taxonomy_id: taxonomyId,
     who_made: "i_did",
     when_made: "made_to_order",
     is_supply: false,
     shipping_profile_id: ETSY_SHIPPING_PROFILE_ID,
+    readiness_state_id: ETSY_READINESS_STATE_ID,
     production_partner_ids: [ETSY_PRODUCTION_PARTNER_ID],
     title: copy.title,
     description: copy.description,

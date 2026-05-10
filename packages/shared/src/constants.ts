@@ -50,6 +50,87 @@ export const FORBIDDEN_LISTING_TERMS = [
   "while supplies last",
 ] as const;
 
+// Etsy's accepted carrier name strings (canonical, lowercase).
+// Source: Etsy Developer API carrier list. Add entries as new carriers are supported.
+export const ETSY_CARRIER_NAMES: ReadonlySet<string> = new Set([
+  "usps",
+  "ups",
+  "fedex",
+  "dhl",
+  "dhl-express",
+  "royal-mail",
+  "canada-post",
+  "australia-post",
+  "4px",
+  "amazon-logistics-us",
+  "amazon-logistics-uk",
+  "ontrac",
+  "lasership",
+  "newgistics",
+  "purolator",
+  "dpd",
+  "gls",
+  "hermes",
+  "yodel",
+  "tnt",
+  "aramex",
+]);
+
+// Maps raw carrier strings from Printify (and common variants) to Etsy canonical form.
+// Keys are the lowercased raw strings.
+const CARRIER_ALIAS_MAP: Readonly<Record<string, string>> = {
+  // USPS variants
+  "usps": "usps",
+  "u.s.p.s.": "usps",
+  "united states postal service": "usps",
+  "usps first class mail": "usps",
+  "usps priority mail": "usps",
+  "usps ground advantage": "usps",
+  // UPS variants
+  "ups": "ups",
+  "u.p.s.": "ups",
+  "united parcel service": "ups",
+  // FedEx variants
+  "fedex": "fedex",
+  "fed ex": "fedex",
+  "federal express": "fedex",
+  // DHL variants
+  "dhl": "dhl",
+  "dhl express": "dhl-express",
+  "dhlexpress": "dhl-express",
+  "dhl-express": "dhl-express",
+  "dhl ecommerce": "dhl",
+  // Royal Mail
+  "royal mail": "royal-mail",
+  "royalmail": "royal-mail",
+  // Canada Post
+  "canada post": "canada-post",
+  "canadapost": "canada-post",
+  // Australia Post
+  "australia post": "australia-post",
+  "australiapost": "australia-post",
+  // OnTrac
+  "ontrac": "ontrac",
+  // LaserShip
+  "lasership": "lasership",
+};
+
+/**
+ * Normalizes a raw carrier string (from Printify) to the canonical Etsy carrier name.
+ * Returns the canonical string if recognized; null if unknown.
+ * Call this before every submitTracking() invocation.
+ */
+export function normalizeEtsyCarrierName(raw: string | undefined): string | null {
+  if (!raw) return null;
+  const lowered = raw.toLowerCase().trim();
+  if (!lowered) return null;
+  const mapped = CARRIER_ALIAS_MAP[lowered];
+  if (mapped) return mapped;
+  // Direct match against known canonical names (case-insensitive)
+  if (ETSY_CARRIER_NAMES.has(lowered)) return lowered;
+  return null;
+}
+
 // Off-platform redirection — Etsy prohibits steering buyers to other channels.
 // Enforced by validateNoOffPlatform() in packages/listing/src/compliance.ts.
 export const EXTERNAL_URL_PATTERN = /\b(?:https?:\/\/|www\.)\S+/i;

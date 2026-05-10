@@ -3,6 +3,7 @@ export * from "./constants.js";
 export * from "./db.js";
 export * from "./etsy-auth.js";
 export * from "./etsy-api.js";
+export * from "./etsy-taxonomy.js";
 export * from "./etsy-tokens.js";
 export * from "./logger.js";
 export * from "./notifier.js";

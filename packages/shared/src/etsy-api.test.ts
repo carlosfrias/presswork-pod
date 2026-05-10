@@ -11,6 +11,7 @@ const validEnv = {
   ETSY_REFRESH_TOKEN: "refresh-token",
   ETSY_SHIPPING_PROFILE_ID: "99",
   ETSY_PRODUCTION_PARTNER_ID: "999001",
+  ETSY_READINESS_STATE_ID: "1",
   FAL_KEY: "fal-key",
   PRINTIFY_API_TOKEN: "printify-token",
   PRINTIFY_SHOP_ID: "shop-1",
@@ -146,6 +147,7 @@ const LISTING_INPUT = {
   shipping_profile_id: 123,
   // Required by Etsy POD policy (compliance rule 1). Schema rejects empty/missing.
   production_partner_ids: [999001],
+  readiness_state_id: 1,
   title: "Cat Tee",
   description: "A great shirt. This design was created using AI image generation tools, hand-selected and quality-reviewed by our team before printing.",
   price: 24.99,

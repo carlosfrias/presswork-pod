@@ -11,6 +11,7 @@ const validEnv = {
   ETSY_REFRESH_TOKEN: "refresh-token",
   ETSY_SHIPPING_PROFILE_ID: "99",
   ETSY_PRODUCTION_PARTNER_ID: "999001",
+  ETSY_READINESS_STATE_ID: "1",
   FAL_KEY: "fal-key",
   PRINTIFY_API_TOKEN: "printify-token",
   PRINTIFY_SHOP_ID: "shop-1",
@@ -130,6 +131,45 @@ describe("pollTracking", () => {
     expect(updateArg).toBeDefined();
     const arg = updateArg![0] as Record<string, unknown>;
     expect(arg?.["retry_count"]).toBe(1);
+  });
+
+  it("unknown carrier: submitTracking NOT called, Slack warn fired, row still marked shipped", async () => {
+    const submitTrackingMock = vi.fn();
+    const slackMock = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("@presswork/shared", async () => ({
+      ...(await import("@presswork/shared")),
+      getValidAccessToken: vi.fn().mockResolvedValue("token"),
+      submitTracking: submitTrackingMock,
+      notifySlack: slackMock,
+    }));
+
+    server.use(
+      http.get("https://api.printify.com/v1/shops/shop-1/orders/pf-1.json", () =>
+        HttpResponse.json({
+          id: "pf-1",
+          status: "shipped",
+          shipments: [{ carrier: "Mystery Carrier LLC", number: "TRACK123", url: "" }],
+        })
+      )
+    );
+
+    const db = makeDbMock({
+      orders: [{ id: "order-1", printify_order_id: "pf-1", etsy_order_id: "receipt-1", retry_count: 0 }],
+    });
+
+    const { pollTracking } = await import("./tracking-poller.js");
+    const stats = await pollTracking({ from: db.from } as never);
+
+    // Tracking was not submitted to Etsy
+    expect(submitTrackingMock).not.toHaveBeenCalled();
+    // Slack warn was fired
+    expect(slackMock).toHaveBeenCalledWith(
+      expect.stringContaining("Mystery Carrier LLC"),
+      { severity: "warn" }
+    );
+    // Row is still counted as shipped (DB update happened before normalization)
+    expect(stats.shipped).toBe(1);
+    expect(stats.errored).toBe(0);
   });
 
   it("Printify cancelled status: row → error, Slack alert fired", async () => {

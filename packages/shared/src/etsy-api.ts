@@ -126,6 +126,9 @@ export const EtsyListingCreateInputSchema = z.object({
   // production partner (Printify) was registered in Etsy Shop Manager.
   // Validated as non-empty by the Listing Agent before this call is made.
   production_partner_ids: z.array(z.number().int().positive()).min(1),
+  // Required on all physical listings as of Etsy's Sep 30 2025 Processing Profiles migration.
+  // Get the ID by running scripts/get_etsy_readiness_state.ts once per shop.
+  readiness_state_id: z.number().int().positive(),
   materials: z.array(z.string()).optional(),
   processing_min: z.number().int().optional(),
   processing_max: z.number().int().optional(),
