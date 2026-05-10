@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Etsy AI Agent Pipeline — Architecture</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Fraunces:ital,wght@0,300;0,700;1,300&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0d0f0e;
+    --surface: #141714;
+    --border: #1f2420;
+    --border-bright: #2e3530;
+    --green: #4ade80;
+    --green-dim: #166534;
+    --amber: #fbbf24;
+    --amber-dim: #78350f;
+    --blue: #60a5fa;
+    --blue-dim: #1e3a5f;
+    --purple: #c084fc;
+    --purple-dim: #4a1d6e;
+    --red: #f87171;
+    --text: #e2e8e2;
+    --text-dim: #6b7a6e;
+    --text-mid: #9aaa9d;
+    --mono: 'DM Mono', monospace;
+    --serif: 'Fraunces', serif;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    min-height: 100vh;
+    padding: 2rem 1.5rem 4rem;
+    overflow-x: hidden;
+  }
+
+  /* Grain overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.4;
+  }
+
+  .page { position: relative; z-index: 1; max-width: 960px; margin: 0 auto; }
+
+  header {
+    margin-bottom: 3rem;
+    border-bottom: 1px solid var(--border-bright);
+    padding-bottom: 1.5rem;
+  }
+
+  .eyebrow {
+    font-size: 0.65rem;
+    letter-spacing: 0.2em;
+    color: var(--green);
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+  }
+
+  h1 {
+    font-family: var(--serif);
+    font-weight: 300;
+    font-size: clamp(1.8rem, 5vw, 3rem);
+    line-height: 1.1;
+    color: var(--text);
+  }
+
+  h1 em {
+    font-style: italic;
+    color: var(--green);
+  }
+
+  .subtitle {
+    margin-top: 0.75rem;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+  }
+
+  /* Pipeline flow */
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .agent-block {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    position: relative;
+    animation: fadeUp 0.5s ease both;
+  }
+
+  .agent-block:nth-child(1) { animation-delay: 0.1s; border-color: var(--green-dim); }
+  .agent-block:nth-child(3) { animation-delay: 0.2s; border-color: var(--amber-dim); }
+  .agent-block:nth-child(5) { animation-delay: 0.3s; border-color: var(--blue-dim); }
+  .agent-block:nth-child(7) { animation-delay: 0.4s; border-color: var(--purple-dim); }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .agent-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .agent-num {
+    font-size: 0.6rem;
+    letter-spacing: 0.15em;
+    color: var(--text-dim);
+    width: 2.5rem;
+    flex-shrink: 0;
+  }
+
+  .agent-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    flex-shrink: 0;
+  }
+
+  .icon-green { background: #052e0f; border: 1px solid var(--green-dim); }
+  .icon-amber { background: #2d1a02; border: 1px solid var(--amber-dim); }
+  .icon-blue  { background: #05183d; border: 1px solid var(--blue-dim); }
+  .icon-purple{ background: #1e0a38; border: 1px solid var(--purple-dim); }
+
+  .agent-title-group { flex: 1; }
+
+  .agent-name {
+    font-family: var(--serif);
+    font-weight: 700;
+    font-size: 1.05rem;
+    line-height: 1;
+    margin-bottom: 0.2rem;
+  }
+
+  .name-green  { color: var(--green); }
+  .name-amber  { color: var(--amber); }
+  .name-blue   { color: var(--blue); }
+  .name-purple { color: var(--purple); }
+
+  .agent-tagline {
+    font-size: 0.65rem;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+  }
+
+  .agent-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0;
+  }
+
+  .agent-section {
+    padding: 1rem 1.25rem;
+    border-right: 1px solid var(--border);
+  }
+  .agent-section:last-child { border-right: none; }
+
+  .section-label {
+    font-size: 0.6rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 0.6rem;
+  }
+
+  .tag-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .tag {
+    font-size: 0.65rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 3px;
+    letter-spacing: 0.05em;
+    border: 1px solid;
+  }
+
+  .tag-green  { color: var(--green);  border-color: var(--green-dim);  background: #052e0f; }
+  .tag-amber  { color: var(--amber);  border-color: var(--amber-dim);  background: #2d1a02; }
+  .tag-blue   { color: var(--blue);   border-color: var(--blue-dim);   background: #05183d; }
+  .tag-purple { color: var(--purple); border-color: var(--purple-dim); background: #1e0a38; }
+  .tag-dim    { color: var(--text-mid); border-color: var(--border-bright); background: transparent; }
+
+  .detail-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .detail-list li {
+    font-size: 0.68rem;
+    color: var(--text-mid);
+    padding-left: 0.8rem;
+    position: relative;
+    line-height: 1.4;
+  }
+
+  .detail-list li::before {
+    content: '→';
+    position: absolute;
+    left: 0;
+    color: var(--text-dim);
+  }
+
+  /* Arrow connector */
+  .connector {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.3rem 0;
+    position: relative;
+  }
+
+  .connector-line {
+    width: 1px;
+    height: 100%;
+    position: absolute;
+    left: 50%;
+    background: var(--border-bright);
+  }
+
+  .connector-label {
+    background: var(--bg);
+    border: 1px solid var(--border-bright);
+    padding: 0.2rem 0.6rem;
+    font-size: 0.58rem;
+    letter-spacing: 0.12em;
+    color: var(--text-dim);
+    position: relative;
+    z-index: 1;
+  }
+
+  /* Stack section */
+  .stack-section {
+    margin-top: 2.5rem;
+    animation: fadeUp 0.5s ease 0.6s both;
+  }
+
+  .section-heading {
+    font-family: var(--serif);
+    font-weight: 300;
+    font-style: italic;
+    font-size: 1.1rem;
+    color: var(--text-dim);
+    margin-bottom: 1rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .stack-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+  }
+
+  .stack-card {
+    background: var(--surface);
+    padding: 1rem 1.25rem;
+  }
+
+  .stack-card-label {
+    font-size: 0.58rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    margin-bottom: 0.4rem;
+  }
+
+  .stack-card-value {
+    font-size: 0.8rem;
+    color: var(--text);
+    margin-bottom: 0.3rem;
+  }
+
+  .stack-card-note {
+    font-size: 0.62rem;
+    color: var(--text-dim);
+    line-height: 1.4;
+  }
+
+  /* Warning box */
+  .callout {
+    margin-top: 2rem;
+    border: 1px solid #78350f;
+    background: #1c0d00;
+    padding: 1rem 1.25rem;
+    animation: fadeUp 0.5s ease 0.7s both;
+  }
+
+  .callout-head {
+    font-size: 0.65rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--amber);
+    margin-bottom: 0.5rem;
+  }
+
+  .callout p {
+    font-size: 0.7rem;
+    color: var(--text-mid);
+    line-height: 1.6;
+  }
+
+  /* Data flow diagram */
+  .dataflow {
+    margin-top: 2.5rem;
+    animation: fadeUp 0.5s ease 0.65s both;
+  }
+
+  .flow-row {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    border: 1px solid var(--border);
+    overflow: hidden;
+  }
+
+  .flow-cell {
+    flex: 1;
+    padding: 0.75rem 1rem;
+    border-right: 1px solid var(--border);
+    position: relative;
+  }
+  .flow-cell:last-child { border-right: none; }
+
+  .flow-cell-label {
+    font-size: 0.58rem;
+    letter-spacing: 0.15em;
+    color: var(--text-dim);
+    margin-bottom: 0.3rem;
+  }
+
+  .flow-cell-value {
+    font-size: 0.72rem;
+    color: var(--text-mid);
+    line-height: 1.4;
+  }
+
+  .flow-arrow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    flex-shrink: 0;
+    color: var(--text-dim);
+    font-size: 0.7rem;
+    border-right: 1px solid var(--border);
+    background: #0a0c0b;
+  }
+
+  .flow-header {
+    background: #0a0c0b;
+    border: 1px solid var(--border);
+    border-bottom: none;
+    padding: 0.4rem 1rem;
+    font-size: 0.58rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    display: flex;
+    gap: 1rem;
+  }
+
+  .flow-header span { flex: 1; }
+
+  @media (max-width: 600px) {
+    .agent-body { grid-template-columns: 1fr; }
+    .agent-section { border-right: none; border-bottom: 1px solid var(--border); }
+    .agent-section:last-child { border-bottom: none; }
+    .stack-grid { grid-template-columns: 1fr 1fr; }
+    .flow-row { flex-direction: column; }
+    .flow-arrow { width: auto; height: 24px; border-right: none; border-bottom: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header>
+    <div class="eyebrow">// system architecture</div>
+    <h1>Etsy <em>AI Agent</em> Pipeline</h1>
+    <div class="subtitle">4-agent autonomous print-on-demand system · scout → design → list → fulfill</div>
+  </header>
+
+  <div class="pipeline">
+
+    <!-- Agent 1: Scout -->
+    <div class="agent-block">
+      <div class="agent-header">
+        <div class="agent-num">01 /04</div>
+        <div class="agent-icon icon-green">🔍</div>
+        <div class="agent-title-group">
+          <div class="agent-name name-green">Scout Agent</div>
+          <div class="agent-tagline">market intelligence · trend detection · niche analysis</div>
+        </div>
+      </div>
+      <div class="agent-body">
+        <div class="agent-section">
+          <div class="section-label">Inputs</div>
+          <ul class="detail-list">
+            <li>Etsy search API (bestsellers, trending)</li>
+            <li>Category/niche seed keywords</li>
+            <li>Price range filters</li>
+            <li>Review count thresholds</li>
+          </ul>
+        </div>
+        <div class="agent-section">
+          <div class="section-label">What it extracts</div>
+          <ul class="detail-list">
+            <li>Top-selling niches + sub-niches</li>
+            <li>Price points & listing structure</li>
+            <li>Tag/keyword patterns</li>
+            <li>Style themes (not designs)</li>
+            <li>Seasonal demand signals</li>
+          </ul>
+        </div>
+        <div class="agent-section">
+          <div class="section-label">Tech</div>
+          <div class="tag-list">
+            <span class="tag tag-green">Python</span>
+            <span class="tag tag-green">Etsy API v3</span>
+            <span class="tag tag-green">Claude Sonnet</span>
+            <span class="tag tag-dim">Playwright</span>
+            <span class="tag tag-dim">Supabase</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="connector">
+      <div class="connector-line"></div>
+      <div class="connector-label">TREND BRIEF JSON → niche, style keywords, price target</div>
+    </div>
+
+    <!-- Agent 2: Design -->
+    <div class="agent-block">
+      <div class="agent-header">
+        <div class="agent-num">02 /04</div>
+        <div class="agent-icon icon-amber">🎨</div>
+        <div class="agent-title-group">
+          <div class="agent-name name-amber">Design Agent</div>
+          <div class="agent-tagline">original artwork generation · prompt engineering · variant creation</div>
+        </div>
+      </div>
+      <div class="agent-body">
+        <div class="agent-section">
+          <div class="section-label">Inputs</div>
+          <ul class="detail-list">
+            <li>Trend brief from Scout</li>
+            <li>Style descriptors (NOT copied designs)</li>
+            <li>Product type (tee, mug, poster…)</li>
+            <li>Color palette constraints</li>
+          </ul>
+        </div>
+        <div class="agent-section">
+          <div class="section-label">What it outputs</div>
+          <ul class="detail-list">
+            <li>Original AI-generated artwork (PNG)</li>
+            <li>Print-ready at 300dpi / transparent bg</li>
+            <li>3–5 colorway variants per design</li>
+            <li>Mockup images for listing photos</li>
+          </ul>
+        </div>
+        <div class="agent-section">
+          <div class="section-label">Tech</div>
+          <div class="tag-list">
+            <span class="tag tag-amber">fal.ai</span>
+            <span class="tag tag-amber">FLUX Pro</span>
+            <span class="tag tag-amber">Claude Sonnet</span>
+            <span class="tag tag-dim">Sharp (resize)</span>
+            <span class="tag tag-dim">Placeit API</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="connector">
+      <div class="connector-line"></div>
+      <div class="connector-label">DESIGN PACKAGE → PNG files + metadata + mockups</div>
+    </div>
+
+    <!-- Agent 3: Listing -->
+    <div class="agent-block">
+      <div class="agent-header">
+        <div class="agent-num">03 /04</div>
+        <div class="agent-icon icon-blue">📦</div>
+        <div class="agent-title-group">
+          <div class="agent-name name-blue">Listing Agent</div>
+          <div class="agent-tagline">seo copywriting · etsy api · product publishing</div>
+        </div>
+      </div>
+      <div class="agent-body">
+        <div class="agent-section">
+          <div class="section-label">Inputs</div>
+          <ul class="detail-list">
+            <li>Design package + metadata</li>
+            <li>Trend brief (keywords, price)</li>
+            <li>Printful product catalog IDs</li>
+            <li>Etsy shop credentials</li>
+          </ul>
+        </div>
+        <div class="agent-section">
+          <div class="section-label">What it publishes</div>
+          <ul class="detail-list">
+            <li>SEO-optimized title (140 chars)</li>
+            <li>Long-form description with keywords</li>
+            <li>13 Etsy tags (exact match + long tail)</li>
+            <li>Variants (sizes, colors) + pricing</li>
+            <li>Shipping profiles auto-attached</li>
+          </ul>
+        </div>
+        <div class="agent-section">
+          <div class="section-label">Tech</div>
+          <div class="tag-list">
+            <span class="tag tag-blue">Etsy API v3</span>
+            <span class="tag tag-blue">Claude Sonnet</span>
+            <span class="tag tag-blue">Node.js / TS</span>
+            <span class="tag tag-dim">OAuth 2.0</span>
+            <span class="tag tag-dim">Supabase</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="connector">
+      <div class="connector-line"></div>
+      <div class="connector-label">ETSY ORDER WEBHOOK → order_id, item, buyer address</div>
+    </div>
+
+    <!-- Agent 4: Fulfillment -->
+    <div class="agent-block">
+      <div class="agent-header">
+        <div class="agent-num">04 /04</div>
+        <div class="agent-icon icon-purple">🚚</div>
+        <div class="agent-title-group">
+          <div class="agent-name name-purple">Fulfillment Agent</div>
+          <div class="agent-tagline">order routing · printful sync · tracking · exception handling</div>
+        </div>
+      </div>
+      <div class="agent-body">
+        <div class="agent-section">
+          <div class="section-label">Inputs</div>
+          <ul class="detail-list">
+            <li>Etsy order webhook payload</li>
+            <li>Design file lookup (Supabase)</li>
+            <li>Printful product variant map</li>
+          </ul>
+        </div>
+        <div class="agent-section">
+          <div class="section-label">What it does</div>
+          <ul class="detail-list">
+            <li>Creates Printful order via API</li>
+            <li>Polls for tracking number</li>
+            <li>Posts tracking back to Etsy</li>
+            <li>Handles failures / alerts to Slack</li>
+            <li>Logs margin per order to DB</li>
+          </ul>
+        </div>
+        <div class="agent-section">
+          <div class="section-label">Tech</div>
+          <div class="tag-list">
+            <span class="tag tag-purple">Printful API</span>
+            <span class="tag tag-purple">Node.js / TS</span>
+            <span class="tag tag-purple">Etsy API v3</span>
+            <span class="tag tag-dim">Railway cron</span>
+            <span class="tag tag-dim">Resend email</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /pipeline -->
+
+  <!-- Data flow table -->
+  <div class="dataflow">
+    <div class="section-heading">Data flow between agents</div>
+    <div class="flow-header">
+      <span>FROM</span>
+      <span style="width:24px; flex:none;"></span>
+      <span>TO</span>
+      <span>PAYLOAD</span>
+    </div>
+    <div class="flow-row">
+      <div class="flow-cell"><div class="flow-cell-label">Source</div><div class="flow-cell-value name-green">Scout Agent</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-cell"><div class="flow-cell-label">Destination</div><div class="flow-cell-value name-amber">Design Agent</div></div>
+      <div class="flow-cell" style="flex:2"><div class="flow-cell-label">Payload</div><div class="flow-cell-value">trend_brief { niche, style_keywords[], price_target, top_tags[], color_palette }</div></div>
+    </div>
+    <div class="flow-row" style="border-top:none;">
+      <div class="flow-cell"><div class="flow-cell-label">Source</div><div class="flow-cell-value name-amber">Design Agent</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-cell"><div class="flow-cell-label">Destination</div><div class="flow-cell-value name-blue">Listing Agent</div></div>
+      <div class="flow-cell" style="flex:2"><div class="flow-cell-label">Payload</div><div class="flow-cell-value">design_package { image_url, mockup_urls[], printful_variant_id, metadata }</div></div>
+    </div>
+    <div class="flow-row" style="border-top:none;">
+      <div class="flow-cell"><div class="flow-cell-label">Source</div><div class="flow-cell-value">Etsy Webhook</div></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-cell"><div class="flow-cell-label">Destination</div><div class="flow-cell-value name-purple">Fulfillment Agent</div></div>
+      <div class="flow-cell" style="flex:2"><div class="flow-cell-label">Payload</div><div class="flow-cell-value">order { etsy_order_id, listing_id, variant, buyer_address, quantity }</div></div>
+    </div>
+  </div>
+
+  <!-- Stack recommendations -->
+  <div class="stack-section">
+    <div class="section-heading">Recommended full stack</div>
+    <div class="stack-grid">
+      <div class="stack-card">
+        <div class="stack-card-label">Orchestration / Backend</div>
+        <div class="stack-card-value">Python (agents) + Node.js/TS (APIs)</div>
+        <div class="stack-card-note">Python leads for AI/scraping tasks. Your TS skills carry over for the Etsy/Printful API layer.</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-card-label">AI Backbone</div>
+        <div class="stack-card-value">Claude Sonnet 4 (via API)</div>
+        <div class="stack-card-note">Prompt chaining between agents. Structured JSON outputs for each handoff.</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-card-label">Image Generation</div>
+        <div class="stack-card-value">fal.ai + FLUX Pro 1.1</div>
+        <div class="stack-card-note">Best quality/cost ratio for POD. Outperforms DALL-E for commercial print work. ~$0.05/image.</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-card-label">Database</div>
+        <div class="stack-card-value">Supabase (Postgres)</div>
+        <div class="stack-card-note">Stores designs, listings, orders, margin tracking. Already in your NgTenant stack.</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-card-label">Hosting / Scheduling</div>
+        <div class="stack-card-value">Railway</div>
+        <div class="stack-card-note">Cron jobs for Scout runs. Webhook receiver for Etsy orders. Also already in your stack.</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-card-label">Print Fulfillment</div>
+        <div class="stack-card-value">Printify (primary)</div>
+        <div class="stack-card-note">Better margins than Printful (~15–20% cheaper). Use Printful as fallback. Both have solid APIs.</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-card-label">Mockup Generation</div>
+        <div class="stack-card-value">Placeit API or Printify mockups</div>
+        <div class="stack-card-note">Auto-generate lifestyle photos for listings without manual Photoshop work.</div>
+      </div>
+      <div class="stack-card">
+        <div class="stack-card-label">Alerts / Monitoring</div>
+        <div class="stack-card-value">Resend (email) + Slack webhook</div>
+        <div class="stack-card-note">Failed orders, low margin warnings, and daily sales digests to your phone.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="callout">
+    <div class="callout-head">⚠ Key risks to design around</div>
+    <p>
+      <strong style="color:var(--amber)">Etsy API rate limits:</strong> 10 req/sec, 10k/day. Scout agent must be throttled. Use cursor-based pagination, not parallel blasting. &nbsp;·&nbsp;
+      <strong style="color:var(--amber)">Design copyright:</strong> FLUX outputs are commercially safe if you own the prompt and don't reference specific artists. Avoid prompts that describe existing IP. &nbsp;·&nbsp;
+      <strong style="color:var(--amber)">Etsy ToS:</strong> Automated listing creation is allowed via the API — that's what it's for. Fully AI-generated art must be disclosed in listings (Etsy policy updated 2024). &nbsp;·&nbsp;
+      <strong style="color:var(--amber)">Margin math:</strong> Budget ~40–50% of sale price to Printify + Etsy fees. Price at 2.5–3× print cost minimum.
+    </p>
+  </div>
+
+</div>
+</body>
+</html>

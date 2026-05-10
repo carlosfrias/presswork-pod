@@ -1,0 +1,4 @@
+-r ../shared_py/requirements.txt
+fal-client>=0.5
+Pillow>=10.2
+tenacity>=8.2

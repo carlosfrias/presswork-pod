@@ -1,0 +1,2 @@
+-r ../shared_py/requirements.txt
+tenacity>=8.2

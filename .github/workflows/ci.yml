@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  ts:
+    name: TS — lint, typecheck, test
+    runs-on: ubuntu-latest
+    if: |
+      contains(github.event.head_commit.modified, 'packages/shared/') ||
+      contains(github.event.head_commit.modified, 'packages/listing/') ||
+      contains(github.event.head_commit.modified, 'packages/fulfillment/') ||
+      contains(github.event.head_commit.modified, 'package.json') ||
+      contains(github.event.head_commit.modified, 'package-lock.json') ||
+      contains(github.event.head_commit.modified, 'infra/') ||
+      contains(github.event.head_commit.modified, '.github/workflows/ci.yml') ||
+      github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared (required for typecheck in downstream packages)
+        run: npm run build --workspace=packages/shared
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test:ts
+
+  python:
+    name: Python — lint, typecheck, test
+    runs-on: ubuntu-latest
+    if: |
+      contains(github.event.head_commit.modified, 'packages/scout/') ||
+      contains(github.event.head_commit.modified, 'packages/design/') ||
+      contains(github.event.head_commit.modified, 'packages/shared_py/') ||
+      contains(github.event.head_commit.modified, 'pyproject.toml') ||
+      contains(github.event.head_commit.modified, 'requirements') ||
+      contains(github.event.head_commit.modified, 'infra/') ||
+      contains(github.event.head_commit.modified, '.github/workflows/ci.yml') ||
+      github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install scout dev dependencies
+        run: pip install -r packages/scout/requirements-dev.txt
+
+      - name: Install design dev dependencies
+        run: pip install -r packages/design/requirements-dev.txt
+
+      - name: Install shared-py dev dependencies
+        run: pip install -r packages/shared_py/requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check packages/
+
+      - name: Typecheck (pyright)
+        run: pyright packages/
+
+      - name: Test
+        run: pytest packages/scout packages/design packages/shared_py --ignore=packages/scout/tests/integration --ignore=packages/design/tests/integration

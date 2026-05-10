@@ -1,0 +1,25 @@
+{
+  "name": "@presswork/listing",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node --import tsx/esm src/index.ts",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.30.0",
+    "@presswork/shared": "*",
+    "async-retry": "^1.3.3",
+    "bottleneck": "^2.19.5",
+    "zod": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/async-retry": "^1.4.8",
+    "@types/node": "^20.0.0",
+    "msw": "^2.0.0",
+    "vitest": "^1.0.0"
+  }
+}

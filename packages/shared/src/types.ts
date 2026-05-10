@@ -1,0 +1,100 @@
+import { z } from "zod";
+import { AI_DISCLOSURE_TEXT, MAX_TAGS, MAX_TITLE_LEN, MAX_TAG_LEN } from "./constants.js";
+
+// ── TrendBrief ────────────────────────────────────────────────────────────────
+
+export const TrendBriefStatusSchema = z.enum(["pending", "processing", "done", "error"]);
+
+export const TrendBriefSchema = z.object({
+  id: z.string().uuid(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  status: TrendBriefStatusSchema,
+  niche: z.string(),
+  style_keywords: z.array(z.string()).nullable().optional(),
+  top_tags: z.array(z.string()).nullable().optional(),
+  price_target_usd: z.number().nullable().optional(),
+  color_palette: z.array(z.string()).nullable().optional(),
+  raw_etsy_data: z.unknown().nullable().optional(),
+  claude_analysis: z.unknown().nullable().optional(),
+  error_message: z.string().nullable().optional(),
+  retry_count: z.number().int().default(0),
+});
+
+export type TrendBrief = z.infer<typeof TrendBriefSchema>;
+
+// ── DesignPackage ─────────────────────────────────────────────────────────────
+
+export const DesignPackageStatusSchema = z.enum(["pending", "processing", "done", "error"]);
+
+export const DesignPackageSchema = z.object({
+  id: z.string().uuid(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  trend_brief_id: z.string().uuid().nullable().optional(),
+  status: DesignPackageStatusSchema,
+  image_url: z.string().nullable().optional(),
+  mockup_urls: z.array(z.string()).nullable().optional(),
+  printify_blueprint_id: z.number().int().nullable().optional(),
+  printify_variant_ids: z.array(z.number().int()).nullable().optional(),
+  fal_prompt: z.string().nullable().optional(),
+  fal_prompt_hash: z.string().nullable().optional(),
+  metadata: z.unknown().nullable().optional(),
+  error_message: z.string().nullable().optional(),
+  retry_count: z.number().int().default(0),
+});
+
+export type DesignPackage = z.infer<typeof DesignPackageSchema>;
+
+// ── Listing ───────────────────────────────────────────────────────────────────
+
+// pending_publish is added between needs_review and publishing so human-review
+// approval has a distinct state to land in before the agent resumes publishing.
+export const ListingStatusSchema = z.enum([
+  "pending",
+  "needs_review",
+  "pending_publish",
+  "publishing",
+  "active",
+  "error",
+]);
+
+export type ListingStatus = z.infer<typeof ListingStatusSchema>;
+
+export const ListingSchema = z.object({
+  id: z.string().uuid(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  design_package_id: z.string().uuid().nullable().optional(),
+  status: ListingStatusSchema,
+  etsy_listing_id: z.number().nullable().optional(),
+  printify_product_id: z.string().nullable().optional(),
+  title: z.string().nullable().optional(),
+  description: z.string().nullable().optional(),
+  tags: z.array(z.string()).nullable().optional(),
+  price_usd: z.number().nullable().optional(),
+  is_active: z.boolean().default(false),
+  error_message: z.string().nullable().optional(),
+  retry_count: z.number().int().default(0),
+});
+
+export type Listing = z.infer<typeof ListingSchema>;
+
+// ── ListingCopy ───────────────────────────────────────────────────────────────
+
+export const ListingCopySchema = z
+  .object({
+    title: z.string().max(MAX_TITLE_LEN),
+    description: z.string(),
+    tags: z.array(z.string().max(MAX_TAG_LEN)).length(MAX_TAGS),
+  })
+  .refine((d) => d.title !== d.title.toUpperCase() || d.title.length <= 1, {
+    message: "Title must not be all-caps",
+    path: ["title"],
+  })
+  .refine((d) => d.description.includes(AI_DISCLOSURE_TEXT), {
+    message: `Description must include the AI disclosure text verbatim`,
+    path: ["description"],
+  });
+
+export type ListingCopy = z.infer<typeof ListingCopySchema>;

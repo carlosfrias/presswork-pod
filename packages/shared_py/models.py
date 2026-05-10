@@ -1,0 +1,135 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, Field, field_validator
+
+TrendBriefStatus = Literal["pending", "processing", "done", "error"]
+
+
+class TrendBrief(BaseModel):
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    status: TrendBriefStatus
+    niche: str
+    style_keywords: list[str] | None = None
+    top_tags: list[str] | None = None
+    price_target_usd: float | None = None
+    color_palette: list[str] | None = None
+    raw_etsy_data: Any | None = None
+    claude_analysis: Any | None = None
+    error_message: str | None = None
+    retry_count: int = 0
+
+
+class TrendBriefCreate(BaseModel):
+    niche: str
+    status: TrendBriefStatus = "pending"
+    style_keywords: list[str] | None = None
+    top_tags: list[str] | None = None
+    price_target_usd: float | None = None
+    color_palette: list[str] | None = None
+    raw_etsy_data: Any | None = None
+    claude_analysis: Any | None = None
+
+
+DesignPackageStatus = Literal["pending", "processing", "done", "error"]
+
+_FLUX_DISALLOW_LIST = ["banksy", "disney", "marvel", "nike", "supreme"]
+
+FLUX_REQUIRED_TERMS = [
+    "print on demand design",
+    "transparent background",
+    "high resolution",
+    "vector-style",
+]
+
+
+class FluxPrompt(BaseModel):
+    prompt: str
+    negative_prompt: str | None = None
+    style_descriptors: list[str]
+
+    @field_validator("prompt")
+    @classmethod
+    def no_banned_names(cls, v: str) -> str:
+        lower = v.lower()
+        for name in _FLUX_DISALLOW_LIST:
+            if name in lower:
+                raise ValueError(f"Prompt contains disallowed term: '{name}'")
+        return v
+
+    @field_validator("prompt")
+    @classmethod
+    def required_flux_terms(cls, v: str) -> str:
+        lower = v.lower()
+        for term in FLUX_REQUIRED_TERMS:
+            if term not in lower:
+                raise ValueError(f"Prompt must contain required FLUX term: '{term}'")
+        return v
+
+
+class DesignPackage(BaseModel):
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    trend_brief_id: UUID | None = None
+    status: DesignPackageStatus
+    image_url: str | None = None
+    mockup_urls: list[str] | None = None
+    printify_blueprint_id: int | None = None
+    printify_variant_ids: list[int] | None = None
+    fal_prompt: str | None = None
+    fal_prompt_hash: str | None = None
+    metadata: Any | None = None
+    error_message: str | None = None
+    retry_count: int = 0
+
+
+class DesignPackageCreate(BaseModel):
+    trend_brief_id: UUID
+    status: DesignPackageStatus = "pending"
+    image_url: str | None = None
+    mockup_urls: list[str] | None = None
+    printify_blueprint_id: int | None = None
+    printify_variant_ids: list[int] | None = None
+    fal_prompt: str | None = None
+    metadata: Any | None = None
+
+
+ListingStatus = Literal["pending", "needs_review", "pending_publish", "publishing", "active", "error"]
+
+
+class Listing(BaseModel):
+    id: UUID
+    created_at: datetime
+    updated_at: datetime
+    design_package_id: UUID | None = None
+    status: ListingStatus
+    etsy_listing_id: int | None = None
+    printify_product_id: str | None = None
+    title: str | None = None
+    description: str | None = None
+    tags: list[str] | None = None
+    price_usd: float | None = None
+    is_active: bool = False
+    error_message: str | None = None
+    retry_count: int = 0
+
+
+class ClaudeAnalysis(BaseModel):
+    niche: str
+    style_keywords: list[str]
+    top_tags: list[str] = Field(..., max_length=13)
+    price_target_usd: float
+    color_palette: list[str]
+
+    @field_validator("top_tags")
+    @classmethod
+    def max_13_tags(cls, v: list[str]) -> list[str]:
+        if len(v) > 13:
+            raise ValueError(f"top_tags must have at most 13 items, got {len(v)}")
+        return v
