@@ -21,14 +21,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build shared (required for typecheck in downstream packages)
-        run: npm run build --workspace=packages/shared
-
       - name: Lint
         run: npm run lint
 
-      - name: Typecheck
-        run: npm run typecheck
+      - name: Typecheck (build all — tsc -b is the typecheck)
+        run: |
+          npm run build --workspace=packages/shared
+          npm run build --workspace=packages/listing
+          npm run build --workspace=packages/fulfillment
 
       - name: Test
         run: npm run test:ts
