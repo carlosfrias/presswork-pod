@@ -6,6 +6,13 @@ STORAGE_BUCKET = "designs"
 # uses them when creating the Printify product (which also yields the mockup images).
 GILDAN_64000_BLUEPRINT_ID: int = 145
 
+# Print provider that owns the variant IDs below. Printify variant IDs are scoped
+# to a (blueprint_id, print_provider_id) pair — variant 38163 only resolves under
+# print_provider_id=3 (Marco Fine Arts) for blueprint 145. The Listing Agent
+# passes this value into the create-product call alongside blueprint_id; mismatched
+# pairs are rejected by Printify's API.
+GILDAN_64000_PRINT_PROVIDER_ID: int = 3
+
 # White t-shirt, sizes S / M / L / XL / 2XL
 GILDAN_64000_VARIANT_IDS: list[int] = [38163, 38177, 38191, 38205, 38219]
 

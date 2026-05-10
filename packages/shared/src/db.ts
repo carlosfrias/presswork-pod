@@ -5,22 +5,33 @@ export type Db = SupabaseClient;
 
 let _cached: Db | undefined;
 
+function isServiceRoleKey(key: string): boolean {
+  // Supabase CLI v2.99+ uses sb_secret_… short-form keys instead of JWTs.
+  if (key.startsWith("sb_secret_")) return true;
+
+  // Production keys are JWTs — decode the payload and check the role claim.
+  const parts = key.split(".");
+  if (parts.length !== 3 || !parts[1]) return false;
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as {
+      role?: string;
+    };
+    return payload.role === "service_role";
+  } catch {
+    return false;
+  }
+}
+
 export function getDb(): Db {
   if (_cached) return _cached;
 
   const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = getSettings();
 
-  // Verify the key is a service role JWT, not the anon key
-  const parts = SUPABASE_SERVICE_ROLE_KEY.split(".");
-  if (parts.length !== 3 || !parts[1]) {
-    throw new Error("SUPABASE_SERVICE_ROLE_KEY does not look like a JWT");
-  }
-  const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8")) as {
-    role?: string;
-  };
-  if (payload.role !== "service_role") {
+  if (!isServiceRoleKey(SUPABASE_SERVICE_ROLE_KEY)) {
     throw new Error(
-      `SUPABASE_SERVICE_ROLE_KEY has role="${payload.role}" — expected "service_role". Did you pass the anon key by mistake?`
+      "SUPABASE_SERVICE_ROLE_KEY does not appear to be a service role key. " +
+        "Expected an sb_secret_… short-form key or a JWT with role=\"service_role\". " +
+        "Did you pass the anon key by mistake?"
     );
   }
 

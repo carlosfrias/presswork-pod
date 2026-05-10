@@ -4,7 +4,11 @@ import time
 from typing import Any, cast
 from uuid import UUID, uuid4
 
-from packages.design.constants import GILDAN_64000_BLUEPRINT_ID, GILDAN_64000_VARIANT_IDS
+from packages.design.constants import (
+    GILDAN_64000_BLUEPRINT_ID,
+    GILDAN_64000_PRINT_PROVIDER_ID,
+    GILDAN_64000_VARIANT_IDS,
+)
 from packages.design.fal_client import generate_image
 from packages.design.image_processor import process_for_print
 from packages.design.poller import claim_next_brief
@@ -68,6 +72,7 @@ async def run() -> None:
                     "fal_prompt": flux_prompt.prompt,
                     "fal_prompt_hash": fal_prompt_hash,
                     "printify_blueprint_id": GILDAN_64000_BLUEPRINT_ID,
+                    "printify_print_provider_id": GILDAN_64000_PRINT_PROVIDER_ID,
                     "printify_variant_ids": GILDAN_64000_VARIANT_IDS,
                     "image_url": cached_row["image_url"],
                     "status": "done",
@@ -107,6 +112,7 @@ async def run() -> None:
                     "fal_prompt": flux_prompt.prompt,
                     "fal_prompt_hash": fal_prompt_hash,
                     "printify_blueprint_id": GILDAN_64000_BLUEPRINT_ID,
+                    "printify_print_provider_id": GILDAN_64000_PRINT_PROVIDER_ID,
                     "printify_variant_ids": GILDAN_64000_VARIANT_IDS,
                     "metadata": {"style_descriptors": flux_prompt.style_descriptors},
                     "status": "processing",

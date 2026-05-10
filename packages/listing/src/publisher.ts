@@ -73,11 +73,19 @@ export async function publishOne(
   const listingId = (listingRow as { id: string }).id;
 
   try {
-    // Step 4: create hidden Printify product (mockups are a side effect)
+    // Step 4: create hidden Printify product (mockups are a side effect).
+    // print_provider_id must come from the design row — variant IDs are scoped
+    // to a (blueprint, provider) pair and Printify rejects mismatched pairs.
+    if (!design.printify_print_provider_id) {
+      throw new PublisherError(
+        `design_packages.printify_print_provider_id is required (design ${design.id})`
+      );
+    }
     log.info({ action: "create_printify_product", record_id: listingId, status: "started" });
     const { productId, mockupUrls } = await createHiddenProduct({
       imageUrl: design.image_url ?? "",
       blueprintId: design.printify_blueprint_id ?? 5,
+      printProviderId: design.printify_print_provider_id,
       variantIds: design.printify_variant_ids ?? [],
       title: copy.title,
     });
