@@ -1,43 +1,9 @@
 import io
-from typing import cast
 
 from PIL import Image
+from rembg import remove as rembg_remove
 
 from packages.design.constants import OUTPUT_DIMENSIONS_PX, OUTPUT_DPI
-
-# Pixels within this distance from pure white (255,255,255) are treated as background.
-# Threshold of 15 catches near-white without eating into light-colored design elements.
-_WHITE_THRESHOLD = 15
-
-
-def _is_near_white(pixel: tuple[int, ...]) -> bool:
-    r, g, b = pixel[:3]
-    return r >= 255 - _WHITE_THRESHOLD and g >= 255 - _WHITE_THRESHOLD and b >= 255 - _WHITE_THRESHOLD
-
-
-def _remove_white_background(img: Image.Image) -> Image.Image:
-    """Make near-white corner-sampled background transparent."""
-    rgba = img.convert("RGBA")
-    width, height = rgba.size
-
-    # Sample the four corners to decide if this image has a white background
-    corners = [
-        cast(tuple[int, ...], rgba.getpixel((0, 0))),
-        cast(tuple[int, ...], rgba.getpixel((width - 1, 0))),
-        cast(tuple[int, ...], rgba.getpixel((0, height - 1))),
-        cast(tuple[int, ...], rgba.getpixel((width - 1, height - 1))),
-    ]
-    if not any(_is_near_white(c) for c in corners):
-        return rgba
-
-    data = rgba.load()
-    assert data is not None
-    for y in range(height):
-        for x in range(width):
-            pixel = cast(tuple[int, ...], data[x, y])
-            if _is_near_white(pixel):
-                data[x, y] = (pixel[0], pixel[1], pixel[2], 0)
-    return rgba
 
 
 def _resize_with_padding(img: Image.Image, target: tuple[int, int]) -> Image.Image:
@@ -53,12 +19,12 @@ def _resize_with_padding(img: Image.Image, target: tuple[int, int]) -> Image.Ima
 
 
 def process_for_print(png_bytes: bytes) -> bytes:
-    img = Image.open(io.BytesIO(png_bytes))
+    # rembg first: FLUX cannot produce true alpha transparency, so every image gets
+    # background removal regardless of how clean it looks. Must run before resize/DPI
+    # so the U²-Net model sees the original pixels.
+    transparent_bytes = rembg_remove(png_bytes)
+    img = Image.open(io.BytesIO(transparent_bytes)).convert("RGBA")
 
-    if img.mode != "RGBA":
-        img = img.convert("RGBA")
-
-    img = _remove_white_background(img)
     img = _resize_with_padding(img, OUTPUT_DIMENSIONS_PX)
 
     buf = io.BytesIO()

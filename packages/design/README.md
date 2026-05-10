@@ -11,6 +11,10 @@ exist as a side-effect of product creation in Printify's API).
 v1 scope: one design per trend brief, Gildan 64000 t-shirt only, no colorway variants,
 manual run only (no Railway cron). See `DESIGN_AGENT_PLAN.md` for scope rationale.
 
+Background removal uses [`rembg`](https://github.com/danielgatis/rembg) (U²-Net). The
+first call in a fresh container downloads the ~170MB model weights and takes roughly
+30 seconds — subsequent calls reuse the cached model.
+
 ---
 
 ## Local setup
