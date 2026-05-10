@@ -1,4 +1,5 @@
 import json
+import re
 
 from anthropic import Anthropic
 
@@ -22,10 +23,72 @@ Respond ONLY with valid JSON matching this schema exactly:
   "style_descriptors": [str]  // 3-7 short aesthetic labels extracted from the brief
 }"""
 
+# Appended to SYSTEM_PROMPT only for subject-centric briefs (occupation/identity/hobby).
+# Two cache keys (with and without these rules) is intentional — the cost of one extra
+# cache entry is negligible compared to the failure mode of unprintable wallpaper output.
+SUBJECT_CENTRIC_RULES = """
+This brief is subject-centric (occupation/identity/hobby). The prompt MUST include all of these exact phrases: 'centered illustration', 'single subject', 'isolated on plain background', 'clear focal point'.
+NEVER produce wallpaper patterns, repeating motifs, all-over florals, or abstract washes for subject-centric briefs. A generic background with no clear figure or object is a prompt failure."""
+
+# Niches that demand a centered, isolated subject rather than wallpaper / abstract output.
+# Matched whole-word against `niche` and `top_tags`.
+SUBJECT_CENTRIC_KEYWORDS: tuple[str, ...] = (
+    # Occupations
+    "nurse", "teacher", "doctor", "engineer", "firefighter", "lawyer",
+    "pilot", "chef", "mechanic", "electrician", "paramedic", "welder",
+    "barber", "librarian", "pharmacist", "accountant", "realtor", "farmer",
+    "trucker", "coach",
+    # Identity / relationship
+    "mom", "dad", "mama", "papa", "grandma", "grandpa", "grandmother",
+    "grandfather", "auntie", "uncle", "wife", "husband", "bride", "groom",
+    "dog mom", "cat dad", "cat mom", "dog dad", "plant parent",
+    "bonus mom", "step dad",
+    # Hobbies
+    "fishing", "hunting", "camping", "hiking", "knitting", "crochet",
+    "quilting", "gardening", "yoga", "running", "cycling", "golf",
+    "tennis", "pickleball", "bowling", "chess", "gaming", "birding",
+    "astronomy", "baking",
+    # Life stage
+    "retiree", "retired", "graduate", "graduation", "student", "senior",
+    "freshman", "newlywed", "birthday",
+)
+
+REQUIRED_SUBJECT_TERMS: tuple[str, ...] = (
+    "centered illustration",
+    "single subject",
+    "isolated on plain background",
+    "clear focal point",
+)
+
+_SUBJECT_CENTRIC_PATTERN = re.compile(
+    r"\b(?:" + "|".join(re.escape(kw) for kw in SUBJECT_CENTRIC_KEYWORDS) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def is_subject_centric_brief(brief: TrendBrief) -> bool:
+    parts: list[str] = [brief.niche]
+    if brief.top_tags:
+        parts.extend(brief.top_tags)
+    haystack = " ".join(parts)
+    return bool(_SUBJECT_CENTRIC_PATTERN.search(haystack))
+
+
+def _require_subject_terms(flux: FluxPrompt) -> None:
+    haystack = (flux.prompt + " " + " ".join(flux.style_descriptors)).lower()
+    missing = [t for t in REQUIRED_SUBJECT_TERMS if t not in haystack]
+    if missing:
+        raise ValueError(
+            f"FLUX prompt missing required subject-centered phrasing for subject-centric brief: {missing}"
+        )
+
 
 def build_flux_prompt(brief: TrendBrief) -> FluxPrompt:
     settings = get_settings()
     client = Anthropic(api_key=settings.anthropic_api_key)
+
+    subject_centric = is_subject_centric_brief(brief)
+    system_text = SYSTEM_PROMPT + SUBJECT_CENTRIC_RULES if subject_centric else SYSTEM_PROMPT
 
     user_content = json.dumps(
         {
@@ -43,7 +106,7 @@ def build_flux_prompt(brief: TrendBrief) -> FluxPrompt:
         system=[
             {
                 "type": "text",
-                "text": SYSTEM_PROMPT,
+                "text": system_text,
                 "cache_control": {"type": "ephemeral"},
             }
         ],
@@ -64,4 +127,9 @@ def build_flux_prompt(brief: TrendBrief) -> FluxPrompt:
     except json.JSONDecodeError as exc:
         raise ValueError(f"Claude returned invalid JSON: {raw_text!r}") from exc
 
-    return FluxPrompt.model_validate(data)
+    flux = FluxPrompt.model_validate(data)
+
+    if subject_centric:
+        _require_subject_terms(flux)
+
+    return flux
