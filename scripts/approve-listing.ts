@@ -4,7 +4,7 @@
  *
  * Prints copy + mockup URLs for a listing at 'needs_review', then prompts
  * [y/N]. On approval, flips status to 'pending_publish' so the next agent
- * run picks it up and completes the Etsy publish flow.
+ * run picks it up and completes the Etsy publish flow
  */
 
 import { createInterface } from "readline";
