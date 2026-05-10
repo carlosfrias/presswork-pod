@@ -65,7 +65,7 @@ describe("createOrder", () => {
     expect(result.printifyOrderId).toBe("pf-order-1");
   });
 
-  it("sends label as etsy-{receiptId}", async () => {
+  it("sends label as etsy-{receiptId} and external_id for idempotency", async () => {
     let capturedBody: unknown;
     server.use(
       http.post("https://api.printify.com/v1/shops/shop-1/orders.json", async ({ request }) => {
@@ -75,7 +75,10 @@ describe("createOrder", () => {
     );
     const { createOrder } = await import("./printify-orders.js");
     await createOrder(ORDER_INPUT);
-    expect(capturedBody).toMatchObject({ label: "etsy-receipt-42" });
+    expect(capturedBody).toMatchObject({
+      label: "etsy-receipt-42",
+      external_id: "receipt-42",
+    });
   });
 
   it("retries 5xx and eventually succeeds", async () => {
@@ -101,8 +104,9 @@ describe("createOrder", () => {
         return new HttpResponse("bad request", { status: 400 });
       })
     );
-    const { createOrder, PrintifyOrderError } = await import("./printify-orders.js");
-    await expect(createOrder(ORDER_INPUT)).rejects.toThrow(PrintifyOrderError);
+    const { createOrder } = await import("./printify-orders.js");
+    const { PrintifyError } = await import("@presswork/shared");
+    await expect(createOrder(ORDER_INPUT)).rejects.toThrow(PrintifyError);
     expect(attempts).toBe(1);
   });
 });

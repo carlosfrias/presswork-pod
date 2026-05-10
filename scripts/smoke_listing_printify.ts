@@ -18,7 +18,10 @@
 process.env.ETSY_SHIPPING_PROFILE_ID = process.env.ETSY_SHIPPING_PROFILE_ID || "1";
 process.env.ETSY_PRODUCTION_PARTNER_ID = process.env.ETSY_PRODUCTION_PARTNER_ID || "1";
 
+import { mkdir, writeFile } from "fs/promises";
+import { join } from "path";
 import { getSettings } from "../packages/shared/src/index.js";
+// createHiddenProduct uses the shared printifyFetch (correct headers, rate limiter, 429 handling)
 import { createHiddenProduct } from "../packages/listing/src/printify.js";
 
 interface DesignRow {
@@ -64,6 +67,24 @@ async function deleteProduct(productId: string): Promise<void> {
   }
 }
 
+async function downloadMockups(urls: string[], outDir: string): Promise<string[]> {
+  await mkdir(outDir, { recursive: true });
+  const saved: string[] = [];
+  for (let i = 0; i < urls.length; i++) {
+    const url = urls[i]!;
+    const r = await fetch(url);
+    if (!r.ok) {
+      console.warn(`[download] mockup ${i} → ${r.status}`);
+      continue;
+    }
+    const ext = /\.(jpe?g|png)/i.exec(url)?.[1].toLowerCase().replace("jpeg", "jpg") ?? "jpg";
+    const path = join(outDir, `mockup-${String(i).padStart(2, "0")}.${ext}`);
+    await writeFile(path, Buffer.from(await r.arrayBuffer()));
+    saved.push(path);
+  }
+  return saved;
+}
+
 async function main() {
   getSettings();
 
@@ -91,7 +112,12 @@ async function main() {
   });
 
   console.log(`[smoke] OK product=${productId} mockups=${mockupUrls.length} in ${Date.now() - t0}ms`);
-  for (const url of mockupUrls.slice(0, 3)) console.log(`        ${url}`);
+
+  // Save mockups locally BEFORE deleting the product — Printify mockup URLs
+  // stop resolving the moment the underlying product is deleted.
+  const outDir = join(process.cwd(), ".tmp", "smoke", `listing-ts-${row.id.slice(0, 8)}`);
+  const saved = await downloadMockups(mockupUrls, outDir);
+  console.log(`[smoke] saved ${saved.length} mockups to ${outDir}`);
 
   await deleteProduct(productId);
 }

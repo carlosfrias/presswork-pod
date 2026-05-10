@@ -6,4 +6,6 @@ export * from "./etsy-api.js";
 export * from "./etsy-tokens.js";
 export * from "./logger.js";
 export * from "./notifier.js";
+export * from "./printify-http.js";
+export * from "./printify-metrics.js";
 export * from "./types.js";

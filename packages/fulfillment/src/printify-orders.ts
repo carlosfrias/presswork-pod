@@ -1,11 +1,10 @@
-import Bottleneck from "bottleneck";
-import retry from "async-retry";
 import { z } from "zod";
-import { getSettings } from "@presswork/shared";
+import { printifyFetch, PrintifyError, getSettings } from "@presswork/shared";
 
-export class PrintifyOrderError extends Error {
-  constructor(message: string, public readonly status?: number) {
-    super(message);
+// Backwards-compat alias — external code that imports PrintifyOrderError still works
+export class PrintifyOrderError extends PrintifyError {
+  constructor(message: string, status?: number) {
+    super(message, status);
     this.name = "PrintifyOrderError";
   }
 }
@@ -67,43 +66,13 @@ export type PrintifyOrderDetail = {
   tracking?: { number: string; url: string; carrier: string };
 };
 
-// Conservative Printify rate limit: 5 req/sec
-const limiter = new Bottleneck({ maxConcurrent: 1, minTime: 200 });
-
-async function printifyFetch(path: string, init: RequestInit = {}): Promise<unknown> {
-  const { PRINTIFY_API_TOKEN } = getSettings();
-  return limiter.schedule(() =>
-    retry(
-      async (bail) => {
-        const res = await fetch(`https://api.printify.com/v1${path}`, {
-          ...init,
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${PRINTIFY_API_TOKEN}`,
-            ...(init.headers as Record<string, string> | undefined),
-          },
-        });
-        if (!res.ok) {
-          const body = await res.text();
-          if (res.status < 500) {
-            bail(new PrintifyOrderError(`Printify ${res.status}: ${body}`, res.status));
-            return;
-          }
-          throw new PrintifyOrderError(`Printify ${res.status}: ${body}`, res.status);
-        }
-        return res.json();
-      },
-      { retries: 3, factor: 2, minTimeout: 500 }
-    )
-  );
-}
-
 export async function createOrder(
   input: CreateOrderInput
 ): Promise<{ printifyOrderId: string }> {
   const { PRINTIFY_SHOP_ID } = getSettings();
 
   const body = {
+    external_id: input.etsyReceiptId,
     label: `etsy-${input.etsyReceiptId}`,
     line_items: input.lineItems.map((item) => ({
       blueprint_id: item.blueprintId,

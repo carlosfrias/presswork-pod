@@ -1,6 +1,7 @@
 import express, { type Express } from "express";
-import { type Db, getLogger, getSettings } from "@presswork/shared";
+import { type Db, getLogger, getSettings, getPrintifyErrorRate } from "@presswork/shared";
 import { verifyEtsyWebhook } from "./webhook-verify.js";
+import { handlePrintifyWebhook } from "./printify-webhook.js";
 import type { ProcessOrderResult } from "./order-processor.js";
 
 export type ProcessOrderFn = (
@@ -16,20 +17,26 @@ interface AppDeps {
 export function createApp(deps: AppDeps): Express {
   const app = express();
 
-  // Raw body needed for HMAC verification on the webhook route
-  app.use(
-    "/webhook/etsy-order",
-    express.raw({ type: "*/*" })
-  );
+  // Raw body needed for HMAC verification on webhook routes
+  app.use("/webhook/etsy-order", express.raw({ type: "*/*" }));
+  app.use("/webhook/printify-order", express.raw({ type: "*/*" }));
 
   // JSON everywhere else
   app.use((req, res, next) => {
-    if (req.path === "/webhook/etsy-order") return next();
+    if (req.path === "/webhook/etsy-order" || req.path === "/webhook/printify-order") return next();
     express.json()(req, res, next);
   });
 
   app.get("/healthz", (_req, res) => {
     res.json({ ok: true });
+  });
+
+  app.get("/healthz/printify", (_req, res) => {
+    res.json(getPrintifyErrorRate());
+  });
+
+  app.post("/webhook/printify-order", async (req, res) => {
+    await handlePrintifyWebhook(req, res, deps.db);
   });
 
   app.post("/webhook/etsy-order", async (req, res) => {

@@ -28,3 +28,6 @@ Thumbs.db
 # pytest / vitest caches
 .pytest_cache/
 .vite/
+
+# Smoke test outputs
+.tmp/

@@ -22,6 +22,9 @@ const SettingsSchema = z.object({
   // Printify
   PRINTIFY_API_TOKEN: z.string().min(1),
   PRINTIFY_SHOP_ID: z.string().min(1),
+  // Webhook (optional — set to enable webhook-driven order updates)
+  PRINTIFY_WEBHOOK_BASE_URL: z.string().url().optional(),
+  PRINTIFY_WEBHOOK_SECRET: z.string().min(32).optional(),
 
   // Supabase
   SUPABASE_URL: z.string().url(),

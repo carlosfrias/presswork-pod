@@ -382,10 +382,16 @@ result = fal_client.run(
 4. Look up `listings` row by `etsy_listing_id` → get `design_package_id`
 5. Look up Printify blueprint/variant IDs from `design_packages`
 6. Insert `orders` row with `status = 'received'`
-7. POST order to Printify API, update `status = 'submitted'`
-8. Poll Printify order status every 30 min via Railway cron
+7. POST order to Printify API (includes `external_id: etsyReceiptId` for Printify-side idempotency), update `status = 'submitted'`
+8. Receive `order:shipment:created` / `order:updated` via Printify webhook (`POST /webhook/printify-order`, HMAC-SHA256 with `PRINTIFY_WEBHOOK_SECRET`)
 9. When shipped: update `orders.tracking_*`, PATCH Etsy receipt with tracking
 10. On any error: set `status = 'error'`, log to `orders.error_message`, send Slack alert
+
+**Printify webhook flow:**
+- On service boot, `registerPrintifyWebhooks()` checks existing subscriptions and registers `order:updated` + `order:shipment:created` topics if missing. Webhook IDs are stored in the `config` Supabase table for cleanup. Requires `PRINTIFY_WEBHOOK_BASE_URL` and `PRINTIFY_WEBHOOK_SECRET` env vars.
+- Handler is in `packages/fulfillment/src/printify-webhook.ts`. Signature verified with HMAC-SHA256 (base64) of raw body using `PRINTIFY_WEBHOOK_SECRET`. Returns 401 on mismatch.
+- Idempotent: re-delivered events for unchanged status are no-ops (200 + `skipped`).
+- **Polling stays as a safety net.** `tracking-poller.ts` continues to run (Railway cron) in case webhooks are missed. Interval can be relaxed to 4 hours once webhooks are verified working.
 
 **Critical Etsy webhook caveat:**
 Etsy webhook support is limited. As of 2024, webhooks only cover certain events and
@@ -751,6 +757,34 @@ The pricing floor of `2.5 × print_cost` is a minimum, not a target. Aim for 3×
 7. Polling fallback cron — the receipt-polling safety net for missed webhooks
 
 Do not skip steps. Each agent is only as good as its inputs.
+
+---
+
+## Printify API Compliance
+
+Implemented across Steps 1–5 of `PLAN_PRINTIFY_API_COMPLIANCE.md`. Key rules that must not regress:
+
+### Headers (Step 2)
+Every Printify request must carry:
+- `Content-Type: application/json;charset=utf-8` (note charset)
+- `User-Agent: presswork/<version>`
+- `Authorization: Bearer ${PRINTIFY_API_TOKEN}`
+
+All Printify HTTP calls now go through the single shared client in `packages/shared/src/printify-http.ts`. Do not add new Printify `fetch()` calls outside this module.
+
+### Rate limits (Step 2)
+- **Global:** 600 req/min. Shared limiter: `maxConcurrent: 4, minTime: 110` ≈ 540 req/min.
+- **Publishing** (`POST /products`, `PUT /products/{id}`): 200/30 min. Publishing limiter: `reservoir: 180 / 30 min`, chained through global. Tag these calls with `{ rateClass: "publishing" }`.
+- **429 handling:** Parsed `Retry-After` header, wait, retry up to 3 times. Previously both clients bailed immediately on 429.
+
+### Idempotency (Step 3)
+`createOrder()` now sends `external_id: etsyReceiptId` alongside the human-readable `label`. This is Printify's documented idempotency field. The existing `orders.etsy_order_id UNIQUE` DB constraint remains as the primary guard.
+
+### Webhooks vs. polling (Step 4)
+Printify webhooks (`order:updated`, `order:shipment:created`) now replace polling as the primary mechanism. Handler: `packages/fulfillment/src/printify-webhook.ts`. Required env vars: `PRINTIFY_WEBHOOK_BASE_URL`, `PRINTIFY_WEBHOOK_SECRET`. Polling (`tracking-poller.ts`) stays as a safety net.
+
+### Error-rate guard (Step 5)
+In-memory ring buffer (last 200 requests) tracks success / 4xx / 5xx rates. Logged on every request (`error_rate_4xx_pct`, `error_rate_5xx_pct`). Health endpoint: `GET /healthz/printify` returns `{ ok, error_rate_4xx_pct, error_rate_5xx_pct, sample_size }`. `ok` is `false` when combined error rate ≥ 4% (one point under Printify's 5% account-enforcement threshold).
 
 ---
 
