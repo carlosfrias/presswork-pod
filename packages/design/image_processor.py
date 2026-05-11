@@ -56,6 +56,13 @@ def _strip_interior_whitespace(img: Image.Image) -> Image.Image:
 
 
 def process_for_print(png_bytes: bytes, *, mode: PrintMode = "full_color") -> bytes:
+    # screen_print is opt-in and known-rough. rembg gives us the bounding
+    # silhouette but does not poke holes in interior negative space, and the
+    # luminance-ramp strip below is tuned for FLUX outputs only — non-FLUX
+    # sources (e.g. JPG line art, photo references) won't dial in cleanly at
+    # the current thresholds and may leave gray halos around the figure.
+    # Revisit post-v1 if/when we add a true line-art ingestion path.
+    #
     # rembg first: FLUX cannot produce true alpha transparency, so every image gets
     # background removal regardless of how clean it looks. Must run before resize/DPI
     # so the U²-Net model sees the original pixels.

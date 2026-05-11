@@ -28,5 +28,10 @@ OUTPUT_DIMENSIONS_PX = (4500, 5400)  # t-shirt print area at 300dpi (15"×18")
 # in between, alpha is multiplied by a linear factor in [0.0, 1.0]. The soft
 # edge preserves the anti-aliasing rembg produces on curved boundaries, so
 # letterforms and silhouettes don't show stair-stepping after threshold.
+#
+# These thresholds are tuned for FLUX outputs, where the background sits at
+# ~250 and ink at ~10. JPG sources with compression ringing or pre-existing
+# midtone shading don't dial in well at these values — the screen_print path
+# is a known-rough opt-in mode; see notes in image_processor.py.
 SCREEN_PRINT_WHITE_HARD = 245
 SCREEN_PRINT_WHITE_SOFT = 225
