@@ -12,9 +12,8 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from supabase import Client
-
 from packages.shared_py.config import get_settings
+from supabase import Client
 
 _CONFIG_KEY = "etsy_oauth"
 
