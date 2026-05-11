@@ -87,8 +87,7 @@ def main() -> None:
     api_key = os.environ.get("ETSY_API_KEY", "").strip()
     if not api_key or api_key == "x":
         raise SystemExit(
-            "ETSY_API_KEY is not set.\n"
-            "Add it to .env or export it, then re-run this script."
+            "ETSY_API_KEY is not set.\nAdd it to .env or export it, then re-run this script."
         )
 
     verifier, challenge = _pkce_pair()
@@ -109,7 +108,7 @@ def main() -> None:
             else:
                 self.send_response(400)
                 self.end_headers()
-                self.wfile.write(b"<h2>No code found — try again.</h2>")
+                self.wfile.write(b"<h2>No code found - try again.</h2>")
 
         def log_message(self, *_) -> None:
             pass

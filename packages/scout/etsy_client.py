@@ -44,7 +44,10 @@ class EtsyClient:
         # already refreshed while we were waiting.
         async with get_refresh_lock():
             fresh = await asyncio.to_thread(load_tokens, self._db)
-            if fresh.expires_at > datetime.now(tz=UTC) and fresh.access_token != self._tokens.access_token:
+            if (
+                fresh.expires_at > datetime.now(tz=UTC)
+                and fresh.access_token != self._tokens.access_token
+            ):
                 self._tokens = fresh
                 return
 

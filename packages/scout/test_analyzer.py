@@ -69,7 +69,4 @@ async def test_system_prompt_has_cache_control(mocker):
     await analyze_niche(_SAMPLE_LISTINGS)
     kwargs = client.messages.create.call_args.kwargs
     system_blocks = kwargs["system"]
-    assert any(
-        block.get("cache_control") == {"type": "ephemeral"}
-        for block in system_blocks
-    )
+    assert any(block.get("cache_control") == {"type": "ephemeral"} for block in system_blocks)

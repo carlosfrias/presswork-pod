@@ -20,12 +20,27 @@ async def run() -> None:
 
     for niche in NICHE_SEEDS:
         if await is_recent_duplicate(niche, db):
-            log.info("dedup_skip", action="dedup_skip", niche=niche, match_reason="exact", status="skipped", duration_ms=0)
+            log.info(
+                "dedup_skip",
+                action="dedup_skip",
+                niche=niche,
+                match_reason="exact",
+                status="skipped",
+                duration_ms=0,
+            )
             continue
 
         is_semantic_dup, matched = await is_semantic_duplicate(niche, db)
         if is_semantic_dup:
-            log.info("dedup_skip", action="dedup_skip", niche=niche, match_reason="semantic", matched_niche=matched, status="skipped", duration_ms=0)
+            log.info(
+                "dedup_skip",
+                action="dedup_skip",
+                niche=niche,
+                match_reason="semantic",
+                matched_niche=matched,
+                status="skipped",
+                duration_ms=0,
+            )
             continue
 
         t0 = time.monotonic()

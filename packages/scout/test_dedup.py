@@ -49,7 +49,14 @@ async def test_fixture_a_cat_briefs_are_duplicate(mocker):
     respx.post(_ANTHROPIC_URL).mock(
         return_value=httpx.Response(
             200,
-            json={"content": [{"type": "text", "text": json.dumps({"is_duplicate": True, "matched_niche": "cat lovers"})}]},
+            json={
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps({"is_duplicate": True, "matched_niche": "cat lovers"}),
+                    }
+                ]
+            },
         )
     )
 
@@ -68,7 +75,14 @@ async def test_fixture_b_dog_briefs_are_not_cat_duplicate(mocker):
     respx.post(_ANTHROPIC_URL).mock(
         return_value=httpx.Response(
             200,
-            json={"content": [{"type": "text", "text": json.dumps({"is_duplicate": False, "matched_niche": None})}]},
+            json={
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps({"is_duplicate": False, "matched_niche": None}),
+                    }
+                ]
+            },
         )
     )
 

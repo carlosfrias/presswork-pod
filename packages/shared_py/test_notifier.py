@@ -14,6 +14,7 @@ async def test_no_op_when_url_unset(mocker, caplog):
     mocker.patch("packages.shared_py.notifier.get_settings", return_value=settings)
 
     import logging
+
     with caplog.at_level(logging.WARNING, logger="notifier"):
         await notify_slack("hello")
 

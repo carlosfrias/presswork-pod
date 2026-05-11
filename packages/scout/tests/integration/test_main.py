@@ -60,6 +60,7 @@ def setup(monkeypatch, mocker):
 
     from packages.shared_py import config
     from packages.shared_py import db as db_module
+
     config.get_settings.cache_clear()
     db_module.get_db.cache_clear()
 

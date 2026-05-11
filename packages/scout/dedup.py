@@ -34,7 +34,7 @@ class _SemanticDupResult(BaseModel):
 
 _SEMANTIC_SYSTEM = (
     "Given a candidate niche and a list of recent niches with their style keywords, "
-    "return JSON {\"is_duplicate\": bool, \"matched_niche\": str | null}. "
+    'return JSON {"is_duplicate": bool, "matched_niche": str | null}. '
     "A match means the candidate would produce overlapping designs."
 )
 

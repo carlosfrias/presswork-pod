@@ -104,7 +104,9 @@ class DesignPackageCreate(BaseModel):
     metadata: Any | None = None
 
 
-ListingStatus = Literal["pending", "needs_review", "pending_publish", "publishing", "active", "error"]
+ListingStatus = Literal[
+    "pending", "needs_review", "pending_publish", "publishing", "active", "error"
+]
 
 
 class Listing(BaseModel):

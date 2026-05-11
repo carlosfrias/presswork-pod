@@ -34,6 +34,7 @@ def _open_result(png_bytes: bytes) -> Image.Image:
 @pytest.fixture
 def mock_rembg(mocker):
     """Patch rembg.remove to passthrough a transparent-cornered PNG without invoking the model."""
+
     def _fake_remove(png_bytes: bytes) -> bytes:
         original = Image.open(io.BytesIO(png_bytes))
         return _make_transparent_png(original.size, (200, 100, 50, 255))

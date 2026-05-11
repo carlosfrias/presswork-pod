@@ -75,6 +75,7 @@ def setup_env(monkeypatch, mocker):
 
     from packages.shared_py import config
     from packages.shared_py import db as db_module
+
     config.get_settings.cache_clear()
     db_module.get_db.cache_clear()
 
@@ -101,13 +102,19 @@ def _mock_fal(mocker):
 
 
 def _insert_brief(db: Client) -> str:
-    result = db.table("trend_briefs").insert({
-        "niche": _TEST_NICHE,
-        "status": "pending",
-        "style_keywords": ["minimalist", "nature"],
-        "color_palette": ["green", "cream"],
-        "top_tags": ["hiking", "outdoors"],
-    }).execute()
+    result = (
+        db.table("trend_briefs")
+        .insert(
+            {
+                "niche": _TEST_NICHE,
+                "status": "pending",
+                "style_keywords": ["minimalist", "nature"],
+                "color_palette": ["green", "cream"],
+                "top_tags": ["hiking", "outdoors"],
+            }
+        )
+        .execute()
+    )
     return result.data[0]["id"]
 
 
@@ -154,11 +161,13 @@ async def test_exhausted_retries_leave_row_in_error(db: Client, mocker):
         new=AsyncMock(side_effect=RuntimeError("fal.ai down")),
     )
 
-    db.table("trend_briefs").insert({
-        "niche": _TEST_NICHE,
-        "status": "pending",
-        "retry_count": 2,
-    }).execute()
+    db.table("trend_briefs").insert(
+        {
+            "niche": _TEST_NICHE,
+            "status": "pending",
+            "retry_count": 2,
+        }
+    ).execute()
 
     await design_main.run()
 

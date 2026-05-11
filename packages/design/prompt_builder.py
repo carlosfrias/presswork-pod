@@ -40,23 +40,79 @@ NEVER produce wallpaper patterns, repeating motifs, all-over florals, or abstrac
 # Matched whole-word against `niche` and `top_tags`.
 SUBJECT_CENTRIC_KEYWORDS: tuple[str, ...] = (
     # Occupations
-    "nurse", "teacher", "doctor", "engineer", "firefighter", "lawyer",
-    "pilot", "chef", "mechanic", "electrician", "paramedic", "welder",
-    "barber", "librarian", "pharmacist", "accountant", "realtor", "farmer",
-    "trucker", "coach",
+    "nurse",
+    "teacher",
+    "doctor",
+    "engineer",
+    "firefighter",
+    "lawyer",
+    "pilot",
+    "chef",
+    "mechanic",
+    "electrician",
+    "paramedic",
+    "welder",
+    "barber",
+    "librarian",
+    "pharmacist",
+    "accountant",
+    "realtor",
+    "farmer",
+    "trucker",
+    "coach",
     # Identity / relationship
-    "mom", "dad", "mama", "papa", "grandma", "grandpa", "grandmother",
-    "grandfather", "auntie", "uncle", "wife", "husband", "bride", "groom",
-    "dog mom", "cat dad", "cat mom", "dog dad", "plant parent",
-    "bonus mom", "step dad",
+    "mom",
+    "dad",
+    "mama",
+    "papa",
+    "grandma",
+    "grandpa",
+    "grandmother",
+    "grandfather",
+    "auntie",
+    "uncle",
+    "wife",
+    "husband",
+    "bride",
+    "groom",
+    "dog mom",
+    "cat dad",
+    "cat mom",
+    "dog dad",
+    "plant parent",
+    "bonus mom",
+    "step dad",
     # Hobbies
-    "fishing", "hunting", "camping", "hiking", "knitting", "crochet",
-    "quilting", "gardening", "yoga", "running", "cycling", "golf",
-    "tennis", "pickleball", "bowling", "chess", "gaming", "birding",
-    "astronomy", "baking",
+    "fishing",
+    "hunting",
+    "camping",
+    "hiking",
+    "knitting",
+    "crochet",
+    "quilting",
+    "gardening",
+    "yoga",
+    "running",
+    "cycling",
+    "golf",
+    "tennis",
+    "pickleball",
+    "bowling",
+    "chess",
+    "gaming",
+    "birding",
+    "astronomy",
+    "baking",
     # Life stage
-    "retiree", "retired", "graduate", "graduation", "student", "senior",
-    "freshman", "newlywed", "birthday",
+    "retiree",
+    "retired",
+    "graduate",
+    "graduation",
+    "student",
+    "senior",
+    "freshman",
+    "newlywed",
+    "birthday",
 )
 
 REQUIRED_SUBJECT_TERMS: tuple[str, ...] = (
@@ -112,9 +168,7 @@ def _reject_abstract_phrasing(flux: FluxPrompt) -> None:
     haystack = (flux.prompt + " " + " ".join(flux.style_descriptors)).lower()
     hits = [t for t in FORBIDDEN_ABSTRACT_TERMS if t in haystack]
     if hits:
-        raise ValueError(
-            f"FLUX prompt contains forbidden abstract/wallpaper phrasing: {hits}"
-        )
+        raise ValueError(f"FLUX prompt contains forbidden abstract/wallpaper phrasing: {hits}")
 
 
 def build_flux_prompt(brief: TrendBrief) -> FluxPrompt:

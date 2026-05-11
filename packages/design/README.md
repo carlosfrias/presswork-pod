@@ -99,4 +99,3 @@ INTEGRATION=1 \
 
 The local secret key is printed by `supabase start` and `supabase status` under
 `Authentication Keys → Secret`.
-

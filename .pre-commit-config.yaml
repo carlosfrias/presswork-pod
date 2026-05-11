@@ -1,0 +1,27 @@
+# Pre-commit hooks run before every `git commit` to catch issues CI would
+# otherwise reject. Setup: `pre-commit install` (one-time, per clone).
+# Manual run: `pre-commit run --all-files`.
+#
+# Keep this minimal — fast hooks only. Type-checking and the full test suite
+# stay out of pre-commit (use pre-push or CI for those).
+
+repos:
+  # Python lint + format. ruff version pinned to match the venv.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  # House-keeping: trailing whitespace, EOF newline, large file guard.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-json

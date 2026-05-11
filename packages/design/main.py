@@ -26,14 +26,23 @@ async def run() -> None:
     while True:
         brief = claim_next_brief(db)
         if brief is None:
-            log.info("no_pending_briefs", agent="design", action="poll", status="idle", duration_ms=0)
+            log.info(
+                "no_pending_briefs", agent="design", action="poll", status="idle", duration_ms=0
+            )
             break
 
         t0 = time.monotonic()
         brief_id = str(brief.id)
 
-        existing_resp = db.table("design_packages").select("id,image_url,status").eq("trend_brief_id", brief_id).execute()
-        existing_row: dict[str, Any] | None = cast(dict[str, Any], existing_resp.data[0]) if existing_resp.data else None
+        existing_resp = (
+            db.table("design_packages")
+            .select("id,image_url,status")
+            .eq("trend_brief_id", brief_id)
+            .execute()
+        )
+        existing_row: dict[str, Any] | None = (
+            cast(dict[str, Any], existing_resp.data[0]) if existing_resp.data else None
+        )
 
         if existing_row and existing_row.get("image_url"):
             log.info(
@@ -64,7 +73,9 @@ async def run() -> None:
                 .limit(1)
                 .execute()
             )
-            cached_row: dict[str, Any] | None = cast(dict[str, Any], cached_resp.data[0]) if cached_resp.data else None
+            cached_row: dict[str, Any] | None = (
+                cast(dict[str, Any], cached_resp.data[0]) if cached_resp.data else None
+            )
 
             if cached_row:
                 row_data: dict[str, Any] = {
@@ -102,30 +113,36 @@ async def run() -> None:
             processed = await asyncio.to_thread(process_for_print, png_bytes)
 
             if existing_row:
-                db.table("design_packages").update({
-                    "fal_prompt": flux_prompt.prompt,
-                    "fal_prompt_hash": fal_prompt_hash,
-                    "status": "processing",
-                }).eq("id", str(design_id)).execute()
+                db.table("design_packages").update(
+                    {
+                        "fal_prompt": flux_prompt.prompt,
+                        "fal_prompt_hash": fal_prompt_hash,
+                        "status": "processing",
+                    }
+                ).eq("id", str(design_id)).execute()
             else:
-                db.table("design_packages").insert({
-                    "id": str(design_id),
-                    "trend_brief_id": brief_id,
-                    "fal_prompt": flux_prompt.prompt,
-                    "fal_prompt_hash": fal_prompt_hash,
-                    "printify_blueprint_id": GILDAN_64000_BLUEPRINT_ID,
-                    "printify_print_provider_id": GILDAN_64000_PRINT_PROVIDER_ID,
-                    "printify_variant_ids": GILDAN_64000_VARIANT_IDS,
-                    "metadata": {"style_descriptors": flux_prompt.style_descriptors},
-                    "status": "processing",
-                }).execute()
+                db.table("design_packages").insert(
+                    {
+                        "id": str(design_id),
+                        "trend_brief_id": brief_id,
+                        "fal_prompt": flux_prompt.prompt,
+                        "fal_prompt_hash": fal_prompt_hash,
+                        "printify_blueprint_id": GILDAN_64000_BLUEPRINT_ID,
+                        "printify_print_provider_id": GILDAN_64000_PRINT_PROVIDER_ID,
+                        "printify_variant_ids": GILDAN_64000_VARIANT_IDS,
+                        "metadata": {"style_descriptors": flux_prompt.style_descriptors},
+                        "status": "processing",
+                    }
+                ).execute()
 
             image_url = upload_design(db, design_id, processed)
 
-            db.table("design_packages").update({
-                "image_url": image_url,
-                "status": "done",
-            }).eq("id", str(design_id)).execute()
+            db.table("design_packages").update(
+                {
+                    "image_url": image_url,
+                    "status": "done",
+                }
+            ).eq("id", str(design_id)).execute()
 
             db.table("trend_briefs").update({"status": "done"}).eq("id", brief_id).execute()
 
@@ -145,10 +162,7 @@ async def run() -> None:
             # state. If the row doesn't exist yet (exception fired before the insert) we
             # upsert a stub so the next retry can read its retry_count.
             current_resp = (
-                db.table("design_packages")
-                .select("retry_count")
-                .eq("id", str(design_id))
-                .execute()
+                db.table("design_packages").select("retry_count").eq("id", str(design_id)).execute()
             )
             current_retry = (
                 cast(dict[str, Any], current_resp.data[0])["retry_count"]
@@ -175,10 +189,12 @@ async def run() -> None:
             else:
                 # Terminal: leave trend_briefs at 'error' too so observability is clean
                 # and the design poller doesn't keep churning.
-                db.table("trend_briefs").update({
-                    "status": "error",
-                    "error_message": str(e),
-                }).eq("id", brief_id).execute()
+                db.table("trend_briefs").update(
+                    {
+                        "status": "error",
+                        "error_message": str(e),
+                    }
+                ).eq("id", brief_id).execute()
                 await notify_slack(
                     f"Design hit retry ceiling for trend_brief={brief_id}: {e}",
                     severity="error",

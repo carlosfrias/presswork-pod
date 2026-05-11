@@ -55,9 +55,7 @@ async def test_rate_limited_to_10_per_second():
     10 req/s should take at least ~1 second total wall-clock."""
     import time
 
-    respx.get(_LISTINGS_URL).mock(
-        return_value=httpx.Response(200, json={"results": []})
-    )
+    respx.get(_LISTINGS_URL).mock(return_value=httpx.Response(200, json={"results": []}))
     client = EtsyClient()
     t0 = time.monotonic()
     await asyncio.gather(*[client.fetch_top_listings(f"niche-{i}") for i in range(20)])
@@ -137,9 +135,7 @@ async def test_refresh_persists_rotated_refresh_token_to_supabase(mock_db):
 
     upsert_calls = mock_db.table.return_value.upsert.call_args_list
     # At least one upsert should write the new tokens
-    persisted = [
-        c.args[0] for c in upsert_calls if c.args and c.args[0].get("key") == "etsy_oauth"
-    ]
+    persisted = [c.args[0] for c in upsert_calls if c.args and c.args[0].get("key") == "etsy_oauth"]
     assert len(persisted) >= 1
     assert persisted[-1]["value"]["refresh_token"] == "rotated-refresh"
     assert persisted[-1]["value"]["access_token"] == "new-token"

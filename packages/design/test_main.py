@@ -63,7 +63,9 @@ async def test_first_run_calls_fal_once(mocker):
     mocker.patch("packages.design.main.get_db", return_value=db)
     mocker.patch("packages.design.main.build_flux_prompt", return_value=_FLUX_PROMPT)
     mocker.patch("packages.design.main.process_for_print", return_value=_FAKE_PNG)
-    mocker.patch("packages.design.main.upload_design", return_value="https://storage.example.com/design.png")
+    mocker.patch(
+        "packages.design.main.upload_design", return_value="https://storage.example.com/design.png"
+    )
 
     mock_generate = AsyncMock(return_value=_FAKE_PNG)
     mocker.patch("packages.design.main.generate_image", mock_generate)
@@ -76,7 +78,13 @@ async def test_first_run_calls_fal_once(mocker):
 @pytest.mark.asyncio
 async def test_rerun_with_done_row_skips_fal(mocker):
     brief = _make_brief()
-    existing = [{"id": str(uuid4()), "image_url": "https://storage.example.com/existing.png", "status": "done"}]
+    existing = [
+        {
+            "id": str(uuid4()),
+            "image_url": "https://storage.example.com/existing.png",
+            "status": "done",
+        }
+    ]
     db = _mock_db(existing)
 
     mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
@@ -99,7 +107,9 @@ async def test_no_slack_alert_below_retry_ceiling(mocker):
     mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
     mocker.patch("packages.design.main.get_db", return_value=db)
     mocker.patch("packages.design.main.build_flux_prompt", return_value=_FLUX_PROMPT)
-    mocker.patch("packages.design.main.generate_image", AsyncMock(side_effect=RuntimeError("fal down")))
+    mocker.patch(
+        "packages.design.main.generate_image", AsyncMock(side_effect=RuntimeError("fal down"))
+    )
 
     mock_notify = AsyncMock()
     mocker.patch("packages.design.main.notify_slack", mock_notify)
@@ -118,7 +128,9 @@ async def test_slack_alert_at_retry_ceiling(mocker):
     mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
     mocker.patch("packages.design.main.get_db", return_value=db)
     mocker.patch("packages.design.main.build_flux_prompt", return_value=_FLUX_PROMPT)
-    mocker.patch("packages.design.main.generate_image", AsyncMock(side_effect=RuntimeError("fal down")))
+    mocker.patch(
+        "packages.design.main.generate_image", AsyncMock(side_effect=RuntimeError("fal down"))
+    )
 
     mock_notify = AsyncMock()
     mocker.patch("packages.design.main.notify_slack", mock_notify)
@@ -138,7 +150,9 @@ async def test_design_package_marked_error_on_failure(mocker):
     mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
     mocker.patch("packages.design.main.get_db", return_value=db)
     mocker.patch("packages.design.main.build_flux_prompt", return_value=_FLUX_PROMPT)
-    mocker.patch("packages.design.main.generate_image", AsyncMock(side_effect=RuntimeError("fal down")))
+    mocker.patch(
+        "packages.design.main.generate_image", AsyncMock(side_effect=RuntimeError("fal down"))
+    )
     mocker.patch("packages.design.main.notify_slack", AsyncMock())
 
     await run()
@@ -161,7 +175,9 @@ async def test_trend_briefs_retry_count_not_incremented(mocker):
     mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
     mocker.patch("packages.design.main.get_db", return_value=db)
     mocker.patch("packages.design.main.build_flux_prompt", return_value=_FLUX_PROMPT)
-    mocker.patch("packages.design.main.generate_image", AsyncMock(side_effect=RuntimeError("fal down")))
+    mocker.patch(
+        "packages.design.main.generate_image", AsyncMock(side_effect=RuntimeError("fal down"))
+    )
     mocker.patch("packages.design.main.notify_slack", AsyncMock())
 
     await run()

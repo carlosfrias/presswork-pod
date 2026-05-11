@@ -23,9 +23,10 @@ async def test_scout_failure_sends_slack_alert(mocker):
 
     mocker.patch("packages.scout.main.get_db", return_value=MagicMock())
     mocker.patch("packages.scout.main.is_recent_duplicate", return_value=False)
-    mocker.patch("packages.scout.main.EtsyClient", return_value=MagicMock(
-        fetch_top_listings=AsyncMock(side_effect=error)
-    ))
+    mocker.patch(
+        "packages.scout.main.EtsyClient",
+        return_value=MagicMock(fetch_top_listings=AsyncMock(side_effect=error)),
+    )
 
     mock_notify = AsyncMock()
     mocker.patch("packages.scout.main.notify_slack", mock_notify)

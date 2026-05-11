@@ -111,10 +111,7 @@ def test_system_prompt_has_cache_control(mocker):
     build_flux_prompt(_SAMPLE_BRIEF)
     kwargs = client.messages.create.call_args.kwargs
     system_blocks = kwargs["system"]
-    assert any(
-        block.get("cache_control") == {"type": "ephemeral"}
-        for block in system_blocks
-    )
+    assert any(block.get("cache_control") == {"type": "ephemeral"} for block in system_blocks)
 
 
 # --- Subject-centric detection ----------------------------------------------
