@@ -1,0 +1,6 @@
+{
+  "model": "claude-sonnet-4-20250514",
+  "captured_at": "2026-05-11T00:00:00Z",
+  "note": "Hand-authored adversarial capture — description omits AI_DISCLOSURE_TEXT. ListingCopySchema.refine rejects, so writeCopy throws CopywriterError before validateCopyCompliance runs.",
+  "text": "{\n  \"title\": \"Plant Mom Botanical Houseplant Unisex Graphic Tee\",\n  \"description\": \"A soft, breathable unisex tee for plant lovers. Pairs well with jeans and a watering can. Printed in the US on a Gildan 64000. Runs true to size. Makes a great gift for a plant mom or anyone whose apartment is 50 percent foliage.\",\n  \"tags\": [\"plant tee\", \"houseplant shirt\", \"plant mom\", \"botanical tee\", \"unisex tee\", \"graphic tee\", \"plant lover\", \"plant dad\", \"plant gift\", \"nature lover\", \"plant design\", \"green thumb\", \"foliage tee\"]\n}"
+}

@@ -1,0 +1,31 @@
+{
+  "name": "edge-off-platform",
+  "description": "Capture contains an off-platform redirection phrase + a bare domain. Tests validateNoOffPlatform's URL/phrase regexes.",
+  "brief": {
+    "id": "00000000-0000-0000-0000-000000000005",
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:00:00Z",
+    "status": "done",
+    "niche": "dog lovers",
+    "style_keywords": ["playful", "bold"],
+    "top_tags": ["dog tee", "dog mom", "dog dad"],
+    "color_palette": ["navy", "cream"],
+    "price_target_usd": 24.99,
+    "retry_count": 0
+  },
+  "design": {
+    "id": "00000000-0000-0000-0000-000000000006",
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:00:00Z",
+    "status": "done",
+    "printify_blueprint_id": 145,
+    "printify_print_provider_id": 3,
+    "printify_variant_ids": [38163, 38177],
+    "retry_count": 0
+  },
+  "expect": {
+    "writeCopySucceeds": true,
+    "compliancePasses": false,
+    "complianceErrorIncludes": "off-platform"
+  }
+}

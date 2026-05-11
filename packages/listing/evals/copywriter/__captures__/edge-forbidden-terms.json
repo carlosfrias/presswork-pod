@@ -1,0 +1,6 @@
+{
+  "model": "claude-sonnet-4-20250514",
+  "captured_at": "2026-05-11T00:00:00Z",
+  "note": "Hand-authored adversarial capture — contains 'handmade' (banned by Etsy POD policy rule 3). validateNoForbiddenTerms must reject. Includes AI disclosure verbatim so ListingCopySchema does not short-circuit first.",
+  "text": "{\n  \"title\": \"Vintage Retro Graphic Tee Earthy Tones Unisex\",\n  \"description\": \"A handmade-feeling vintage graphic tee with rich earth tones. Pairs effortlessly with denim. Printed in the US on a unisex Gildan 64000. This design was created using AI image generation tools, hand-selected and quality-reviewed by our team before printing.\",\n  \"tags\": [\"vintage tee\", \"retro shirt\", \"earthy tones\", \"unisex tee\", \"graphic tee\", \"rustic style\", \"mustard yellow\", \"olive green\", \"throwback tee\", \"vintage graphic\", \"earthy shirt\", \"retro design\", \"vintage gift\"]\n}"
+}

@@ -1,0 +1,30 @@
+{
+  "name": "clean-cat-tshirt",
+  "description": "Happy-path TrendBrief for a cat-niche tee. Expected to produce compliance-passing copy.",
+  "brief": {
+    "id": "00000000-0000-0000-0000-000000000001",
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:00:00Z",
+    "status": "done",
+    "niche": "cat lovers",
+    "style_keywords": ["cute", "minimalist"],
+    "top_tags": ["cat shirt", "cat tee", "cat mom"],
+    "color_palette": ["black", "white"],
+    "price_target_usd": 24.99,
+    "retry_count": 0
+  },
+  "design": {
+    "id": "00000000-0000-0000-0000-000000000002",
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:00:00Z",
+    "status": "done",
+    "printify_blueprint_id": 145,
+    "printify_print_provider_id": 3,
+    "printify_variant_ids": [38163, 38177, 38191, 38205, 38219],
+    "retry_count": 0
+  },
+  "expect": {
+    "writeCopySucceeds": true,
+    "compliancePasses": true
+  }
+}

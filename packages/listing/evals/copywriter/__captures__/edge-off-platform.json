@@ -1,0 +1,6 @@
+{
+  "model": "claude-sonnet-4-20250514",
+  "captured_at": "2026-05-11T00:00:00Z",
+  "note": "Hand-authored adversarial capture — contains an off-platform phrase ('follow us on') plus a bare domain. validateNoOffPlatform must reject.",
+  "text": "{\n  \"title\": \"Dog Mom Dog Dad Unisex Graphic Tee Cute Pet Gift\",\n  \"description\": \"A cute graphic tee for the dog people. Soft, breathable, unisex Gildan 64000. Follow us on instagram.com for more designs. This design was created using AI image generation tools, hand-selected and quality-reviewed by our team before printing.\",\n  \"tags\": [\"dog tee\", \"dog mom\", \"dog dad\", \"pet lover\", \"unisex tee\", \"graphic tee\", \"dog gift\", \"pet parent\", \"dog shirt\", \"puppy love\", \"cute pet\", \"animal lover\", \"dog design\"]\n}"
+}

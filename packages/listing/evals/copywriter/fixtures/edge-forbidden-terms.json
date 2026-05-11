@@ -1,0 +1,31 @@
+{
+  "name": "edge-forbidden-terms",
+  "description": "Capture contains 'handmade' in description (banned by Etsy POD policy rule 3). Tests that validateNoForbiddenTerms catches it post-writeCopy.",
+  "brief": {
+    "id": "00000000-0000-0000-0000-000000000003",
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:00:00Z",
+    "status": "done",
+    "niche": "vintage style apparel",
+    "style_keywords": ["retro", "rustic"],
+    "top_tags": ["vintage tee", "retro shirt", "rustic graphic"],
+    "color_palette": ["mustard", "olive"],
+    "price_target_usd": 24.99,
+    "retry_count": 0
+  },
+  "design": {
+    "id": "00000000-0000-0000-0000-000000000004",
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:00:00Z",
+    "status": "done",
+    "printify_blueprint_id": 145,
+    "printify_print_provider_id": 3,
+    "printify_variant_ids": [38163, 38177],
+    "retry_count": 0
+  },
+  "expect": {
+    "writeCopySucceeds": true,
+    "compliancePasses": false,
+    "complianceErrorIncludes": "handmade"
+  }
+}

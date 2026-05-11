@@ -1,0 +1,6 @@
+{
+  "model": "claude-sonnet-4-20250514",
+  "captured_at": "2026-05-11T00:00:00Z",
+  "note": "Hand-authored seed capture. Replace via EVAL_LIVE=1 once the eval suite is wired up.",
+  "text": "{\n  \"title\": \"Funny Cat T-Shirt Unisex Graphic Tee Cat Mom Gift\",\n  \"description\": \"A soft, comfy tee for cat lovers everywhere. Pairs well with jeans, joggers, and a strong morning coffee. Printed in the US on a unisex Gildan 64000 — runs true to size. Makes a great gift for a cat mom, cat dad, or anyone whose phone camera roll is 80 percent cat photos. This design was created using AI image generation tools, hand-selected and quality-reviewed by our team before printing.\",\n  \"tags\": [\"cat shirt\", \"cat tee\", \"funny cat\", \"cat lover gift\", \"unisex tee\", \"graphic tee\", \"cat mom\", \"cat dad\", \"pet lover\", \"animal shirt\", \"cute cat\", \"cat design\", \"novelty tee\"]\n}"
+}

@@ -1,0 +1,30 @@
+{
+  "name": "edge-ai-disclosure",
+  "description": "Capture omits the AI_DISCLOSURE_TEXT verbatim. ListingCopySchema rejects it before validateCopyCompliance even runs, so writeCopy throws CopywriterError.",
+  "brief": {
+    "id": "00000000-0000-0000-0000-000000000007",
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:00:00Z",
+    "status": "done",
+    "niche": "plant lovers",
+    "style_keywords": ["botanical", "soft"],
+    "top_tags": ["plant tee", "houseplant shirt", "plant mom"],
+    "color_palette": ["sage", "ivory"],
+    "price_target_usd": 24.99,
+    "retry_count": 0
+  },
+  "design": {
+    "id": "00000000-0000-0000-0000-000000000008",
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:00:00Z",
+    "status": "done",
+    "printify_blueprint_id": 145,
+    "printify_print_provider_id": 3,
+    "printify_variant_ids": [38163],
+    "retry_count": 0
+  },
+  "expect": {
+    "writeCopySucceeds": false,
+    "writeCopyErrorName": "CopywriterError"
+  }
+}
