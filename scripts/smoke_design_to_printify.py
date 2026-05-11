@@ -24,7 +24,7 @@ import base64
 import json
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -58,7 +58,7 @@ def _build_synthetic_brief() -> TrendBrief:
     yoga is in the subject-centric keyword list, so this also exercises the
     'centered subject / no wallpaper' branch of prompt_builder.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return TrendBrief(
         id=uuid4(),
         created_at=now,
@@ -132,9 +132,7 @@ def _printify_create_product(
         "description": description,
         "blueprint_id": blueprint_id,
         "print_provider_id": print_provider_id,
-        "variants": [
-            {"id": vid, "price": 2499, "is_enabled": True} for vid in variant_ids
-        ],
+        "variants": [{"id": vid, "price": 2499, "is_enabled": True} for vid in variant_ids],
         "print_areas": [
             {
                 "variant_ids": variant_ids,
@@ -205,7 +203,9 @@ async def main() -> int:
     t1 = time.monotonic()
     raw_png = await generate_image(flux)
     (out_dir / "raw.png").write_bytes(raw_png)
-    print(f"[smoke] fal.ai image generated ({len(raw_png) // 1024}KB) in {round((time.monotonic() - t1) * 1000)}ms")
+    print(
+        f"[smoke] fal.ai image generated ({len(raw_png) // 1024}KB) in {round((time.monotonic() - t1) * 1000)}ms"
+    )
 
     # 3) rembg + 4500x5400 @300dpi
     t2 = time.monotonic()
