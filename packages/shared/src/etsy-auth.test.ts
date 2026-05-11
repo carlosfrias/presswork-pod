@@ -130,7 +130,7 @@ describe("getValidAccessToken", () => {
     expect(setTokensMock).toHaveBeenCalledTimes(1);
   });
 
-  it("throws EtsyAuthError when refresh endpoint returns error", async () => {
+  it("throws EtsyAuthError when refresh endpoint returns generic error", async () => {
     vi.doMock("./etsy-tokens.js", () => ({
       getEtsyTokens: vi.fn().mockResolvedValue({
         accessToken: "old-token",
@@ -141,10 +141,40 @@ describe("getValidAccessToken", () => {
     }));
 
     server.use(
-      http.post(REFRESH_URL, () => new HttpResponse("invalid_grant", { status: 400 }))
+      http.post(REFRESH_URL, () => new HttpResponse("invalid_request", { status: 400 }))
     );
 
     const { getValidAccessToken, EtsyAuthError } = await import("./etsy-auth.js");
     await expect(getValidAccessToken({} as never)).rejects.toThrow(EtsyAuthError);
+  });
+
+  it("fires CRITICAL Slack alert and surfaces actionable error on invalid_grant (audit #49)", async () => {
+    vi.doMock("./etsy-tokens.js", () => ({
+      getEtsyTokens: vi.fn().mockResolvedValue({
+        accessToken: "old-token",
+        refreshToken: "stale-refresh",
+        expiresAt: EXPIRED,
+      }),
+      setEtsyTokens: vi.fn(),
+    }));
+    const notifySlackMock = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("./notifier.js", () => ({
+      notifySlack: notifySlackMock,
+      notifyEmail: vi.fn(),
+    }));
+
+    server.use(
+      http.post(REFRESH_URL, () =>
+        HttpResponse.json({ error: "invalid_grant", error_description: "Token expired" }, { status: 400 })
+      )
+    );
+
+    const { getValidAccessToken, EtsyAuthError } = await import("./etsy-auth.js");
+    await expect(getValidAccessToken({} as never)).rejects.toThrow(EtsyAuthError);
+    await expect(getValidAccessToken({} as never)).rejects.toThrow(/Manual re-authorization/);
+    // Dedup: the second call within the 5-min window should NOT fire another alert.
+    expect(notifySlackMock).toHaveBeenCalledTimes(1);
+    expect(notifySlackMock.mock.calls[0]?.[0]).toMatch(/invalid_grant/);
+    expect(notifySlackMock.mock.calls[0]?.[1]).toEqual({ severity: "error" });
   });
 });

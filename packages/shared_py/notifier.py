@@ -21,8 +21,11 @@ async def notify_slack(
     try:
         settings = get_settings()
         url = settings.slack_webhook_url
-    except Exception:
-        _log.warning("[notifier] Failed to load settings — skipping Slack alert")
+    except Exception as exc:
+        # Surface the underlying error so missing-env-var failures don't silently
+        # disable critical alerts (e.g. retry_count >= 3). We still swallow the
+        # exception because alerting must never crash the caller.
+        _log.warning("[notifier] Failed to load settings — skipping Slack alert: %s", exc)
         return
 
     if not url:

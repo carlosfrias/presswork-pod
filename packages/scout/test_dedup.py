@@ -34,6 +34,21 @@ def _make_db(recent_data: list) -> MagicMock:
     return db
 
 
+def _chain_methods(chain: MagicMock) -> list[str]:
+    """Return the ordered list of method names called on a chained mock.
+
+    Audit #48: bare MagicMock chains silently absorb any reordering of
+    .eq/.gte/.order/.limit/.execute. Callers should pass the underlying chain
+    (e.g. db.table.return_value) and assert that the recorded sequence matches
+    what production code is supposed to emit.
+    """
+    seq: list[str] = []
+    for call_obj in chain.mock_calls:
+        path = call_obj[0]  # e.g. "select" or "select().gte"
+        seq.append(path.split(".")[-1])
+    return seq
+
+
 def _mock_settings(mocker):
     s = MagicMock()
     s.anthropic_api_key = "test-key"
@@ -64,6 +79,15 @@ async def test_fixture_a_cat_briefs_are_duplicate(mocker):
 
     assert is_dup is True
     assert matched == "cat lovers"
+    # Production code chains .select().gte().order().limit().execute() — assert
+    # the actual sequence so reordering breaks the test.
+    assert _chain_methods(db.table.return_value) == [
+        "select",
+        "gte",
+        "order",
+        "limit",
+        "execute",
+    ]
 
 
 @pytest.mark.asyncio
@@ -90,6 +114,13 @@ async def test_fixture_b_dog_briefs_are_not_cat_duplicate(mocker):
 
     assert is_dup is False
     assert matched is None
+    assert _chain_methods(db.table.return_value) == [
+        "select",
+        "gte",
+        "order",
+        "limit",
+        "execute",
+    ]
 
 
 @pytest.mark.asyncio
@@ -105,3 +136,10 @@ async def test_fixture_c_empty_prior_list_skips_claude(mocker):
     assert is_dup is False
     assert matched is None
     mock_anthropic.messages.create.assert_not_called()
+    assert _chain_methods(db.table.return_value) == [
+        "select",
+        "gte",
+        "order",
+        "limit",
+        "execute",
+    ]

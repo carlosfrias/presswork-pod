@@ -107,6 +107,47 @@ describe("createHiddenProduct (two-step upload then create)", () => {
     expect(result.mockupUrls).toHaveLength(2);
   });
 
+  it("uses the per-blueprint variant price from the constants table (audit #41)", async () => {
+    let capturedProduct: unknown;
+    server.use(
+      http.post("https://api.printify.com/v1/uploads/images.json", () =>
+        HttpResponse.json({ id: UPLOAD_ID })
+      ),
+      http.post("https://api.printify.com/v1/shops/shop-99/products.json", async ({ request }) => {
+        capturedProduct = await request.json();
+        return HttpResponse.json(PRODUCT_RESPONSE);
+      })
+    );
+    const { createHiddenProduct } = await import("./printify.js");
+    await createHiddenProduct(INPUT); // blueprintId 145 → 2499¢
+
+    const body = capturedProduct as { variants: Array<{ id: number; price: number }> };
+    for (const v of body.variants) {
+      expect(v.price).toBe(2499);
+    }
+  });
+
+  it("falls back to placeholder price for unknown blueprint (audit #41)", async () => {
+    let capturedProduct: unknown;
+    server.use(
+      http.post("https://api.printify.com/v1/uploads/images.json", () =>
+        HttpResponse.json({ id: UPLOAD_ID })
+      ),
+      http.post("https://api.printify.com/v1/shops/shop-99/products.json", async ({ request }) => {
+        capturedProduct = await request.json();
+        return HttpResponse.json(PRODUCT_RESPONSE);
+      })
+    );
+    const { createHiddenProduct } = await import("./printify.js");
+    const { PRINTIFY_VARIANT_PRICE_FALLBACK_CENTS } = await import("./constants.js");
+    await createHiddenProduct({ ...INPUT, blueprintId: 999999 });
+
+    const body = capturedProduct as { variants: Array<{ id: number; price: number }> };
+    for (const v of body.variants) {
+      expect(v.price).toBe(PRINTIFY_VARIANT_PRICE_FALLBACK_CENTS);
+    }
+  });
+
   it("throws PrintifyError when upload returns no id", async () => {
     server.use(
       http.post("https://api.printify.com/v1/uploads/images.json", () =>

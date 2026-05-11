@@ -230,6 +230,89 @@ describe("createDraftListing", () => {
   });
 });
 
+describe("uploadListingImage download guards (audit #40)", () => {
+  let savedEnv: NodeJS.ProcessEnv;
+
+  beforeEach(() => {
+    savedEnv = { ...process.env };
+    vi.resetModules();
+    Object.assign(process.env, validEnv);
+  });
+
+  afterEach(() => { process.env = savedEnv; });
+
+  it("times out when image download stalls", async () => {
+    vi.doMock("./etsy-auth.js", () => ({
+      getValidAccessToken: vi.fn().mockResolvedValue("test-token"),
+      EtsyAuthError: class EtsyAuthError extends Error {},
+    }));
+    server.use(
+      http.get("https://example.com/slow-mockup.png", async ({ request }) => {
+        // Wait until the AbortController fires; the test sets timeoutMs short.
+        await new Promise<void>((resolve) => {
+          request.signal.addEventListener("abort", () => resolve());
+        });
+        return new HttpResponse(null, { status: 504 });
+      })
+    );
+    const { uploadListingImage, EtsyApiError } = await import("./etsy-api.js");
+    await expect(
+      uploadListingImage({} as never, 1, "https://example.com/slow-mockup.png", {
+        timeoutMs: 50,
+      })
+    ).rejects.toThrow(EtsyApiError);
+  });
+
+  it("rejects non-image content-type", async () => {
+    vi.doMock("./etsy-auth.js", () => ({
+      getValidAccessToken: vi.fn().mockResolvedValue("test-token"),
+      EtsyAuthError: class EtsyAuthError extends Error {},
+    }));
+    server.use(
+      http.get("https://example.com/not-an-image.html", () =>
+        new HttpResponse("<html>oops</html>", {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        })
+      )
+    );
+    const { uploadListingImage, EtsyApiError } = await import("./etsy-api.js");
+    await expect(
+      uploadListingImage({} as never, 1, "https://example.com/not-an-image.html")
+    ).rejects.toThrow(EtsyApiError);
+  });
+
+  it("rejects when Content-Length exceeds max", async () => {
+    vi.doMock("./etsy-auth.js", () => ({
+      getValidAccessToken: vi.fn().mockResolvedValue("test-token"),
+      EtsyAuthError: class EtsyAuthError extends Error {},
+    }));
+    server.use(
+      http.get("https://example.com/huge.png", () =>
+        new HttpResponse("x", {
+          status: 200,
+          headers: {
+            "Content-Type": "image/png",
+            "Content-Length": "999999999",
+          },
+        })
+      )
+    );
+    const { uploadListingImage, EtsyApiError } = await import("./etsy-api.js");
+    await expect(
+      uploadListingImage({} as never, 1, "https://example.com/huge.png", {
+        maxBytes: 1024,
+      })
+    ).rejects.toThrow(/exceeds max size/);
+    // Wrap in a second await to satisfy lint and confirm error class.
+    await expect(
+      uploadListingImage({} as never, 1, "https://example.com/huge.png", {
+        maxBytes: 1024,
+      })
+    ).rejects.toThrow(EtsyApiError);
+  });
+});
+
 describe("activateListing", () => {
   let savedEnv: NodeJS.ProcessEnv;
 

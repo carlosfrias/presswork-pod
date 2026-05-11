@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 
@@ -30,6 +30,32 @@ describe("notifySlack", () => {
     delete process.env["SLACK_WEBHOOK_URL"];
     const { notifySlack } = await import("./notifier.js");
     await expect(notifySlack("silent")).resolves.toBeUndefined();
+  });
+
+  it("emits structured pino log (not console.warn) when SLACK_WEBHOOK_URL is unset (audit #44)", async () => {
+    delete process.env["SLACK_WEBHOOK_URL"];
+    vi.resetModules();
+    const consoleSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Capture stdout writes from pino — pino writes JSON lines to stdout by default.
+    let captured = "";
+    const stdoutSpy = vi
+      .spyOn(process.stdout, "write")
+      .mockImplementation((chunk: unknown) => {
+        captured += String(chunk);
+        return true;
+      });
+
+    const { notifySlack } = await import("./notifier.js");
+    await notifySlack("test");
+
+    // pino emitted a structured warn entry mentioning the missing URL.
+    expect(captured).toContain("\"action\":\"slack_skip\"");
+    expect(captured).toContain("\"reason\":\"missing_url\"");
+    // No console.warn fallback was used.
+    expect(consoleSpy).not.toHaveBeenCalled();
+
+    consoleSpy.mockRestore();
+    stdoutSpy.mockRestore();
   });
 
   it("does not throw when Slack endpoint returns non-200", async () => {

@@ -264,4 +264,32 @@ describe("printifyFetch — error handling", () => {
     expect(result).toEqual({ recovered: true });
     expect(attempts).toBe(3);
   });
+
+  it("keeps Printify response body OUT of err.message but ON err.responseBody (audit #50)", async () => {
+    // Printify 4xx responses can echo buyer address/email back. The message
+    // gets persisted to orders.error_message and Slack — body must not leak.
+    const sensitiveBody =
+      '{"error":"address_invalid","echo":{"email":"buyer@example.com","first_line":"123 Buyer Lane"}}';
+
+    server.use(
+      http.post("https://api.printify.com/v1/test-pii", () =>
+        new HttpResponse(sensitiveBody, { status: 422 })
+      )
+    );
+
+    const { printifyFetch, PrintifyError } = await import("./printify-http.js");
+    let caught: InstanceType<typeof PrintifyError> | null = null;
+    try {
+      await printifyFetch("/test-pii", { method: "POST" });
+    } catch (err) {
+      caught = err as InstanceType<typeof PrintifyError>;
+    }
+
+    expect(caught).toBeInstanceOf(PrintifyError);
+    expect(caught!.message).toBe("Printify 422");
+    expect(caught!.message).not.toContain("buyer@example.com");
+    expect(caught!.message).not.toContain("123 Buyer Lane");
+    // Body is preserved on the structured field for in-process debug logs.
+    expect(caught!.responseBody).toBe(sensitiveBody);
+  });
 });

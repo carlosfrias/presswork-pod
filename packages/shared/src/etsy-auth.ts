@@ -1,6 +1,7 @@
 import type { Db } from "./db.js";
 import { getSettings } from "./config.js";
 import { getEtsyTokens, setEtsyTokens } from "./etsy-tokens.js";
+import { notifySlack } from "./notifier.js";
 
 export class EtsyAuthError extends Error {
   constructor(message: string) {
@@ -11,6 +12,12 @@ export class EtsyAuthError extends Error {
 
 const REFRESH_URL = "https://api.etsy.com/v3/public/oauth/token";
 const EXPIRY_BUFFER_SEC = 60;
+
+// invalid_grant means Etsy considers the refresh token dead — manual
+// re-authorization is required (regenerate via OAuth, update env, redeploy).
+// Dedup the alert so retry loops don't spam Slack.
+const INVALID_GRANT_ALERT_DEDUP_MS = 5 * 60 * 1000;
+let _lastInvalidGrantAlertAt = 0;
 
 // Module-scope coalesce: concurrent callers share the same in-flight refresh
 // instead of each firing their own POST. Two parallel POSTs would invalidate
@@ -51,6 +58,33 @@ async function doRefresh(db: Db, refreshToken: string): Promise<string> {
 
   if (!res.ok) {
     const body = await res.text();
+
+    // Detect Etsy's invalid_grant — the refresh token is permanently dead
+    // (rotated by a parallel refresh, or the user revoked authorization).
+    // Surface a CRITICAL Slack alert with manual recovery instructions so the
+    // operator notices before downstream calls start failing with generic 401s.
+    let isInvalidGrant = false;
+    try {
+      const parsed = JSON.parse(body) as { error?: string };
+      isInvalidGrant = parsed.error === "invalid_grant";
+    } catch {
+      isInvalidGrant = body.includes("invalid_grant");
+    }
+
+    if (isInvalidGrant) {
+      const now = Date.now();
+      if (now - _lastInvalidGrantAlertAt > INVALID_GRANT_ALERT_DEDUP_MS) {
+        _lastInvalidGrantAlertAt = now;
+        await notifySlack(
+          "Etsy refresh token is dead (invalid_grant). Manual re-authorization required: regenerate the OAuth refresh token, update ETSY_REFRESH_TOKEN, and restart the service.",
+          { severity: "error" }
+        );
+      }
+      throw new EtsyAuthError(
+        "Etsy refresh token is dead (invalid_grant). Manual re-authorization required: regenerate the OAuth refresh token, update ETSY_REFRESH_TOKEN, and restart the service."
+      );
+    }
+
     throw new EtsyAuthError(`Etsy token refresh failed (${res.status}): ${body}`);
   }
 

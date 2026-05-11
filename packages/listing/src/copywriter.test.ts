@@ -111,9 +111,17 @@ describe("writeCopy", () => {
     await expect(writeCopy(brief, design)).rejects.toThrow(CopywriterError);
   });
 
-  it("throws CopywriterError when tag count is not exactly 13", async () => {
-    const badTags = { ...validCopy, tags: validCopy.tags.slice(0, 12) };
-    vi.doMock("@anthropic-ai/sdk", () => makeAnthropicMock(JSON.stringify(badTags)));
+  it("accepts up to 13 tags (audit #42: fewer-than-13 should not abort publish)", async () => {
+    const twelveTags = { ...validCopy, tags: validCopy.tags.slice(0, 12) };
+    vi.doMock("@anthropic-ai/sdk", () => makeAnthropicMock(JSON.stringify(twelveTags)));
+    const { writeCopy } = await import("./copywriter.js");
+    const result = await writeCopy(brief, design);
+    expect(result.tags).toHaveLength(12);
+  });
+
+  it("throws CopywriterError when tag count exceeds 13", async () => {
+    const tooManyTags = { ...validCopy, tags: [...validCopy.tags, "extra tag"] };
+    vi.doMock("@anthropic-ai/sdk", () => makeAnthropicMock(JSON.stringify(tooManyTags)));
     const { writeCopy, CopywriterError } = await import("./copywriter.js");
     await expect(writeCopy(brief, design)).rejects.toThrow(CopywriterError);
   });

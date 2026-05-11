@@ -15,6 +15,8 @@ _VALID_ANALYSIS = {
     "color_palette": ["#3D5AFE", "white", "tan"],
 }
 
+# price.amount is in CENTS per Etsy's API (2499 = $24.99). _slim_listings
+# converts to USD before sending to Claude.
 _SAMPLE_LISTINGS = [
     {"title": "Dog Mom Shirt", "tags": ["dog mom"], "price": {"amount": 2499}, "num_reviews": 42}
 ]
@@ -70,3 +72,21 @@ async def test_system_prompt_has_cache_control(mocker):
     kwargs = client.messages.create.call_args.kwargs
     system_blocks = kwargs["system"]
     assert any(block.get("cache_control") == {"type": "ephemeral"} for block in system_blocks)
+
+
+def test_slim_listings_converts_cents_to_usd():
+    """Audit #46: Etsy returns price.amount in cents (2499). The slim payload
+    sent to Claude must be USD (24.99) so price_target_usd isn't off by 100x."""
+    from packages.scout.analyzer import _slim_listings
+
+    listings = [
+        {"title": "A", "tags": [], "price": {"amount": 2499}, "num_reviews": 0},
+        {"title": "B", "tags": [], "price": {"amount": 1099}, "num_reviews": 0},
+        {"title": "C", "tags": [], "price": None, "num_reviews": 0},
+    ]
+    out = _slim_listings(listings)
+    assert out[0]["price_usd"] == 24.99
+    assert out[1]["price_usd"] == 10.99
+    assert out[2]["price_usd"] is None
+    # Old key removed.
+    assert "price" not in out[0]

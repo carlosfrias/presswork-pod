@@ -29,13 +29,20 @@ export const MAX_ATTEMPTS = 3;
 const MAX_RETRY_AFTER_MS = 60_000;
 
 export class PrintifyError extends Error {
+  // The raw response body is kept on a separate field (not in `message`) so it
+  // doesn't get persisted to orders.error_message or sent to Slack. Printify
+  // 4xx bodies can echo buyer address/email back. Pino logs may still attach
+  // `responseBody` as a structured field — those don't leave the host.
+  public readonly responseBody: string | undefined;
   constructor(
     message: string,
     public readonly status?: number,
-    public readonly retryAfterMs?: number
+    public readonly retryAfterMs?: number,
+    responseBody?: string
   ) {
     super(message);
     this.name = "PrintifyError";
+    this.responseBody = responseBody;
   }
 }
 
@@ -98,7 +105,8 @@ async function attemptWithRetry(path: string, init: RequestInit): Promise<unknow
       lastErr = new PrintifyError(
         `Printify 429: rate limited`,
         429,
-        retryAfterMs ?? undefined
+        retryAfterMs ?? undefined,
+        body
       );
       if (attempt === MAX_ATTEMPTS - 1) break;
       await _printifyTestHooks.sleep(retryAfterMs ?? DEFAULT_429_WAIT_MS);
@@ -106,12 +114,12 @@ async function attemptWithRetry(path: string, init: RequestInit): Promise<unknow
     }
 
     if (res.status < 500) {
-      // Non-retryable client error
-      throw new PrintifyError(`Printify ${res.status}: ${body}`, res.status);
+      // Non-retryable client error. Body kept on `responseBody` only.
+      throw new PrintifyError(`Printify ${res.status}`, res.status, undefined, body);
     }
 
     // 5xx — retry with exponential backoff (matches the prior async-retry timing)
-    lastErr = new PrintifyError(`Printify ${res.status}: ${body}`, res.status);
+    lastErr = new PrintifyError(`Printify ${res.status}`, res.status, undefined, body);
     if (attempt === MAX_ATTEMPTS - 1) break;
     await _printifyTestHooks.sleep(500 * Math.pow(2, attempt));
   }
@@ -140,10 +148,14 @@ export async function printifyFetch(
         : "4xx";
     _recordPrintifyOutcome(outcome);
     const metrics = getPrintifyErrorRate();
+    // responseBody is logged structurally (host-only) so on-call can debug 4xx
+    // without leaking it through err.message → orders.error_message → Slack.
     log.info({
       action: "printify_request",
       path,
       status: err instanceof PrintifyError ? err.status : undefined,
+      responseBody:
+        err instanceof PrintifyError ? err.responseBody : undefined,
       ...metrics,
     });
     throw err;

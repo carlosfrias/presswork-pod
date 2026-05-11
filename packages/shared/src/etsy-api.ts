@@ -4,6 +4,10 @@ import { z } from "zod";
 import type { Db } from "./db.js";
 import { getSettings } from "./config.js";
 import { getValidAccessToken } from "./etsy-auth.js";
+import {
+  ETSY_IMAGE_DOWNLOAD_TIMEOUT_MS,
+  ETSY_IMAGE_MAX_BYTES,
+} from "./constants.js";
 
 export class EtsyApiError extends Error {
   constructor(message: string, public readonly status?: number) {
@@ -238,14 +242,76 @@ export async function createDraftListing(
 export async function uploadListingImage(
   db: Db,
   listingId: number,
-  imageUrl: string
+  imageUrl: string,
+  opts: { timeoutMs?: number; maxBytes?: number } = {}
 ): Promise<void> {
   const { ETSY_SHOP_ID } = getSettings();
-  const imageRes = await fetch(imageUrl);
-  if (!imageRes.ok) {
-    throw new EtsyApiError(`Failed to download image from ${imageUrl}: ${imageRes.status}`);
+  const timeoutMs = opts.timeoutMs ?? ETSY_IMAGE_DOWNLOAD_TIMEOUT_MS;
+  const maxBytes = opts.maxBytes ?? ETSY_IMAGE_MAX_BYTES;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  let imageBlob: Blob;
+  try {
+    let imageRes: Response;
+    try {
+      imageRes = await fetch(imageUrl, { signal: controller.signal });
+    } catch (err) {
+      if ((err as Error).name === "AbortError") {
+        throw new EtsyApiError(
+          `Image download timed out after ${timeoutMs}ms: ${imageUrl}`
+        );
+      }
+      throw err;
+    }
+
+    if (!imageRes.ok) {
+      throw new EtsyApiError(`Failed to download image from ${imageUrl}: ${imageRes.status}`);
+    }
+
+    const contentType = imageRes.headers.get("content-type") ?? "";
+    if (!contentType.toLowerCase().startsWith("image/")) {
+      throw new EtsyApiError(
+        `Image download from ${imageUrl} returned non-image content-type: ${contentType || "(missing)"}`
+      );
+    }
+
+    const declaredLen = Number(imageRes.headers.get("content-length"));
+    if (Number.isFinite(declaredLen) && declaredLen > maxBytes) {
+      throw new EtsyApiError(
+        `Image at ${imageUrl} exceeds max size: ${declaredLen} > ${maxBytes} bytes`
+      );
+    }
+
+    // Stream the body so an oversize file (e.g. missing/lying Content-Length)
+    // is short-circuited before we buffer the whole thing in memory.
+    if (!imageRes.body) {
+      throw new EtsyApiError(`Image response has no body: ${imageUrl}`);
+    }
+    const reader = imageRes.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let received = 0;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) {
+        received += value.byteLength;
+        if (received > maxBytes) {
+          await reader.cancel();
+          throw new EtsyApiError(
+            `Image at ${imageUrl} exceeds max size while streaming (> ${maxBytes} bytes)`
+          );
+        }
+        chunks.push(value);
+      }
+    }
+    // Cast each chunk to a generic ArrayBufferView; node fetch's reader yields
+    // Uint8Array<ArrayBufferLike> but Blob requires Uint8Array<ArrayBuffer>.
+    imageBlob = new Blob(chunks as BlobPart[], { type: contentType });
+  } finally {
+    clearTimeout(timer);
   }
-  const imageBlob = await imageRes.blob();
 
   const form = new FormData();
   form.append("image", imageBlob, "design.png");

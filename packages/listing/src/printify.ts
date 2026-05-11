@@ -1,4 +1,5 @@
 import { printifyFetch, PrintifyError, getSettings } from "@presswork/shared";
+import { printifyVariantPriceCents } from "./constants.js";
 
 export { PrintifyError };
 
@@ -56,16 +57,14 @@ export async function createHiddenProduct(
     deriveFileNameFromUrl(input.imageUrl)
   );
 
+  const variantPriceCents = printifyVariantPriceCents(input.blueprintId);
   const body = {
     title: input.title,
     blueprint_id: input.blueprintId,
     print_provider_id: input.printProviderId,
     variants: input.variantIds.map((id) => ({
       id,
-      // Printify requires variants.*.price > 0 (cents). The buyer-facing price
-      // lives on the Etsy listing; this is a hidden Printify product so the
-      // value is internal metadata only — but the API still validates it.
-      price: 2499,
+      price: variantPriceCents,
       is_enabled: true,
     })),
     print_areas: [

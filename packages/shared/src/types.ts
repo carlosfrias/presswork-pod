@@ -106,7 +106,7 @@ export const ListingCopySchema = z
   .object({
     title: z.string().max(MAX_TITLE_LEN),
     description: z.string(),
-    tags: z.array(z.string().max(MAX_TAG_LEN)).length(MAX_TAGS),
+    tags: z.array(z.string().max(MAX_TAG_LEN)).max(MAX_TAGS),
   })
   .refine((d) => d.title !== d.title.toUpperCase() || d.title.length <= 1, {
     message: "Title must not be all-caps",

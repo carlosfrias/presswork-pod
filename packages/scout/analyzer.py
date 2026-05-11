@@ -7,6 +7,7 @@ from packages.shared_py.models import ClaudeAnalysis
 
 SYSTEM_PROMPT = """You are a print-on-demand market analyst.
 Given raw Etsy listing data, extract a structured trend brief.
+Each listing in the input has price_usd in dollars (e.g. 24.99), already converted from Etsy's cents amount.
 Respond ONLY with valid JSON matching this schema:
 {
   "niche": str,
@@ -19,15 +20,22 @@ Never reference specific shop names, artist names, or existing IP."""
 
 
 def _slim_listings(listings: list[dict]) -> list[dict]:
-    return [
-        {
-            "title": listing.get("title"),
-            "tags": listing.get("tags"),
-            "price": listing.get("price", {}).get("amount"),
-            "num_reviews": listing.get("num_reviews"),
-        }
-        for listing in listings
-    ]
+    # Etsy returns price.amount in CENTS (e.g. 2499 = $24.99). Convert to USD
+    # before sending to Claude — passing raw cents was producing wildly wrong
+    # price_target_usd values (audit #46).
+    out: list[dict] = []
+    for listing in listings:
+        amount_cents = (listing.get("price") or {}).get("amount")
+        price_usd = round(amount_cents / 100, 2) if amount_cents is not None else None
+        out.append(
+            {
+                "title": listing.get("title"),
+                "tags": listing.get("tags"),
+                "price_usd": price_usd,
+                "num_reviews": listing.get("num_reviews"),
+            }
+        )
+    return out
 
 
 async def analyze_niche(raw_listings: list[dict]) -> ClaudeAnalysis:

@@ -189,13 +189,27 @@ export async function publishOne(
 
     return { listingId };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const { data: current } = await db
+    let message = err instanceof Error ? err.message : String(err);
+    const { data: current, error: readErr } = await db
       .from("listings")
       .select("retry_count")
       .eq("id", listingId)
       .single();
-    const retryCount = ((current as { retry_count?: number } | null)?.retry_count ?? 0) + 1;
+
+    // If we cannot read retry_count, force terminal — silently allowing
+    // infinite retries is worse than terminating one listing prematurely.
+    let retryCount: number;
+    if (readErr) {
+      log.error({
+        action: "retry_count_read_failed",
+        record_id: listingId,
+        error: readErr.message,
+      });
+      message = `${message} (retry_count read failed: ${readErr.message}; forcing terminal)`;
+      retryCount = MAX_RETRIES;
+    } else {
+      retryCount = ((current as { retry_count?: number } | null)?.retry_count ?? 0) + 1;
+    }
 
     if (retryCount < MAX_RETRIES) {
       await db

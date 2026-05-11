@@ -48,3 +48,24 @@ async def test_swallows_http_500_silently(mocker):
     respx.post(_WEBHOOK_URL).mock(return_value=httpx.Response(500))
 
     await notify_slack("something failed", severity="error")
+
+
+@pytest.mark.asyncio
+async def test_logs_underlying_exception_when_settings_fail(mocker, caplog):
+    """Audit #45: bare except previously hid the underlying error.
+
+    The settings-load failure must surface in logs so missing-env-var problems
+    don't silently disable the retry_count >= 3 alert.
+    """
+    mocker.patch(
+        "packages.shared_py.notifier.get_settings",
+        side_effect=ValueError("missing SUPABASE_URL"),
+    )
+
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="notifier"):
+        await notify_slack("ceiling reached")
+
+    assert "Failed to load settings" in caplog.text
+    assert "missing SUPABASE_URL" in caplog.text

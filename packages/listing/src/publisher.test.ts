@@ -69,6 +69,7 @@ type DbMockOpts = {
   }> | null;
   retryCount?: number;
   existingEtsyListingId?: number | null;
+  retryCountReadError?: string;
 };
 
 type CaptureEntry = { table: string; data: Record<string, unknown> };
@@ -111,6 +112,9 @@ function makeDb(updates: CaptureEntry[], opts: DbMockOpts = {}) {
       return { data: { id: LISTING_ID }, error: null };
     }
     if (currentSelectCols === "retry_count") {
+      if (opts.retryCountReadError) {
+        return { data: null, error: { message: opts.retryCountReadError } };
+      }
       return { data: { retry_count: opts.retryCount ?? 0 }, error: null };
     }
     if (currentSelectCols === "etsy_listing_id") {
@@ -462,6 +466,40 @@ describe("publishOne", () => {
       .filter((u) => u.table === "listings" && "status" in u.data && "retry_count" in u.data)
       .map((u) => u.data.status);
     expect(listingStatusWrites).toContain("error");
+  });
+
+  it("treats retry_count read failure as terminal (audit #39)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    const { createDraftListing } = mockSharedAndEtsy();
+    createDraftListing.mockRejectedValueOnce(new Error("etsy 500"));
+
+    const updates: CaptureEntry[] = [];
+    const db = makeDb(updates, { retryCountReadError: "db connection lost" });
+
+    const { publishOne } = await import("./publisher.js");
+    await expect(publishOne(db, design, brief)).rejects.toThrow();
+
+    const listingTerminalWrite = updates.find(
+      (u) => u.table === "listings" && u.data.status === "error" && "retry_count" in u.data
+    );
+    expect(listingTerminalWrite).toBeDefined();
+    // retry_count is forced to MAX_RETRIES (3) when the read fails.
+    expect(listingTerminalWrite!.data.retry_count).toBe(3);
+    expect(String(listingTerminalWrite!.data.error_message)).toContain(
+      "retry_count read failed"
+    );
+
+    const dpTerminalWrite = updates.find(
+      (u) => u.table === "design_packages" && u.data.status === "error"
+    );
+    expect(dpTerminalWrite).toBeDefined();
   });
 
   it("resumes from an existing listings row and skips Printify product creation (bug #2)", async () => {

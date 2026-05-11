@@ -9,6 +9,12 @@ export const MAX_TAGS = 13;
 export const MAX_TITLE_LEN = 140;
 export const MAX_TAG_LEN = 20;
 
+// Image-download guards for uploadListingImage. A hung mockup URL would
+// otherwise stall the single-concurrency Etsy limiter; an oversize file would
+// OOM the process via res.blob().
+export const ETSY_IMAGE_DOWNLOAD_TIMEOUT_MS = 30_000;
+export const ETSY_IMAGE_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+
 // The single Etsy shop this system is permitted to operate. Multi-shop
 // operation would violate Etsy's Seller Policy (see CLAUDE.md compliance section).
 export const ETSY_SHOP_NAME = "BassetAndBirch";

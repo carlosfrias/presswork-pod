@@ -603,4 +603,46 @@ describe("processOrder", () => {
     const arg = errorUpdate![0] as Record<string, unknown>;
     expect(arg?.["status"]).toBe("error");
   }, 20000);
+
+  it("Printify 4xx: response body is NOT in Slack message or orders.error_message (audit #50)", async () => {
+    const slackMock = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("@presswork/shared", async () => ({
+      ...(await import("@presswork/shared")),
+      getReceipt: vi.fn().mockResolvedValue(RECEIPT),
+      notifySlack: slackMock,
+    }));
+
+    // Body that would echo buyer PII back if we ever interpolated it.
+    const sensitiveBody =
+      '{"error":"address_invalid","echo":{"email":"buyer@example.com","first_line":"123 Buyer Lane"}}';
+
+    server.use(
+      http.post("https://api.printify.com/v1/shops/shop-1/orders.json", () =>
+        new HttpResponse(sensitiveBody, { status: 422 })
+      )
+    );
+
+    const { processOrder } = await import("./order-processor.js");
+    const db = makeDbMock({ orderRetryCount: 2 }); // 3rd attempt → terminal + alert
+    const result = await processOrder({ from: db.from } as never, "42");
+    expect(result.outcome).toBe("error");
+
+    // Slack message must not contain the response body or PII.
+    expect(slackMock).toHaveBeenCalledTimes(1);
+    const slackMsg = slackMock.mock.calls[0]?.[0] as string;
+    expect(slackMsg).not.toContain("buyer@example.com");
+    expect(slackMsg).not.toContain("123 Buyer Lane");
+    expect(slackMsg).not.toContain("address_invalid");
+    expect(slackMsg).toContain("Printify 422");
+
+    // orders.error_message must not contain the body either.
+    const errorUpdate = db.updateMock.mock.calls.find((c) => {
+      const arg = c[0] as Record<string, unknown>;
+      return arg?.["status"] === "error" && "error_message" in arg;
+    });
+    const errMsg = (errorUpdate![0] as Record<string, unknown>)?.["error_message"] as string;
+    expect(errMsg).not.toContain("buyer@example.com");
+    expect(errMsg).not.toContain("123 Buyer Lane");
+    expect(errMsg).toContain("Printify 422");
+  }, 20000);
 });
