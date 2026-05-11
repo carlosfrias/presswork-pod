@@ -84,7 +84,7 @@ async def test_fixture_c_empty_prior_list_skips_claude(mocker):
     db = _make_db([])  # no recent briefs
 
     mock_anthropic = MagicMock()
-    mocker.patch("packages.scout.dedup.Anthropic", return_value=mock_anthropic)
+    mocker.patch("packages.scout.dedup.AsyncAnthropic", return_value=mock_anthropic)
 
     is_dup, matched = await is_semantic_duplicate("cat gifts", db)
 

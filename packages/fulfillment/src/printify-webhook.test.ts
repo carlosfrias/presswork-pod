@@ -165,7 +165,7 @@ describe("handlePrintifyWebhook", () => {
     process.env = savedEnv;
   });
 
-  it("returns 200 skipped=already_shipped when order:shipment:created for already-shipped order", async () => {
+  it("returns 200 skipped=already_shipped when conditional UPDATE returns no rows (concurrent delivery)", async () => {
     const savedEnv = { ...process.env };
     vi.resetModules();
     Object.assign(process.env, makeValidEnv());
@@ -186,6 +186,8 @@ describe("handlePrintifyWebhook", () => {
     const req = makeReq(body, sig);
     const res = makeRes();
 
+    // UPDATE ... WHERE status != 'shipped' returns no rows because the row is
+    // already 'shipped' (another delivery beat us here).
     const db = {
       from: vi.fn().mockReturnValue({
         select: vi.fn().mockReturnValue({
@@ -193,6 +195,13 @@ describe("handlePrintifyWebhook", () => {
             limit: vi.fn().mockResolvedValue({
               data: [{ id: "order-uuid-1", etsy_order_id: "etsy-42", status: "shipped" }],
               error: null,
+            }),
+          }),
+        }),
+        update: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            neq: vi.fn().mockReturnValue({
+              select: vi.fn().mockResolvedValue({ data: [], error: null }),
             }),
           }),
         }),
@@ -204,6 +213,70 @@ describe("handlePrintifyWebhook", () => {
 
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res._body).toMatchObject({ ok: true, skipped: "already_shipped" });
+
+    process.env = savedEnv;
+  });
+
+  it("submits Etsy tracking only when conditional UPDATE actually transitioned the row (bug #6)", async () => {
+    const savedEnv = { ...process.env };
+    vi.resetModules();
+    Object.assign(process.env, makeValidEnv());
+
+    const submitTracking = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("@presswork/shared", async () => ({
+      ...(await import("@presswork/shared")),
+      submitTracking,
+      notifySlack: vi.fn(),
+    }));
+
+    const body = Buffer.from(JSON.stringify({
+      type: "order:shipment:created",
+      resource: {
+        id: "res-1",
+        type: "order",
+        data: {
+          id: "pf-order-1",
+          shipments: [{ carrier: "USPS", number: "1Z999", url: "https://track.usps.com/1Z999" }],
+        },
+      },
+    }));
+    const sig = createHmac("sha256", SECRET).update(body).digest("base64");
+    const req = makeReq(body, sig);
+    const res = makeRes();
+
+    // Capture the filter chain on the UPDATE to verify .neq("status", "shipped")
+    const eqMock = vi.fn();
+    const neqMock = vi.fn();
+    const db = {
+      from: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue({
+              data: [{ id: "order-uuid-1", etsy_order_id: "etsy-42", status: "submitted" }],
+              error: null,
+            }),
+          }),
+        }),
+        update: vi.fn().mockReturnValue({
+          eq: eqMock.mockReturnValue({
+            neq: neqMock.mockReturnValue({
+              select: vi.fn().mockResolvedValue({
+                data: [{ id: "order-uuid-1" }],
+                error: null,
+              }),
+            }),
+          }),
+        }),
+      }),
+    } as unknown as Db;
+
+    const { handlePrintifyWebhook: handler } = await import("./printify-webhook.js");
+    await handler(req, res as unknown as Response, db);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(eqMock).toHaveBeenCalledWith("id", "order-uuid-1");
+    expect(neqMock).toHaveBeenCalledWith("status", "shipped");
+    expect(submitTracking).toHaveBeenCalledTimes(1);
 
     process.env = savedEnv;
   });

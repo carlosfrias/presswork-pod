@@ -50,10 +50,21 @@ async function etsyFetch(db: Db, path: string, init: RequestInit = {}): Promise<
 
 // ── Receipt schemas ────────────────────────────────────────────────────────────
 
+const ReceiptVariationSchema = z.object({
+  property_id: z.number().optional(),
+  value_id: z.number().optional(),
+  formatted_name: z.string().optional(),
+  formatted_value: z.string().optional(),
+});
+
 const ReceiptLineItemSchema = z.object({
   listing_id: z.number(),
   quantity: z.number().int(),
   price: z.object({ amount: z.number(), divisor: z.number(), currency_code: z.string() }),
+  // Etsy returns variations only when the listing has any; missing for single-
+  // variant blueprints. We default to [] so the resolver doesn't branch on
+  // undefined.
+  variations: z.array(ReceiptVariationSchema).optional().default([]),
 });
 
 export const EtsyReceiptSchema = z.object({

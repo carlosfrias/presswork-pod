@@ -3,7 +3,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 from pydantic import BaseModel
 
 from packages.shared_py.config import get_settings
@@ -59,7 +59,7 @@ async def is_semantic_duplicate(niche: str, db: Client) -> tuple[bool, str | Non
         return False, None
 
     settings = get_settings()
-    client = Anthropic(api_key=settings.anthropic_api_key)
+    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     user_content = json.dumps(
         {
@@ -72,7 +72,7 @@ async def is_semantic_duplicate(niche: str, db: Client) -> tuple[bool, str | Non
         indent=2,
     )
 
-    response = client.messages.create(
+    response = await client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=256,
         system=[

@@ -26,7 +26,7 @@ def _make_brief(retry_count: int = 0) -> TrendBrief:
     )
 
 
-def _mock_db(existing_data: list) -> MagicMock:
+def _mock_db(existing_data: list, design_retry_count: int = 0) -> MagicMock:
     mock = MagicMock()
     dp_mock = MagicMock()
     tb_mock = MagicMock()
@@ -35,10 +35,22 @@ def _mock_db(existing_data: list) -> MagicMock:
         return dp_mock if name == "design_packages" else tb_mock
 
     mock.table.side_effect = table_side_effect
-    # Same-row guard: select(...).eq(...).execute()
-    dp_mock.select.return_value.eq.return_value.execute.return_value.data = existing_data
-    # Cross-row dedup: select(...).eq(...).not_.is_(...).order(...).limit(...).execute()
-    dp_mock.select.return_value.eq.return_value.not_.is_.return_value.order.return_value.limit.return_value.execute.return_value.data = []
+
+    # Different select paths return different shapes. The exception-handler
+    # selects retry_count from design_packages; everything else uses the
+    # same-row + cross-row dedup chain.
+    def dp_select(fields: str) -> MagicMock:
+        result = MagicMock()
+        if "retry_count" in fields:
+            result.eq.return_value.execute.return_value.data = (
+                [{"retry_count": design_retry_count}] if design_retry_count > 0 else []
+            )
+        else:
+            result.eq.return_value.execute.return_value.data = existing_data
+            result.eq.return_value.not_.is_.return_value.order.return_value.limit.return_value.execute.return_value.data = []
+        return result
+
+    dp_mock.select.side_effect = dp_select
     return mock
 
 
@@ -80,8 +92,9 @@ async def test_rerun_with_done_row_skips_fal(mocker):
 
 @pytest.mark.asyncio
 async def test_no_slack_alert_below_retry_ceiling(mocker):
-    brief = _make_brief(retry_count=1)
-    db = _mock_db([])
+    brief = _make_brief()
+    # design_packages.retry_count=1 → this failure will set it to 2 (still below ceiling)
+    db = _mock_db([], design_retry_count=1)
 
     mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
     mocker.patch("packages.design.main.get_db", return_value=db)
@@ -98,8 +111,9 @@ async def test_no_slack_alert_below_retry_ceiling(mocker):
 
 @pytest.mark.asyncio
 async def test_slack_alert_at_retry_ceiling(mocker):
-    brief = _make_brief(retry_count=2)
-    db = _mock_db([])
+    brief = _make_brief()
+    # design_packages.retry_count=2 → this failure will set it to 3 (ceiling hit)
+    db = _mock_db([], design_retry_count=2)
 
     mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
     mocker.patch("packages.design.main.get_db", return_value=db)
@@ -113,6 +127,51 @@ async def test_slack_alert_at_retry_ceiling(mocker):
 
     mock_notify.assert_called_once()
     assert mock_notify.call_args.kwargs.get("severity") == "error"
+
+
+@pytest.mark.asyncio
+async def test_design_package_marked_error_on_failure(mocker):
+    """Bug #9: design_packages must not be left in 'processing' on failure."""
+    brief = _make_brief()
+    db = _mock_db([], design_retry_count=0)
+
+    mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
+    mocker.patch("packages.design.main.get_db", return_value=db)
+    mocker.patch("packages.design.main.build_flux_prompt", return_value=_FLUX_PROMPT)
+    mocker.patch("packages.design.main.generate_image", AsyncMock(side_effect=RuntimeError("fal down")))
+    mocker.patch("packages.design.main.notify_slack", AsyncMock())
+
+    await run()
+
+    # design_packages.upsert(...) called with status='error' in the catch path
+    dp_mock = db.table("design_packages")
+    upsert_calls = dp_mock.upsert.call_args_list
+    error_upserts = [
+        call for call in upsert_calls if call.args and call.args[0].get("status") == "error"
+    ]
+    assert len(error_upserts) == 1, f"Expected 1 error upsert, got {len(error_upserts)}"
+
+
+@pytest.mark.asyncio
+async def test_trend_briefs_retry_count_not_incremented(mocker):
+    """Bug #9: design failures must NOT increment trend_briefs.retry_count."""
+    brief = _make_brief()
+    db = _mock_db([], design_retry_count=0)
+
+    mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
+    mocker.patch("packages.design.main.get_db", return_value=db)
+    mocker.patch("packages.design.main.build_flux_prompt", return_value=_FLUX_PROMPT)
+    mocker.patch("packages.design.main.generate_image", AsyncMock(side_effect=RuntimeError("fal down")))
+    mocker.patch("packages.design.main.notify_slack", AsyncMock())
+
+    await run()
+
+    tb_mock = db.table("trend_briefs")
+    for call in tb_mock.update.call_args_list:
+        if call.args:
+            assert "retry_count" not in call.args[0], (
+                f"trend_briefs.update should not touch retry_count, got {call.args[0]}"
+            )
 
 
 @pytest.mark.asyncio

@@ -31,7 +31,7 @@ async def run() -> None:
         t0 = time.monotonic()
         try:
             listings = await etsy.fetch_top_listings(niche)
-            analysis = analyze_niche(listings)
+            analysis = await analyze_niche(listings)
 
             row = {
                 **analysis.model_dump(),

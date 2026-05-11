@@ -20,12 +20,26 @@ import {
 } from "./compliance.js";
 import { GILDAN_64000_PRINT_COST_USD } from "./constants.js";
 
+const MAX_RETRIES = 3;
+
 export class PublisherError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "PublisherError";
   }
 }
+
+type ExistingListingRow = {
+  id: string;
+  status: string;
+  title: string | null;
+  description: string | null;
+  tags: string[] | null;
+  price_usd: number | null;
+  printify_product_id: string | null;
+  is_active: boolean | null;
+  retry_count: number | null;
+};
 
 export async function publishOne(
   db: Db,
@@ -36,76 +50,117 @@ export async function publishOne(
   const { HUMAN_REVIEW_ENABLED, ETSY_PRODUCTION_PARTNER_ID } = getSettings();
   const t0 = Date.now();
 
-  // Step 1: pricing floor check
+  // Pre-flight checks that don't depend on any DB state.
   const priceUsd = brief.price_target_usd ?? 0;
   validatePricingFloor(priceUsd, GILDAN_64000_PRINT_COST_USD);
-
-  // Step 1b: Etsy compliance pre-checks that don't need any external calls.
-  // Production partner ID must be configured before we even spend a Claude token.
   validateProductionPartnerId(ETSY_PRODUCTION_PARTNER_ID);
 
-  // Step 2: generate copy via Claude
-  log.info({ action: "generate_copy", record_id: design.id, status: "started" });
-  const copy = await writeCopy(brief, design);
+  // Checkpoint resume: a prior attempt may have created a listings row and even a
+  // Printify product. Reuse those instead of paying Claude again or orphaning the
+  // Printify product. We only resume from non-terminal states; an `active` or
+  // `error` row is treated as foreign and aborts (operator intervention required).
+  const existing = await loadExistingListing(db, design.id);
 
-  // Step 2b: Hard gate copy against Etsy seller-policy rules. ListingCopySchema
-  // already enforces the AI disclosure on the Claude response shape; this catches
-  // anything that slipped past (e.g. forbidden terms in title/tags, off-platform
-  // language) before we touch Printify or Etsy.
-  validateCopyCompliance(copy);
-
-  // Step 3: insert listings row at 'pending'
-  const { data: listingRow, error: insertErr } = await db
-    .from("listings")
-    .insert({
-      design_package_id: design.id,
-      status: "pending",
-      title: copy.title,
-      description: copy.description,
-      tags: copy.tags,
-      price_usd: priceUsd,
-    })
-    .select("id")
-    .single();
-
-  if (insertErr || !listingRow) {
-    throw new PublisherError(`Failed to insert listings row: ${insertErr?.message}`);
+  if (existing?.is_active) {
+    throw new PublisherError(
+      `design_package ${design.id} already has an active listing ${existing.id}`
+    );
   }
-  const listingId = (listingRow as { id: string }).id;
+
+  const canResumeCopy = Boolean(
+    existing && existing.title && existing.description && existing.tags && existing.tags.length > 0
+  );
+
+  let listingId: string;
+  let copy: ListingCopy;
+
+  if (existing && canResumeCopy) {
+    listingId = existing.id;
+    copy = {
+      title: existing.title as string,
+      description: existing.description as string,
+      tags: existing.tags as string[],
+    };
+    validateCopyCompliance(copy);
+    log.info({
+      action: "resume_existing_listing",
+      record_id: listingId,
+      status: existing.status,
+    });
+  } else {
+    log.info({ action: "generate_copy", record_id: design.id, status: "started" });
+    copy = await writeCopy(brief, design);
+    validateCopyCompliance(copy);
+
+    const { data: listingRow, error: insertErr } = await db
+      .from("listings")
+      .insert({
+        design_package_id: design.id,
+        status: "pending",
+        title: copy.title,
+        description: copy.description,
+        tags: copy.tags,
+        price_usd: priceUsd,
+      })
+      .select("id")
+      .single();
+
+    if (insertErr || !listingRow) {
+      throw new PublisherError(`Failed to insert listings row: ${insertErr?.message}`);
+    }
+    listingId = (listingRow as { id: string }).id;
+  }
 
   try {
-    // Step 4: create hidden Printify product (mockups are a side effect).
-    // print_provider_id must come from the design row — variant IDs are scoped
-    // to a (blueprint, provider) pair and Printify rejects mismatched pairs.
-    if (!design.printify_print_provider_id) {
-      throw new PublisherError(
-        `design_packages.printify_print_provider_id is required (design ${design.id})`
-      );
+    let productId: string;
+    let mockupUrls: string[];
+
+    if (existing?.printify_product_id) {
+      productId = existing.printify_product_id;
+      mockupUrls = design.mockup_urls ?? [];
+      log.info({
+        action: "resume_skip_printify_create",
+        record_id: listingId,
+        printify_product_id: productId,
+      });
+    } else {
+      if (!design.printify_print_provider_id) {
+        throw new PublisherError(
+          `design_packages.printify_print_provider_id is required (design ${design.id})`
+        );
+      }
+      log.info({ action: "create_printify_product", record_id: listingId, status: "started" });
+      const result = await createHiddenProduct({
+        imageUrl: design.image_url ?? "",
+        blueprintId: design.printify_blueprint_id ?? 5,
+        printProviderId: design.printify_print_provider_id,
+        variantIds: design.printify_variant_ids ?? [],
+        title: copy.title,
+      });
+      productId = result.productId;
+      mockupUrls = result.mockupUrls;
+
+      // mockups_from_actual_design is set true here because Printify generated these
+      // mockups by compositing this design's image_url onto blueprint variants — they
+      // are by construction images of the actual design (compliance rule 4).
+      // printify_variants captures the per-variant option labels (size/color) so
+      // Fulfillment can match an Etsy receipt's transaction.variations back to
+      // the correct variant_id instead of always using printify_variant_ids[0].
+      await db
+        .from("design_packages")
+        .update({
+          mockup_urls: mockupUrls,
+          mockups_from_actual_design: true,
+          printify_variants: result.variants,
+        })
+        .eq("id", design.id);
+
+      await db
+        .from("listings")
+        .update({ printify_product_id: productId })
+        .eq("id", listingId);
     }
-    log.info({ action: "create_printify_product", record_id: listingId, status: "started" });
-    const { productId, mockupUrls } = await createHiddenProduct({
-      imageUrl: design.image_url ?? "",
-      blueprintId: design.printify_blueprint_id ?? 5,
-      printProviderId: design.printify_print_provider_id,
-      variantIds: design.printify_variant_ids ?? [],
-      title: copy.title,
-    });
 
-    // Step 5: write mockup URLs back to the design_package and persist productId on the listing.
-    // mockups_from_actual_design is set true here because Printify generated these mockups by
-    // compositing this design's image_url onto blueprint variants — they are by construction
-    // images of the actual design, satisfying the Etsy image-policy gate enforced below.
-    await db
-      .from("design_packages")
-      .update({ mockup_urls: mockupUrls, mockups_from_actual_design: true })
-      .eq("id", design.id);
-
-    await db
-      .from("listings")
-      .update({ printify_product_id: productId })
-      .eq("id", listingId);
-
-    // Step 6: human review gate
     if (HUMAN_REVIEW_ENABLED) {
       await db.from("listings").update({ status: "needs_review" }).eq("id", listingId);
       log.info({
@@ -119,8 +174,10 @@ export async function publishOne(
 
     await db.from("listings").update({ status: "pending_publish" }).eq("id", listingId);
 
-    // Steps 7–12: Etsy publish flow. We pass mockupsFromActualDesign=true because we
-    // just set it true above; resumePublish reads the current DB value instead.
+    // The documented state machine requires a 'publishing' checkpoint between
+    // pending_publish and active so an interrupted publish is observable.
+    await db.from("listings").update({ status: "publishing" }).eq("id", listingId);
+
     await executeEtsyPublish(db, listingId, productId, copy, priceUsd, mockupUrls, true);
 
     log.info({
@@ -140,16 +197,26 @@ export async function publishOne(
       .single();
     const retryCount = ((current as { retry_count?: number } | null)?.retry_count ?? 0) + 1;
 
-    if (retryCount < 3) {
+    if (retryCount < MAX_RETRIES) {
       await db
         .from("listings")
         .update({ status: "pending", error_message: message, retry_count: retryCount })
         .eq("id", listingId);
+      // Reset the parent design_packages back to 'done' so the poller re-claims it
+      // for the retry. Without this the row strands in 'processing' forever.
+      await db
+        .from("design_packages")
+        .update({ status: "done", error_message: message })
+        .eq("id", design.id);
     } else {
       await db
         .from("listings")
         .update({ status: "error", error_message: message, retry_count: retryCount })
         .eq("id", listingId);
+      await db
+        .from("design_packages")
+        .update({ status: "error", error_message: message })
+        .eq("id", design.id);
     }
 
     log.error({
@@ -162,6 +229,20 @@ export async function publishOne(
 
     throw err;
   }
+}
+
+async function loadExistingListing(db: Db, designPackageId: string): Promise<ExistingListingRow | null> {
+  const { data } = await db
+    .from("listings")
+    .select(
+      "id, status, title, description, tags, price_usd, printify_product_id, is_active, retry_count"
+    )
+    .eq("design_package_id", designPackageId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  return (data as ExistingListingRow | null) ?? null;
 }
 
 async function executeEtsyPublish(
@@ -182,20 +263,40 @@ async function executeEtsyPublish(
   validateMockupProvenance(mockupsFromActualDesign);
   validateCopyCompliance(copy);
 
-  const taxonomyId = await getTaxonomyId(db, "tshirt");
-  const { listing_id: etsyListingId } = await createDraftListing(db, {
-    taxonomy_id: taxonomyId,
-    who_made: "i_did",
-    when_made: "made_to_order",
-    is_supply: false,
-    shipping_profile_id: ETSY_SHIPPING_PROFILE_ID,
-    readiness_state_id: ETSY_READINESS_STATE_ID,
-    production_partner_ids: [ETSY_PRODUCTION_PARTNER_ID],
-    title: copy.title,
-    description: copy.description,
-    price: priceUsd,
-    tags: copy.tags,
-  });
+  // Resume guard: if a prior attempt created an Etsy draft, reuse it. Persisting
+  // etsy_listing_id immediately after createDraftListing (below) means any later
+  // failure leaves the id behind so we don't POST a second draft on retry.
+  const { data: priorRow } = await db
+    .from("listings")
+    .select("etsy_listing_id")
+    .eq("id", listingId)
+    .single();
+  let etsyListingId =
+    (priorRow as { etsy_listing_id: number | null } | null)?.etsy_listing_id ?? null;
+
+  if (etsyListingId === null) {
+    const taxonomyId = await getTaxonomyId(db, "tshirt");
+    const { listing_id } = await createDraftListing(db, {
+      taxonomy_id: taxonomyId,
+      who_made: "i_did",
+      when_made: "made_to_order",
+      is_supply: false,
+      shipping_profile_id: ETSY_SHIPPING_PROFILE_ID,
+      readiness_state_id: ETSY_READINESS_STATE_ID,
+      production_partner_ids: [ETSY_PRODUCTION_PARTNER_ID],
+      title: copy.title,
+      description: copy.description,
+      price: priceUsd,
+      tags: copy.tags,
+    });
+    etsyListingId = listing_id;
+    // Persist immediately, BEFORE attempting image upload or activation, so any
+    // failure between here and the final 'active' write doesn't strand the draft.
+    await db
+      .from("listings")
+      .update({ etsy_listing_id: etsyListingId })
+      .eq("id", listingId);
+  }
 
   for (const url of mockupUrls) {
     await uploadListingImage(db, etsyListingId, url);
@@ -206,7 +307,7 @@ async function executeEtsyPublish(
 
   await db
     .from("listings")
-    .update({ status: "active", is_active: true, etsy_listing_id: etsyListingId })
+    .update({ status: "active", is_active: true })
     .eq("id", listingId);
 }
 
@@ -216,7 +317,9 @@ export async function resumePublish(db: Db, listingId: string): Promise<void> {
 
   const { data: row, error: rowErr } = await db
     .from("listings")
-    .select("status, printify_product_id, title, description, tags, price_usd, retry_count")
+    .select(
+      "status, printify_product_id, title, description, tags, price_usd, retry_count, design_package_id"
+    )
     .eq("id", listingId)
     .single();
 
@@ -232,6 +335,7 @@ export async function resumePublish(db: Db, listingId: string): Promise<void> {
     tags: string[] | null;
     price_usd: number | null;
     retry_count: number;
+    design_package_id: string | null;
   };
 
   if (listing.status !== "pending_publish") {
@@ -273,6 +377,9 @@ export async function resumePublish(db: Db, listingId: string): Promise<void> {
   };
 
   try {
+    // Same checkpoint as publishOne: mark 'publishing' before talking to Etsy.
+    await db.from("listings").update({ status: "publishing" }).eq("id", listingId);
+
     await executeEtsyPublish(
       db,
       listingId,
@@ -292,7 +399,7 @@ export async function resumePublish(db: Db, listingId: string): Promise<void> {
     const message = err instanceof Error ? err.message : String(err);
     const retryCount = listing.retry_count + 1;
 
-    if (retryCount < 3) {
+    if (retryCount < MAX_RETRIES) {
       await db
         .from("listings")
         .update({ status: "pending_publish", error_message: message, retry_count: retryCount })
@@ -302,6 +409,12 @@ export async function resumePublish(db: Db, listingId: string): Promise<void> {
         .from("listings")
         .update({ status: "error", error_message: message, retry_count: retryCount })
         .eq("id", listingId);
+      if (listing.design_package_id) {
+        await db
+          .from("design_packages")
+          .update({ status: "error", error_message: message })
+          .eq("id", listing.design_package_id);
+      }
     }
 
     log.error({

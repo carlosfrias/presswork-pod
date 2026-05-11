@@ -1,6 +1,6 @@
 import json
 
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 
 from packages.shared_py.config import get_settings
 from packages.shared_py.models import ClaudeAnalysis
@@ -30,11 +30,11 @@ def _slim_listings(listings: list[dict]) -> list[dict]:
     ]
 
 
-def analyze_niche(raw_listings: list[dict]) -> ClaudeAnalysis:
+async def analyze_niche(raw_listings: list[dict]) -> ClaudeAnalysis:
     settings = get_settings()
-    client = Anthropic(api_key=settings.anthropic_api_key)
+    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
 
-    response = client.messages.create(
+    response = await client.messages.create(
         model="claude-sonnet-4-20250514",
         max_tokens=1024,
         system=[

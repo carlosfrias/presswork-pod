@@ -55,25 +55,80 @@ const brief: TrendBrief = {
   retry_count: 0,
 };
 
-function makeDb(updates: Array<{ table: string; data: Record<string, unknown> }>) {
+type DbMockOpts = {
+  existingListing?: Partial<{
+    id: string;
+    status: string;
+    title: string | null;
+    description: string | null;
+    tags: string[] | null;
+    price_usd: number | null;
+    printify_product_id: string | null;
+    is_active: boolean | null;
+    retry_count: number | null;
+  }> | null;
+  retryCount?: number;
+  existingEtsyListingId?: number | null;
+};
+
+type CaptureEntry = { table: string; data: Record<string, unknown> };
+
+function makeDb(updates: CaptureEntry[], opts: DbMockOpts = {}) {
+  let currentTable = "";
+  let currentSelectCols = "";
+
   const builder = {
-    insert: vi.fn().mockReturnThis() as ReturnType<typeof vi.fn>,
-    update: vi.fn().mockReturnThis() as ReturnType<typeof vi.fn>,
-    select: vi.fn().mockReturnThis() as ReturnType<typeof vi.fn>,
-    eq: vi.fn().mockReturnThis() as ReturnType<typeof vi.fn>,
-    single: vi.fn().mockResolvedValue({ data: { id: LISTING_ID }, error: null }),
+    insert: vi.fn(),
+    update: vi.fn(),
+    select: vi.fn(),
+    eq: vi.fn(),
+    order: vi.fn(),
+    limit: vi.fn(),
+    single: vi.fn(),
+    maybeSingle: vi.fn(),
   };
 
-  // Intercept update calls to capture data
+  builder.insert.mockImplementation(() => builder);
   builder.update.mockImplementation((data: Record<string, unknown>) => {
-    const table = (builder as { _currentTable?: string })._currentTable ?? "";
-    updates.push({ table, data });
+    updates.push({ table: currentTable, data });
     return builder;
+  });
+  builder.select.mockImplementation((cols?: string) => {
+    currentSelectCols = cols ?? "";
+    return builder;
+  });
+  builder.eq.mockImplementation(() => builder);
+  builder.order.mockImplementation(() => builder);
+  builder.limit.mockImplementation(() => builder);
+
+  builder.maybeSingle.mockImplementation(async () => {
+    // Checkpoint lookup of an existing listings row by design_package_id.
+    return { data: opts.existingListing ?? null, error: null };
+  });
+
+  builder.single.mockImplementation(async () => {
+    if (currentSelectCols === "id") {
+      return { data: { id: LISTING_ID }, error: null };
+    }
+    if (currentSelectCols === "retry_count") {
+      return { data: { retry_count: opts.retryCount ?? 0 }, error: null };
+    }
+    if (currentSelectCols === "etsy_listing_id") {
+      return { data: { etsy_listing_id: opts.existingEtsyListingId ?? null }, error: null };
+    }
+    if (currentSelectCols.includes("design_packages")) {
+      return {
+        data: { design_packages: { mockup_urls: [], mockups_from_actual_design: true } },
+        error: null,
+      };
+    }
+    return { data: { id: LISTING_ID }, error: null };
   });
 
   return {
     from: vi.fn((table: string) => {
-      (builder as { _currentTable?: string })._currentTable = table;
+      currentTable = table;
+      currentSelectCols = "";
       return builder;
     }),
   } as unknown as Db;
@@ -94,13 +149,16 @@ describe("publishOne", () => {
   });
 
   function mockPrintify(productId = PRODUCT_ID) {
+    const createHiddenProduct = vi.fn().mockResolvedValue({
+      productId,
+      mockupUrls: ["https://example.com/mockup.jpg"],
+    });
+    const setProductVisible = vi.fn().mockResolvedValue(undefined);
     vi.doMock("./printify.js", () => ({
-      createHiddenProduct: vi.fn().mockResolvedValue({
-        productId,
-        mockupUrls: ["https://example.com/mockup.jpg"],
-      }),
-      setProductVisible: vi.fn().mockResolvedValue(undefined),
+      createHiddenProduct,
+      setProductVisible,
     }));
+    return { createHiddenProduct, setProductVisible };
   }
 
   function mockSharedAndEtsy(overrides?: { partnerId?: number | null }) {
@@ -141,7 +199,7 @@ describe("publishOne", () => {
     mockPrintify();
     mockSharedAndEtsy();
 
-    const updates: Array<{ table: string; data: Record<string, unknown> }> = [];
+    const updates: CaptureEntry[] = [];
     const db = makeDb(updates);
 
     const { publishOne } = await import("./publisher.js");
@@ -264,14 +322,7 @@ describe("publishOne", () => {
         tags: COMPLIANT_TAGS,
       }),
     }));
-    const createHiddenProduct = vi.fn().mockResolvedValue({
-      productId: PRODUCT_ID,
-      mockupUrls: ["https://example.com/mockup.jpg"],
-    });
-    vi.doMock("./printify.js", () => ({
-      createHiddenProduct,
-      setProductVisible: vi.fn().mockResolvedValue(undefined),
-    }));
+    const { createHiddenProduct } = mockPrintify();
     mockSharedAndEtsy();
 
     const db = makeDb([]);
@@ -325,5 +376,217 @@ describe("publishOne", () => {
     const { ComplianceError } = await import("./compliance.js");
 
     await expect(publishOne(db, design, brief)).rejects.toThrow(ComplianceError);
+  });
+
+  it("writes status='publishing' before Etsy publish (bug #4 checkpoint)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    mockSharedAndEtsy();
+
+    const updates: CaptureEntry[] = [];
+    const db = makeDb(updates);
+    const { publishOne } = await import("./publisher.js");
+    await publishOne(db, design, brief);
+
+    const listingStatusWrites = updates
+      .filter((u) => u.table === "listings" && "status" in u.data)
+      .map((u) => u.data.status);
+    expect(listingStatusWrites).toContain("pending_publish");
+    expect(listingStatusWrites).toContain("publishing");
+    expect(listingStatusWrites).toContain("active");
+    // 'publishing' must precede 'active' in the write order
+    const publishingIdx = listingStatusWrites.indexOf("publishing");
+    const activeIdx = listingStatusWrites.indexOf("active");
+    expect(publishingIdx).toBeLessThan(activeIdx);
+  });
+
+  it("resets design_packages to 'done' on retryable failure (bug #1)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    const { createDraftListing } = mockSharedAndEtsy();
+    createDraftListing.mockRejectedValueOnce(new Error("etsy 500"));
+
+    const updates: CaptureEntry[] = [];
+    const db = makeDb(updates, { retryCount: 0 });
+
+    const { publishOne } = await import("./publisher.js");
+    await expect(publishOne(db, design, brief)).rejects.toThrow();
+
+    const dpStatusWrites = updates
+      .filter((u) => u.table === "design_packages" && "status" in u.data)
+      .map((u) => u.data.status);
+    expect(dpStatusWrites).toContain("done");
+    expect(dpStatusWrites).not.toContain("processing");
+  });
+
+  it("sets design_packages to 'error' on terminal failure (retry >= 3)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    const { createDraftListing } = mockSharedAndEtsy();
+    createDraftListing.mockRejectedValueOnce(new Error("etsy 500"));
+
+    const updates: CaptureEntry[] = [];
+    const db = makeDb(updates, { retryCount: 2 }); // current retry_count=2; +1 = 3 → terminal
+
+    const { publishOne } = await import("./publisher.js");
+    await expect(publishOne(db, design, brief)).rejects.toThrow();
+
+    const dpStatusWrites = updates
+      .filter((u) => u.table === "design_packages" && "status" in u.data)
+      .map((u) => u.data.status);
+    expect(dpStatusWrites).toContain("error");
+
+    const listingStatusWrites = updates
+      .filter((u) => u.table === "listings" && "status" in u.data && "retry_count" in u.data)
+      .map((u) => u.data.status);
+    expect(listingStatusWrites).toContain("error");
+  });
+
+  it("resumes from an existing listings row and skips Printify product creation (bug #2)", async () => {
+    const writeCopy = vi.fn().mockResolvedValue({
+      title: COMPLIANT_TITLE,
+      description: COMPLIANT_DESCRIPTION,
+      tags: COMPLIANT_TAGS,
+    });
+    vi.doMock("./copywriter.js", () => ({ writeCopy }));
+    const { createHiddenProduct } = mockPrintify();
+    mockSharedAndEtsy();
+
+    const updates: CaptureEntry[] = [];
+    const db = makeDb(updates, {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending",
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+        price_usd: 24.99,
+        printify_product_id: "existing-product-xyz",
+        is_active: false,
+        retry_count: 1,
+      },
+    });
+
+    const designWithMockups: DesignPackage = {
+      ...design,
+      mockup_urls: ["https://example.com/existing-mockup.jpg"],
+    };
+
+    const { publishOne } = await import("./publisher.js");
+    await publishOne(db, designWithMockups, brief);
+
+    expect(writeCopy).not.toHaveBeenCalled();
+    expect(createHiddenProduct).not.toHaveBeenCalled();
+  });
+
+  it("persists etsy_listing_id immediately after createDraftListing returns (bug #3)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    mockSharedAndEtsy();
+
+    const updates: CaptureEntry[] = [];
+    const db = makeDb(updates);
+    const { publishOne } = await import("./publisher.js");
+    await publishOne(db, design, brief);
+
+    const etsyIdWrites = updates.filter(
+      (u) => u.table === "listings" && "etsy_listing_id" in u.data
+    );
+    // Exactly one update writes etsy_listing_id — the one right after createDraftListing.
+    expect(etsyIdWrites).toHaveLength(1);
+    expect(etsyIdWrites[0]?.data.etsy_listing_id).toBe(777);
+
+    // The 'active' transition no longer carries etsy_listing_id (it was persisted earlier).
+    const activeWrite = updates.find(
+      (u) => u.table === "listings" && u.data.status === "active"
+    );
+    expect(activeWrite).toBeDefined();
+    expect("etsy_listing_id" in (activeWrite!.data)).toBe(false);
+  });
+
+  it("skips createDraftListing on retry when etsy_listing_id is already persisted (bug #3)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    const { createDraftListing } = mockSharedAndEtsy();
+
+    const updates: CaptureEntry[] = [];
+    const db = makeDb(updates, {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending",
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+        price_usd: 24.99,
+        printify_product_id: "existing-product-xyz",
+        is_active: false,
+        retry_count: 1,
+      },
+      existingEtsyListingId: 5555,
+    });
+
+    const { publishOne } = await import("./publisher.js");
+    await publishOne(db, design, brief);
+
+    expect(createDraftListing).not.toHaveBeenCalled();
+  });
+
+  it("aborts when an active listing already exists for this design", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    mockSharedAndEtsy();
+
+    const db = makeDb([], {
+      existingListing: {
+        id: LISTING_ID,
+        status: "active",
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+        price_usd: 24.99,
+        printify_product_id: "existing-product-xyz",
+        is_active: true,
+        retry_count: 0,
+      },
+    });
+
+    const { publishOne, PublisherError } = await import("./publisher.js");
+    await expect(publishOne(db, design, brief)).rejects.toThrow(PublisherError);
   });
 });

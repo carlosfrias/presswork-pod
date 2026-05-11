@@ -165,6 +165,23 @@ describe("createApp", () => {
     expect(processOrder).toHaveBeenCalledTimes(2);
   });
 
+  it("oversized webhook body → 413, processOrder NOT called (limit: 1mb)", async () => {
+    const processOrder = vi.fn();
+    const app = createApp({ db: {} as never, processOrder });
+
+    // Send a payload larger than the configured 1mb limit. express.raw rejects
+    // it with 413 before any HMAC verification runs.
+    const oversized = Buffer.alloc(2 * 1024 * 1024, 0x61); // 2MB of 'a'
+
+    const res = await request(app)
+      .post("/webhook/etsy-order")
+      .set("content-type", "application/octet-stream")
+      .send(oversized);
+
+    expect(res.status).toBe(413);
+    expect(processOrder).not.toHaveBeenCalled();
+  });
+
   it("processOrder throws unexpectedly → still 200", async () => {
     const processOrder = vi.fn().mockRejectedValue(new Error("unexpected boom"));
     const app = createApp({ db: {} as never, processOrder });

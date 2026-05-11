@@ -1,5 +1,5 @@
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from pydantic import ValidationError
@@ -34,35 +34,39 @@ def _mock_client(mocker, response_text: str) -> MagicMock:
     message = MagicMock()
     message.content = [block]
     client = MagicMock()
-    client.messages.create.return_value = message
-    mocker.patch("packages.scout.analyzer.Anthropic", return_value=client)
+    client.messages.create = AsyncMock(return_value=message)
+    mocker.patch("packages.scout.analyzer.AsyncAnthropic", return_value=client)
     return client
 
 
-def test_valid_response_parses_to_claude_analysis(mocker):
+@pytest.mark.asyncio
+async def test_valid_response_parses_to_claude_analysis(mocker):
     _mock_client(mocker, json.dumps(_VALID_ANALYSIS))
-    result = analyze_niche(_SAMPLE_LISTINGS)
+    result = await analyze_niche(_SAMPLE_LISTINGS)
     assert isinstance(result, ClaudeAnalysis)
     assert result.niche == "dog mom gifts"
     assert result.price_target_usd == 24.99
 
 
-def test_invalid_json_raises_value_error(mocker):
+@pytest.mark.asyncio
+async def test_invalid_json_raises_value_error(mocker):
     _mock_client(mocker, "here is my analysis: sorry, not JSON")
     with pytest.raises(ValueError, match="invalid JSON"):
-        analyze_niche(_SAMPLE_LISTINGS)
+        await analyze_niche(_SAMPLE_LISTINGS)
 
 
-def test_more_than_13_tags_raises_validation_error(mocker):
+@pytest.mark.asyncio
+async def test_more_than_13_tags_raises_validation_error(mocker):
     bad = {**_VALID_ANALYSIS, "top_tags": [f"tag-{i}" for i in range(14)]}
     _mock_client(mocker, json.dumps(bad))
     with pytest.raises(ValidationError):
-        analyze_niche(_SAMPLE_LISTINGS)
+        await analyze_niche(_SAMPLE_LISTINGS)
 
 
-def test_system_prompt_has_cache_control(mocker):
+@pytest.mark.asyncio
+async def test_system_prompt_has_cache_control(mocker):
     client = _mock_client(mocker, json.dumps(_VALID_ANALYSIS))
-    analyze_niche(_SAMPLE_LISTINGS)
+    await analyze_niche(_SAMPLE_LISTINGS)
     kwargs = client.messages.create.call_args.kwargs
     system_blocks = kwargs["system"]
     assert any(

@@ -97,7 +97,9 @@ async def run() -> None:
                 continue
 
             png_bytes = await generate_image(flux_prompt)
-            processed = process_for_print(png_bytes)
+            # rembg + Pillow + PNG encode are all CPU-bound; offload to a worker
+            # thread so the event loop and rate-limit semaphores stay responsive.
+            processed = await asyncio.to_thread(process_for_print, png_bytes)
 
             if existing_row:
                 db.table("design_packages").update({
@@ -138,17 +140,45 @@ async def run() -> None:
             )
 
         except Exception as e:
-            retry_count = brief.retry_count + 1
+            # Retry counter lives on design_packages (not trend_briefs — trend_briefs.retry_count
+            # belongs to the Scout). Read what's there, increment, and write the new error
+            # state. If the row doesn't exist yet (exception fired before the insert) we
+            # upsert a stub so the next retry can read its retry_count.
+            current_resp = (
+                db.table("design_packages")
+                .select("retry_count")
+                .eq("id", str(design_id))
+                .execute()
+            )
+            current_retry = (
+                cast(dict[str, Any], current_resp.data[0])["retry_count"]
+                if current_resp.data
+                else 0
+            )
+            new_retry = current_retry + 1
 
-            db.table("trend_briefs").update({
+            design_error_row = {
+                "id": str(design_id),
+                "trend_brief_id": brief_id,
                 "status": "error",
                 "error_message": str(e),
-                "retry_count": retry_count,
-            }).eq("id", brief_id).execute()
+                "retry_count": new_retry,
+            }
+            db.table("design_packages").upsert(design_error_row).execute()
 
-            if retry_count < 3:
+            if new_retry < 3:
+                # Revert trend_briefs to 'pending' so the design poller re-claims it.
+                # Do NOT increment trend_briefs.retry_count (that's the Scout's counter)
+                # and do NOT pass through 'error' first — the design's own retry budget
+                # is tracked on design_packages above.
                 db.table("trend_briefs").update({"status": "pending"}).eq("id", brief_id).execute()
             else:
+                # Terminal: leave trend_briefs at 'error' too so observability is clean
+                # and the design poller doesn't keep churning.
+                db.table("trend_briefs").update({
+                    "status": "error",
+                    "error_message": str(e),
+                }).eq("id", brief_id).execute()
                 await notify_slack(
                     f"Design hit retry ceiling for trend_brief={brief_id}: {e}",
                     severity="error",

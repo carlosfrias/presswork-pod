@@ -17,9 +17,11 @@ interface AppDeps {
 export function createApp(deps: AppDeps): Express {
   const app = express();
 
-  // Raw body needed for HMAC verification on webhook routes
-  app.use("/webhook/etsy-order", express.raw({ type: "*/*" }));
-  app.use("/webhook/printify-order", express.raw({ type: "*/*" }));
+  // Raw body needed for HMAC verification on webhook routes. limit guards
+  // against an attacker POSTing arbitrarily large payloads (HMAC still hashes
+  // the entire buffer).
+  app.use("/webhook/etsy-order", express.raw({ type: "*/*", limit: "1mb" }));
+  app.use("/webhook/printify-order", express.raw({ type: "*/*", limit: "1mb" }));
 
   // JSON everywhere else
   app.use((req, res, next) => {
@@ -36,12 +38,23 @@ export function createApp(deps: AppDeps): Express {
   });
 
   app.post("/webhook/printify-order", async (req, res) => {
+    // express.raw doesn't guarantee Buffer for unusual Content-Types — explicit
+    // check prevents toString() / HMAC verification on a JSON-parsed object.
+    if (!Buffer.isBuffer(req.body)) {
+      res.status(400).json({ error: "invalid_body" });
+      return;
+    }
     await handlePrintifyWebhook(req, res, deps.db);
   });
 
   app.post("/webhook/etsy-order", async (req, res) => {
     const log = getLogger("fulfillment");
     const { ETSY_WEBHOOK_SECRET } = getSettings();
+
+    if (!Buffer.isBuffer(req.body)) {
+      res.status(400).json({ error: "invalid_body" });
+      return;
+    }
 
     const rawBody = req.body as Buffer;
     const verification = verifyEtsyWebhook(

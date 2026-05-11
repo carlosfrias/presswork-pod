@@ -71,6 +71,44 @@ describe("validateNoForbiddenTerms", () => {
       ComplianceError
     );
   });
+
+  // Bug #15 regression: every space-containing forbidden phrase needs to match
+  // in multiple sentence positions, not just the start. The audit suspected the
+  // boundary regex could silently miss them mid-sentence.
+  describe.each([
+    "hand made",
+    "hand-made",
+    "one of a kind",
+    "one-of-a-kind",
+    "limited edition",
+    "limited availability",
+    "limited quantity",
+    "only a few left",
+    "exclusive offer",
+    "while supplies last",
+  ])("multi-word forbidden term: %s (bug #15)", (term) => {
+    it(`rejects at start of string: "${term} ..."`, () => {
+      expect(() => validateNoForbiddenTerms(`${term} cat tee for sale`)).toThrow(
+        ComplianceError
+      );
+    });
+
+    it(`rejects mid-sentence with leading space: "... ${term} ..."`, () => {
+      expect(() => validateNoForbiddenTerms(`get this ${term} shirt today`)).toThrow(
+        ComplianceError
+      );
+    });
+
+    it(`rejects with surrounding punctuation: ". ${term}!"`, () => {
+      expect(() => validateNoForbiddenTerms(`Awesome. ${term}!`)).toThrow(ComplianceError);
+    });
+
+    it(`rejects at end of string: "... ${term}"`, () => {
+      expect(() => validateNoForbiddenTerms(`this design is ${term}`)).toThrow(
+        ComplianceError
+      );
+    });
+  });
 });
 
 describe("validateNoOffPlatform", () => {

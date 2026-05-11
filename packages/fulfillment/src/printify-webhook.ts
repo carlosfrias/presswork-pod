@@ -118,16 +118,25 @@ export async function handlePrintifyWebhook(
       return;
     }
 
-    // Idempotency: already processed this shipment
-    if (order.status === "shipped") {
+    // Conditional UPDATE so two webhooks delivered concurrently can't both pass
+    // the shipped-guard, both update tracking, and both POST tracking to Etsy.
+    // .neq + .select returns only rows actually transitioned; an empty result
+    // means another delivery beat us here and we should bail.
+    const { data: updatedRows } = await db
+      .from("orders")
+      .update({
+        tracking_number: shipment.number,
+        tracking_url: shipment.url ?? "",
+        status: "shipped",
+      })
+      .eq("id", order.id)
+      .neq("status", "shipped")
+      .select("id");
+
+    if (!updatedRows || updatedRows.length === 0) {
       res.status(200).json({ ok: true, skipped: "already_shipped" });
       return;
     }
-
-    await db
-      .from("orders")
-      .update({ tracking_number: shipment.number, tracking_url: shipment.url ?? "", status: "shipped" })
-      .eq("id", order.id);
 
     const normalizedCarrier = normalizeEtsyCarrierName(shipment.carrier);
     if (!normalizedCarrier) {

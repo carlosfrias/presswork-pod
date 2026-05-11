@@ -1,10 +1,19 @@
 import asyncio
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from packages.shared_py.config import get_settings
+from packages.shared_py.db import get_db
+from packages.shared_py.etsy_tokens import (
+    EtsyTokens,
+    get_refresh_lock,
+    load_tokens,
+    save_tokens,
+    tokens_from_response,
+)
 
 _LISTINGS_URL = "https://api.etsy.com/v3/application/listings/active"
 _TOKEN_URL = "https://api.etsy.com/v3/public/oauth/token"
@@ -17,26 +26,40 @@ def _is_server_error(exc: BaseException) -> bool:
 class EtsyClient:
     def __init__(self) -> None:
         settings = get_settings()
-        self._access_token: str = settings.etsy_access_token
-        self._refresh_token_val: str = settings.etsy_refresh_token
+        self._db = get_db()
+        self._tokens: EtsyTokens = load_tokens(self._db)
         self._api_key: str = settings.etsy_api_key
         self._semaphore = asyncio.Semaphore(5)
 
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._access_token}"}
+        return {"Authorization": f"Bearer {self._tokens.access_token}"}
 
     async def _refresh(self) -> None:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                _TOKEN_URL,
-                data={
-                    "grant_type": "refresh_token",
-                    "client_id": self._api_key,
-                    "refresh_token": self._refresh_token_val,
-                },
-            )
-            resp.raise_for_status()
-            self._access_token = resp.json()["access_token"]
+        # Coalesce concurrent refreshes — only one in-flight POST per process.
+        # After acquiring the lock, re-read tokens in case another coroutine
+        # already refreshed while we were waiting.
+        async with get_refresh_lock():
+            fresh = await asyncio.to_thread(load_tokens, self._db)
+            if fresh.expires_at > datetime.now(tz=UTC) and fresh.access_token != self._tokens.access_token:
+                self._tokens = fresh
+                return
+
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(
+                    _TOKEN_URL,
+                    data={
+                        "grant_type": "refresh_token",
+                        "client_id": self._api_key,
+                        # Etsy rotates refresh_token on use — capture the new one
+                        # from the response (tokens_from_response below) and
+                        # persist it so the next refresh works.
+                        "refresh_token": self._tokens.refresh_token,
+                    },
+                )
+                resp.raise_for_status()
+                new_tokens = tokens_from_response(resp.json())
+                await asyncio.to_thread(save_tokens, self._db, new_tokens)
+                self._tokens = new_tokens
 
     async def _get(
         self,

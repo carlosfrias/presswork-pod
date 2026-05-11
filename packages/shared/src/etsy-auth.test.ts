@@ -89,6 +89,47 @@ describe("getValidAccessToken", () => {
     );
   });
 
+  it("coalesces concurrent refresh requests into a single POST (bug #11)", async () => {
+    const setTokensMock = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("./etsy-tokens.js", () => ({
+      getEtsyTokens: vi.fn().mockResolvedValue({
+        accessToken: "old-token",
+        refreshToken: "my-refresh",
+        expiresAt: EXPIRED,
+      }),
+      setEtsyTokens: setTokensMock,
+    }));
+
+    let refreshCalls = 0;
+    server.use(
+      http.post(REFRESH_URL, async () => {
+        refreshCalls++;
+        // Small async tick so both callers see the in-flight promise.
+        await new Promise((r) => setTimeout(r, 10));
+        return HttpResponse.json({
+          access_token: "new-access-token",
+          refresh_token: "rotated-refresh-token",
+          expires_in: 3600,
+        });
+      })
+    );
+
+    const { getValidAccessToken } = await import("./etsy-auth.js");
+    const [a, b, c] = await Promise.all([
+      getValidAccessToken({} as never),
+      getValidAccessToken({} as never),
+      getValidAccessToken({} as never),
+    ]);
+
+    expect(refreshCalls).toBe(1);
+    expect(a).toBe("new-access-token");
+    expect(b).toBe("new-access-token");
+    expect(c).toBe("new-access-token");
+    // setEtsyTokens should also only be called once — only the rotated-token
+    // write that the in-flight refresh issued.
+    expect(setTokensMock).toHaveBeenCalledTimes(1);
+  });
+
   it("throws EtsyAuthError when refresh endpoint returns error", async () => {
     vi.doMock("./etsy-tokens.js", () => ({
       getEtsyTokens: vi.fn().mockResolvedValue({

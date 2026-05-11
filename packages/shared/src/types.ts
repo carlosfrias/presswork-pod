@@ -45,6 +45,20 @@ export const DesignPackageSchema = z.object({
   // listing image must come from the actual design file. Listing Agent sets this
   // true when it writes mockup_urls back from a Printify product creation.
   mockups_from_actual_design: z.boolean().nullable().optional(),
+  // Per-variant option labels captured at Printify product creation. Used by
+  // Fulfillment to resolve a receipt's transaction.variations (size/color) back
+  // to the correct Printify variant_id. NULL on rows created before migration
+  // 009; Fulfillment falls back to printify_variant_ids[0] only when the
+  // receipt has no variations either.
+  printify_variants: z
+    .array(
+      z.object({
+        id: z.number().int(),
+        values: z.array(z.string()),
+      })
+    )
+    .nullable()
+    .optional(),
   metadata: z.unknown().nullable().optional(),
   error_message: z.string().nullable().optional(),
   retry_count: z.number().int().default(0),

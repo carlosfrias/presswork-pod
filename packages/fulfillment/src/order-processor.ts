@@ -20,26 +20,33 @@ export async function processOrder(
   const { ETSY_SHOP_ID: _shopId } = getSettings();
   const t0 = Date.now();
 
-  // Step 1: idempotency-safe insert — if order already exists, returns nothing
+  // Step 1: idempotency-safe insert. On unique violation OR empty return we look
+  // up the existing row — if a prior attempt crashed between INSERT and the
+  // Printify call (status='received', no printify_order_id) we recover instead
+  // of silently dropping the order. Substring matching on error.message was
+  // removed; only the explicit Postgres unique-violation code (23505) counts.
   const { data: insertedRows, error: insertErr } = await db
     .from("orders")
     .insert({ etsy_order_id: etsyReceiptId, status: "received" })
     .select("id")
     .returns<Array<{ id: string }>>();
 
+  let orderId: string | null = null;
+
   if (insertErr) {
-    // Postgres unique violation = code 23505
-    const isUniqueViolation =
-      (insertErr as { code?: string }).code === "23505" ||
-      insertErr.message.includes("duplicate key");
-    if (isUniqueViolation) {
-      log.info({ agent: "fulfillment", action: "process_order", record_id: etsyReceiptId, status: "duplicate", duration_ms: Date.now() - t0 });
-      return { outcome: "duplicate" };
+    if ((insertErr as { code?: string }).code !== "23505") {
+      return { outcome: "error", error: insertErr.message };
     }
-    return { outcome: "error", error: insertErr.message };
+    orderId = await recoverDuplicateRow(db, etsyReceiptId);
+  } else {
+    orderId = insertedRows?.[0]?.id ?? null;
+    if (!orderId) {
+      // No error and no rows — concurrent insert hit the unique constraint after
+      // PostgREST started returning. Same recovery path as the explicit conflict.
+      orderId = await recoverDuplicateRow(db, etsyReceiptId);
+    }
   }
 
-  const orderId = insertedRows?.[0]?.id;
   if (!orderId) {
     log.info({ agent: "fulfillment", action: "process_order", record_id: etsyReceiptId, status: "duplicate", duration_ms: Date.now() - t0 });
     return { outcome: "duplicate" };
@@ -78,7 +85,7 @@ export async function processOrder(
 
     const { data: designRow, error: designErr } = await db
       .from("design_packages")
-      .select("image_url, printify_blueprint_id, printify_variant_ids")
+      .select("image_url, printify_blueprint_id, printify_variant_ids, printify_variants")
       .eq("id", (listingRow as { id: string; design_package_id: string }).design_package_id)
       .single();
 
@@ -96,6 +103,7 @@ export async function processOrder(
       image_url: string;
       printify_blueprint_id: number;
       printify_variant_ids: number[];
+      printify_variants: Array<{ id: number; values: string[] }> | null;
     };
 
     // Step 4: compute economics
@@ -115,14 +123,40 @@ export async function processOrder(
 
     // Step 5: create Printify order
     log.info({ agent: "fulfillment", action: "create_printify_order", record_id: orderId, status: "started" });
-    const { printifyOrderId } = await createOrder({
-      etsyReceiptId,
-      lineItems: receipt.transactions.map((t) => ({
+
+    let resolvedLineItems: Array<{
+      blueprintId: number;
+      variantId: number;
+      imageUrl: string;
+      quantity: number;
+    }>;
+    try {
+      resolvedLineItems = receipt.transactions.map((t) => ({
         blueprintId: design.printify_blueprint_id,
-        variantId: (design.printify_variant_ids[0]) ?? 0,
+        variantId: resolveVariantId(t.variations ?? [], design),
         imageUrl: design.image_url,
         quantity: t.quantity,
-      })),
+      }));
+    } catch (resolveErr) {
+      const msg = resolveErr instanceof Error ? resolveErr.message : String(resolveErr);
+      await db
+        .from("orders")
+        .update({ status: "error", error_message: msg })
+        .eq("id", orderId);
+      await notifySlack(`Fulfillment error: ${msg}`, { severity: "error" });
+      log.error({
+        agent: "fulfillment",
+        action: "resolve_variant",
+        record_id: orderId,
+        status: "error",
+        error: msg,
+      });
+      return { orderId, outcome: "error", error: msg };
+    }
+
+    const { printifyOrderId } = await createOrder({
+      etsyReceiptId,
+      lineItems: resolvedLineItems,
       address: {
         firstName: receipt.name.split(" ")[0] ?? receipt.name,
         lastName: receipt.name.split(" ").slice(1).join(" ") || receipt.name,
@@ -136,10 +170,14 @@ export async function processOrder(
       },
     });
 
+    // Conditional update: only advance the row if it's still in 'received'. If
+    // a concurrent processor already moved it forward we no-op here rather than
+    // overwriting their printify_order_id with ours.
     await db
       .from("orders")
       .update({ printify_order_id: printifyOrderId, status: "submitted" })
-      .eq("id", orderId);
+      .eq("id", orderId)
+      .eq("status", "received");
 
     log.info({ agent: "fulfillment", action: "process_order", record_id: orderId, status: "submitted", duration_ms: Date.now() - t0 });
     return { orderId, outcome: "created" };
@@ -172,4 +210,67 @@ export async function processOrder(
     log.error({ agent: "fulfillment", action: "process_order", record_id: orderId, status: "error", duration_ms: Date.now() - t0, error: message });
     return { orderId, outcome: "error", error: message };
   }
+}
+
+// Map a receipt transaction's variations (size/color) onto the right Printify
+// variant_id. Returns the resolved variant id, or throws when the receipt
+// specifies variations we can't resolve (mismatch → manual intervention).
+function resolveVariantId(
+  variations: ReadonlyArray<{ formatted_value?: string | undefined }>,
+  design: {
+    printify_variant_ids: number[];
+    printify_variants: Array<{ id: number; values: string[] }> | null;
+  }
+): number {
+  const hasVariations = variations.length > 0;
+  const map = design.printify_variants ?? null;
+
+  if (!hasVariations) {
+    // Single-variant blueprint (or pre-migration row): fall back to first variant.
+    return design.printify_variant_ids[0] ?? 0;
+  }
+
+  if (!map || map.length === 0) {
+    throw new Error(
+      `Receipt has ${variations.length} variation(s) but design_packages.printify_variants is empty — cannot resolve variant`
+    );
+  }
+
+  const wanted = variations
+    .map((v) => v.formatted_value?.toLowerCase() ?? "")
+    .filter((s) => s.length > 0)
+    .sort();
+  const match = map.find((variant) => {
+    const sortedValues = [...variant.values].map((s) => s.toLowerCase()).sort();
+    return sortedValues.length === wanted.length && sortedValues.every((v, i) => v === wanted[i]);
+  });
+
+  if (!match) {
+    throw new Error(
+      `No Printify variant matches receipt variations [${wanted.join(", ")}]`
+    );
+  }
+  return match.id;
+}
+
+async function recoverDuplicateRow(db: Db, etsyReceiptId: string): Promise<string | null> {
+  const { data } = await db
+    .from("orders")
+    .select("id, status, printify_order_id")
+    .eq("etsy_order_id", etsyReceiptId)
+    .single();
+
+  const existing = data as {
+    id: string;
+    status: string;
+    printify_order_id: string | null;
+  } | null;
+
+  if (!existing) return null;
+  // Only resume rows that crashed mid-flight (status='received', no Printify
+  // order yet). Anything else is truly a duplicate.
+  if (existing.status === "received" && !existing.printify_order_id) {
+    return existing.id;
+  }
+  return null;
 }

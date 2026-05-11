@@ -1,0 +1,103 @@
+name: Integration
+
+on:
+  pull_request:
+    branches: [main]
+
+# Integration tests spin up a local Supabase container and run the full agent
+# pipelines against real Postgres. Slower than unit tests, so we run them only
+# on PRs to main, not on every push.
+
+jobs:
+  ts-integration:
+    name: TS integration — Supabase + INTEGRATION=1
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start Supabase
+        run: supabase start
+
+      - name: Build shared workspace
+        run: npm run build --workspace=packages/shared || true
+
+      - name: Run TS integration tests
+        env:
+          INTEGRATION: "1"
+          SUPABASE_URL: http://127.0.0.1:54321
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_LOCAL_SERVICE_ROLE_KEY }}
+        run: npm test --workspaces
+
+      - name: Stop Supabase
+        if: always()
+        run: supabase stop --no-backup
+
+  python-integration:
+    name: Python integration — Supabase + INTEGRATION=1
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install dev dependencies
+        run: |
+          pip install -r packages/scout/requirements-dev.txt
+          pip install -r packages/design/requirements-dev.txt
+          pip install -r packages/shared_py/requirements-dev.txt
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start Supabase
+        run: supabase start
+
+      - name: Run Python integration tests
+        env:
+          INTEGRATION: "1"
+          SUPABASE_URL: http://127.0.0.1:54321
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_LOCAL_SERVICE_ROLE_KEY }}
+        run: pytest packages/scout packages/design
+
+      - name: Stop Supabase
+        if: always()
+        run: supabase stop --no-backup
+
+  migration-sanity:
+    name: Migrations — clean apply from scratch
+    runs-on: ubuntu-latest
+    # Run only when migrations actually changed; the rest of the time the cold
+    # supabase start in the other jobs already exercises them implicitly.
+    if: contains(toJSON(github.event.pull_request.changed_files), 'infra/supabase/migrations/')
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start Supabase
+        run: supabase start
+
+      - name: Reset DB and re-apply all migrations
+        run: supabase db reset --no-seed
+
+      - name: Stop Supabase
+        if: always()
+        run: supabase stop --no-backup

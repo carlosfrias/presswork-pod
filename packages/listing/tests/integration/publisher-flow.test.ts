@@ -36,7 +36,9 @@ const VALID_COPY = {
 
 const server = setupServer();
 
-// Base MSW handlers for all external services
+// Base MSW handlers for all external services. Paths and verbs must mirror
+// production exactly — see packages/listing/src/printify.ts and
+// packages/shared/src/etsy-api.ts for the source of truth.
 function baseHandlers(activateFails = false) {
   return [
     // Anthropic — returns valid listing copy JSON
@@ -45,7 +47,15 @@ function baseHandlers(activateFails = false) {
         content: [{ type: "text", text: JSON.stringify(VALID_COPY) }],
       })
     ),
-    // Printify — create product
+    // Printify — register image into media library (createHiddenProduct's first
+    // step). Production code calls this BEFORE products.json and expects an id
+    // back to put into print_areas[].placeholders[].images[].id.
+    http.post("https://api.printify.com/v1/uploads/images.json", () =>
+      HttpResponse.json({ id: "upload-id-1" })
+    ),
+    // Printify — create product. Response shape matches the new Step 5 schema
+    // (variants[] + options[]) so extractVariantOptions can map size/color
+    // back to variant_ids on the fulfillment side.
     http.post(`https://api.printify.com/v1/shops/*/products.json`, () =>
       HttpResponse.json({
         id: PRODUCT_ID,
@@ -53,11 +63,27 @@ function baseHandlers(activateFails = false) {
           { src: "https://printify.com/mockup1.jpg" },
           { src: "https://printify.com/mockup2.jpg" },
         ],
+        variants: [
+          { id: 38163, title: "S / Black", options: [101, 201] },
+          { id: 38177, title: "M / Black", options: [102, 201] },
+        ],
+        options: [
+          {
+            name: "Size",
+            type: "size",
+            values: [
+              { id: 101, title: "S" },
+              { id: 102, title: "M" },
+            ],
+          },
+          { name: "Color", type: "color", values: [{ id: 201, title: "Black" }] },
+        ],
       })
     ),
-    // Printify — set visible
-    http.post(
-      `https://api.printify.com/v1/shops/*/products/${PRODUCT_ID}/publish.json`,
+    // Printify — set visible. setProductVisible uses PUT to products/{id}.json
+    // with { is_visible: true } — NOT a /publish.json POST.
+    http.put(
+      `https://api.printify.com/v1/shops/*/products/${PRODUCT_ID}.json`,
       () => HttpResponse.json({ ok: true })
     ),
     // Etsy token refresh
@@ -76,7 +102,7 @@ function baseHandlers(activateFails = false) {
     ),
     http.post(
       `https://openapi.etsy.com/v3/application/shops/${SHOP_ID}/listings/${ETSY_LISTING_ID}/images`,
-      () => new HttpResponse(null, { status: 201 })
+      () => HttpResponse.json({ listing_image_id: 1, rank: 1 }, { status: 201 })
     ),
     // Etsy — activate listing
     http.patch(
