@@ -1,5 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createHmac } from "node:crypto";
+import { http, HttpResponse } from "msw";
+import { setupServer } from "msw/node";
 import { verifyPrintifyWebhook } from "./printify-webhook.js";
 import type { Request, Response } from "express";
 import type { Db } from "@presswork/shared";
@@ -88,7 +90,7 @@ function makePayload(overrides: Record<string, unknown> = {}) {
       type: "order",
       data: {
         id: "pf-order-1",
-        status: "in_production",
+        status: "in-production",
       },
     },
     ...overrides,
@@ -132,12 +134,13 @@ describe("handlePrintifyWebhook", () => {
     process.env = savedEnv;
   });
 
-  it("returns 200 skipped=status_unchanged when order:updated status matches current", async () => {
+  it("returns 200 skipped=status_unchanged when mapped status matches current", async () => {
     const savedEnv = { ...process.env };
     vi.resetModules();
     Object.assign(process.env, makeValidEnv());
 
-    // order:updated where DB already has status "in_production"
+    // Printify "in-production" maps to internal "submitted"; DB already has
+    // status="submitted" → skip with status_unchanged.
     const body = makePayload();
     const sig = createHmac("sha256", SECRET).update(body).digest("base64");
     const req = makeReq(body, sig);
@@ -148,7 +151,7 @@ describe("handlePrintifyWebhook", () => {
         select: vi.fn().mockReturnValue({
           eq: vi.fn().mockReturnValue({
             limit: vi.fn().mockResolvedValue({
-              data: [{ id: "order-uuid-1", etsy_order_id: "etsy-42", status: "in_production" }],
+              data: [{ id: "order-uuid-1", etsy_order_id: "etsy-42", status: "submitted" }],
               error: null,
             }),
           }),
@@ -217,6 +220,91 @@ describe("handlePrintifyWebhook", () => {
     process.env = savedEnv;
   });
 
+  it("unknown Printify status → 200 skipped, DB untouched (bug #29)", async () => {
+    const savedEnv = { ...process.env };
+    vi.resetModules();
+    Object.assign(process.env, makeValidEnv());
+
+    const body = Buffer.from(JSON.stringify({
+      type: "order:updated",
+      resource: {
+        id: "res-1",
+        type: "order",
+        data: { id: "pf-order-1", status: "totally-made-up-status" },
+      },
+    }));
+    const sig = createHmac("sha256", SECRET).update(body).digest("base64");
+    const req = makeReq(body, sig);
+    const res = makeRes();
+
+    const updateMock = vi.fn();
+    const db = {
+      from: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue({
+              data: [{ id: "order-uuid-1", etsy_order_id: "etsy-42", status: "submitted" }],
+              error: null,
+            }),
+          }),
+        }),
+        update: updateMock,
+      }),
+    } as unknown as Db;
+
+    const { handlePrintifyWebhook: handler } = await import("./printify-webhook.js");
+    await handler(req, res as unknown as Response, db);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res._body).toMatchObject({ skipped: "unknown_status" });
+    expect(updateMock).not.toHaveBeenCalled();
+
+    process.env = savedEnv;
+  });
+
+  it("maps fulfilled Printify status to internal 'shipped' (bug #29)", async () => {
+    const savedEnv = { ...process.env };
+    vi.resetModules();
+    Object.assign(process.env, makeValidEnv());
+
+    const body = Buffer.from(JSON.stringify({
+      type: "order:updated",
+      resource: {
+        id: "res-1",
+        type: "order",
+        data: { id: "pf-order-1", status: "fulfilled" },
+      },
+    }));
+    const sig = createHmac("sha256", SECRET).update(body).digest("base64");
+    const req = makeReq(body, sig);
+    const res = makeRes();
+
+    const updateMock = vi.fn().mockReturnValue({
+      eq: vi.fn().mockResolvedValue({ error: null }),
+    });
+    const db = {
+      from: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({
+            limit: vi.fn().mockResolvedValue({
+              data: [{ id: "order-uuid-1", etsy_order_id: "etsy-42", status: "submitted" }],
+              error: null,
+            }),
+          }),
+        }),
+        update: updateMock,
+      }),
+    } as unknown as Db;
+
+    const { handlePrintifyWebhook: handler } = await import("./printify-webhook.js");
+    await handler(req, res as unknown as Response, db);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(updateMock).toHaveBeenCalledWith({ status: "shipped" });
+
+    process.env = savedEnv;
+  });
+
   it("submits Etsy tracking only when conditional UPDATE actually transitioned the row (bug #6)", async () => {
     const savedEnv = { ...process.env };
     vi.resetModules();
@@ -279,5 +367,179 @@ describe("handlePrintifyWebhook", () => {
     expect(submitTracking).toHaveBeenCalledTimes(1);
 
     process.env = savedEnv;
+  });
+});
+
+// ── registerPrintifyWebhooks (bug #36) ────────────────────────────────────────
+
+const bootstrapServer = setupServer();
+
+function makeBootstrapDb() {
+  const upsert = vi.fn().mockResolvedValue({ error: null });
+  const deleteFn = vi.fn().mockReturnValue({
+    eq: vi.fn().mockResolvedValue({ error: null }),
+  });
+  return {
+    from: vi.fn().mockReturnValue({
+      upsert,
+      delete: deleteFn,
+    }),
+    _upsert: upsert,
+    _delete: deleteFn,
+  };
+}
+
+describe("registerPrintifyWebhooks (bug #36)", () => {
+  let savedEnv: NodeJS.ProcessEnv;
+
+  beforeEach(() => {
+    savedEnv = { ...process.env };
+    vi.resetModules();
+    Object.assign(
+      process.env,
+      makeValidEnv({
+        PRINTIFY_WEBHOOK_BASE_URL: "https://hooks.example.com",
+      })
+    );
+    // @presswork/shared's getSettings caches at module load; resetModules
+    // does NOT reliably clear workspace-package singletons. Mock it directly
+    // so each test gets the env state we expect.
+    vi.doMock("@presswork/shared", async () => {
+      const actual = await vi.importActual<typeof import("@presswork/shared")>("@presswork/shared");
+      return {
+        ...actual,
+        getSettings: () => ({
+          PRINTIFY_SHOP_ID: process.env["PRINTIFY_SHOP_ID"] ?? "shop-1",
+          PRINTIFY_WEBHOOK_BASE_URL: process.env["PRINTIFY_WEBHOOK_BASE_URL"],
+          PRINTIFY_WEBHOOK_SECRET: process.env["PRINTIFY_WEBHOOK_SECRET"],
+          PRINTIFY_API_TOKEN: process.env["PRINTIFY_API_TOKEN"] ?? "printify-token",
+        }),
+      };
+    });
+    bootstrapServer.listen({ onUnhandledRequest: "error" });
+  });
+
+  afterEach(() => {
+    process.env = savedEnv;
+    bootstrapServer.resetHandlers();
+    bootstrapServer.close();
+    vi.doUnmock("@presswork/shared");
+  });
+
+  it("POSTs both topics when subscription list is empty", async () => {
+    // Sanity-check the env actually set
+    expect(process.env["PRINTIFY_WEBHOOK_BASE_URL"]).toBe("https://hooks.example.com");
+    expect(process.env["PRINTIFY_WEBHOOK_SECRET"]).toBeDefined();
+
+    const created: Array<{ topic: string }> = [];
+    bootstrapServer.use(
+      http.get("https://api.printify.com/v1/shops/shop-1/webhooks.json", () =>
+        HttpResponse.json([])
+      ),
+      http.post(
+        "https://api.printify.com/v1/shops/shop-1/webhooks.json",
+        async ({ request }) => {
+          const body = (await request.json()) as { topic: string };
+          created.push({ topic: body.topic });
+          return HttpResponse.json({ id: `whk-${body.topic}` });
+        }
+      )
+    );
+
+    const { registerPrintifyWebhooks } = await import("./printify-webhook.js");
+    await registerPrintifyWebhooks(makeBootstrapDb() as unknown as Db);
+
+    expect(created.map((c) => c.topic).sort()).toEqual(
+      ["order:shipment:created", "order:updated"].sort()
+    );
+  });
+
+  it("does NOT POST when matching subscriptions already exist", async () => {
+    let postCalls = 0;
+    bootstrapServer.use(
+      http.get("https://api.printify.com/v1/shops/shop-1/webhooks.json", () =>
+        HttpResponse.json([
+          { id: "w1", topic: "order:updated", url: "https://hooks.example.com/webhook/printify-order" },
+          { id: "w2", topic: "order:shipment:created", url: "https://hooks.example.com/webhook/printify-order" },
+        ])
+      ),
+      http.post("https://api.printify.com/v1/shops/shop-1/webhooks.json", () => {
+        postCalls++;
+        return HttpResponse.json({ id: "should-not-be-called" });
+      })
+    );
+
+    const { registerPrintifyWebhooks } = await import("./printify-webhook.js");
+    await registerPrintifyWebhooks(makeBootstrapDb() as unknown as Db);
+
+    expect(postCalls).toBe(0);
+  });
+
+  it("DELETEs stale URL then POSTs new on PRINTIFY_WEBHOOK_BASE_URL change (bug #35)", async () => {
+    const deletes: string[] = [];
+    const posts: string[] = [];
+    bootstrapServer.use(
+      http.get("https://api.printify.com/v1/shops/shop-1/webhooks.json", () =>
+        HttpResponse.json([
+          { id: "stale-w1", topic: "order:updated", url: "https://old.example.com/webhook/printify-order" },
+          { id: "stale-w2", topic: "order:shipment:created", url: "https://old.example.com/webhook/printify-order" },
+        ])
+      ),
+      http.delete(
+        "https://api.printify.com/v1/shops/shop-1/webhooks/:id.json",
+        ({ params }) => {
+          deletes.push(params.id as string);
+          return HttpResponse.json({ ok: true });
+        }
+      ),
+      http.post(
+        "https://api.printify.com/v1/shops/shop-1/webhooks.json",
+        async ({ request }) => {
+          const body = (await request.json()) as { topic: string };
+          posts.push(body.topic);
+          return HttpResponse.json({ id: `whk-${body.topic}` });
+        }
+      )
+    );
+
+    const { registerPrintifyWebhooks } = await import("./printify-webhook.js");
+    await registerPrintifyWebhooks(makeBootstrapDb() as unknown as Db);
+
+    expect(deletes.sort()).toEqual(["stale-w1", "stale-w2"]);
+    expect(posts.sort()).toEqual(["order:shipment:created", "order:updated"].sort());
+  });
+
+  it("skips bootstrap when PRINTIFY_WEBHOOK_BASE_URL is missing", async () => {
+    process.env = { ...savedEnv, ...makeValidEnv() };
+    delete process.env["PRINTIFY_WEBHOOK_BASE_URL"];
+    let touched = 0;
+    bootstrapServer.use(
+      http.all("https://api.printify.com/v1/shops/shop-1/webhooks.json", () => {
+        touched++;
+        return HttpResponse.json([]);
+      })
+    );
+
+    const { registerPrintifyWebhooks } = await import("./printify-webhook.js");
+    await registerPrintifyWebhooks(makeBootstrapDb() as unknown as Db);
+
+    expect(touched).toBe(0);
+  });
+
+  it("skips bootstrap when PRINTIFY_WEBHOOK_SECRET is missing", async () => {
+    process.env = { ...savedEnv, ...makeValidEnv({ PRINTIFY_WEBHOOK_BASE_URL: "https://hooks.example.com" }) };
+    delete process.env["PRINTIFY_WEBHOOK_SECRET"];
+    let touched = 0;
+    bootstrapServer.use(
+      http.all("https://api.printify.com/v1/shops/shop-1/webhooks.json", () => {
+        touched++;
+        return HttpResponse.json([]);
+      })
+    );
+
+    const { registerPrintifyWebhooks } = await import("./printify-webhook.js");
+    await registerPrintifyWebhooks(makeBootstrapDb() as unknown as Db);
+
+    expect(touched).toBe(0);
   });
 });

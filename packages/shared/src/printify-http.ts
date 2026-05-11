@@ -1,4 +1,3 @@
-import retry from "async-retry";
 import Bottleneck from "bottleneck";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -20,6 +19,15 @@ const _pkgVersion = (() => {
 export const USER_AGENT = `presswork/${_pkgVersion}`;
 export const DEFAULT_429_WAIT_MS = 5_000;
 
+// Unified retry budget across 429 and 5xx so the total outgoing request count
+// matches CLAUDE.md's "max 3 retries" contract instead of the previous nested
+// loops which could fan out to 4×4 in worst-case mixed-error scenarios.
+export const MAX_ATTEMPTS = 3;
+
+// Cap Retry-After parsing so a misbehaving header can't stall the publish
+// pipeline for an hour (single-concurrency limiter).
+const MAX_RETRY_AFTER_MS = 60_000;
+
 export class PrintifyError extends Error {
   constructor(
     message: string,
@@ -29,6 +37,19 @@ export class PrintifyError extends Error {
     super(message);
     this.name = "PrintifyError";
   }
+}
+
+function parseRetryAfterMs(header: string | null): number | null {
+  if (header == null) return null;
+  const asInt = Number(header);
+  if (Number.isFinite(asInt) && asInt >= 0) {
+    return Math.min(asInt * 1000, MAX_RETRY_AFTER_MS);
+  }
+  const asDate = Date.parse(header);
+  if (Number.isFinite(asDate)) {
+    return Math.min(Math.max(asDate - Date.now(), 0), MAX_RETRY_AFTER_MS);
+  }
+  return null;
 }
 
 // Exported for test spying — swap out `sleep` to make 429 retry tests instant
@@ -47,42 +68,55 @@ const publishingLimiter = new Bottleneck({
   reservoirRefreshAmount: 180,
 }).chain(globalLimiter);
 
-async function attemptOnce(path: string, init: RequestInit): Promise<unknown> {
+// Single unified retry loop: at most MAX_ATTEMPTS outgoing requests regardless
+// of whether the failures are 429, 5xx, or a mix. Previously nested loops
+// (outer 429 retries × inner async-retry on 5xx) could exceed the documented
+// retry budget; this collapses them.
+async function attemptWithRetry(path: string, init: RequestInit): Promise<unknown> {
   const { PRINTIFY_API_TOKEN } = getSettings();
+  let lastErr: PrintifyError | null = null;
 
-  return retry(
-    async (bail) => {
-      const res = await fetch(`https://api.printify.com/v1${path}`, {
-        ...init,
-        headers: {
-          "Content-Type": "application/json;charset=utf-8",
-          "User-Agent": USER_AGENT,
-          Authorization: `Bearer ${PRINTIFY_API_TOKEN}`,
-          ...(init.headers as Record<string, string> | undefined),
-        },
-      });
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const res = await fetch(`https://api.printify.com/v1${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json;charset=utf-8",
+        "User-Agent": USER_AGENT,
+        Authorization: `Bearer ${PRINTIFY_API_TOKEN}`,
+        ...(init.headers as Record<string, string> | undefined),
+      },
+    });
 
-      if (!res.ok) {
-        const body = await res.text();
-
-        if (res.status === 429) {
-          const after = res.headers.get("Retry-After");
-          const retryAfterMs = after != null ? parseInt(after, 10) * 1000 : undefined;
-          bail(new PrintifyError(`Printify 429: rate limited`, 429, retryAfterMs));
-          return;
-        }
-
-        if (res.status < 500) {
-          bail(new PrintifyError(`Printify ${res.status}: ${body}`, res.status));
-          return;
-        }
-        throw new PrintifyError(`Printify ${res.status}: ${body}`, res.status);
-      }
-
+    if (res.ok) {
       return res.json() as unknown;
-    },
-    { retries: 3, factor: 2, minTimeout: 500 }
-  );
+    }
+
+    const body = await res.text();
+
+    if (res.status === 429) {
+      const retryAfterMs = parseRetryAfterMs(res.headers.get("Retry-After"));
+      lastErr = new PrintifyError(
+        `Printify 429: rate limited`,
+        429,
+        retryAfterMs ?? undefined
+      );
+      if (attempt === MAX_ATTEMPTS - 1) break;
+      await _printifyTestHooks.sleep(retryAfterMs ?? DEFAULT_429_WAIT_MS);
+      continue;
+    }
+
+    if (res.status < 500) {
+      // Non-retryable client error
+      throw new PrintifyError(`Printify ${res.status}: ${body}`, res.status);
+    }
+
+    // 5xx — retry with exponential backoff (matches the prior async-retry timing)
+    lastErr = new PrintifyError(`Printify ${res.status}: ${body}`, res.status);
+    if (attempt === MAX_ATTEMPTS - 1) break;
+    await _printifyTestHooks.sleep(500 * Math.pow(2, attempt));
+  }
+
+  throw lastErr ?? new PrintifyError("Printify: exhausted retries");
 }
 
 export async function printifyFetch(
@@ -93,33 +127,25 @@ export async function printifyFetch(
   const limiter = opts.rateClass === "publishing" ? publishingLimiter : globalLimiter;
   const log = getLogger("printify");
 
-  for (let i = 0; i <= 3; i++) {
-    try {
-      const result = await limiter.schedule(() => attemptOnce(path, init));
-      _recordPrintifyOutcome("success");
-      const metrics = getPrintifyErrorRate();
-      log.info({ action: "printify_request", path, status: 200, ...metrics });
-      return result;
-    } catch (err) {
-      if (err instanceof PrintifyError && err.status === 429 && i < 3) {
-        await _printifyTestHooks.sleep(err.retryAfterMs ?? DEFAULT_429_WAIT_MS);
-        continue;
-      }
-      const outcome =
-        err instanceof PrintifyError && (err.status ?? 0) >= 500 ? "5xx" : "4xx";
-      _recordPrintifyOutcome(outcome);
-      const metrics = getPrintifyErrorRate();
-      log.info({
-        action: "printify_request",
-        path,
-        status: err instanceof PrintifyError ? err.status : undefined,
-        ...metrics,
-      });
-      throw err;
-    }
+  try {
+    const result = await limiter.schedule(() => attemptWithRetry(path, init));
+    _recordPrintifyOutcome("success");
+    const metrics = getPrintifyErrorRate();
+    log.info({ action: "printify_request", path, status: 200, ...metrics });
+    return result;
+  } catch (err) {
+    const outcome =
+      err instanceof PrintifyError && (err.status ?? 0) >= 500
+        ? "5xx"
+        : "4xx";
+    _recordPrintifyOutcome(outcome);
+    const metrics = getPrintifyErrorRate();
+    log.info({
+      action: "printify_request",
+      path,
+      status: err instanceof PrintifyError ? err.status : undefined,
+      ...metrics,
+    });
+    throw err;
   }
-
-  // 429 exhausted after 3 retries — record as 4xx then throw
-  _recordPrintifyOutcome("4xx");
-  throw new PrintifyError("Printify: exhausted 429 retries");
 }

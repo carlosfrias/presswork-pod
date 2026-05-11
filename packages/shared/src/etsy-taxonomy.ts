@@ -1,6 +1,5 @@
 import type { Db } from "./db.js";
-import { getSettings } from "./config.js";
-import { getValidAccessToken } from "./etsy-auth.js";
+import { etsyFetch } from "./etsy-api.js";
 
 export type ProductKey = "tshirt";
 
@@ -28,19 +27,12 @@ function findNode(nodes: TaxonomyNode[], labels: string[]): number | null {
 }
 
 async function fetchTaxonomyNodes(db: Db): Promise<TaxonomyNode[]> {
-  const { ETSY_API_KEY } = getSettings();
-  const token = await getValidAccessToken(db);
-  const res = await fetch("https://openapi.etsy.com/v3/application/seller-taxonomy/nodes", {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "x-api-key": ETSY_API_KEY,
-    },
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`Etsy taxonomy fetch failed: ${res.status} ${body}`);
-  }
-  const json = (await res.json()) as { results: TaxonomyNode[] };
+  // Route through the shared limiter so taxonomy calls count against the same
+  // rate budget as listing/receipt calls. Raw fetch() here bypassed bottleneck
+  // and could burst us into 429 territory.
+  const json = (await etsyFetch(db, "/application/seller-taxonomy/nodes")) as {
+    results: TaxonomyNode[];
+  };
   if (!Array.isArray(json.results)) throw new Error("Unexpected taxonomy response shape");
   return json.results;
 }

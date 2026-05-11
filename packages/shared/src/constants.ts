@@ -133,8 +133,34 @@ export function normalizeEtsyCarrierName(raw: string | undefined): string | null
 
 // Off-platform redirection — Etsy prohibits steering buyers to other channels.
 // Enforced by validateNoOffPlatform() in packages/listing/src/compliance.ts.
-export const EXTERNAL_URL_PATTERN = /\b(?:https?:\/\/|www\.)\S+/i;
-export const SOCIAL_HANDLE_PATTERN = /(?:^|[\s.,;:!?])@[A-Za-z0-9_.]{2,}/;
+
+// Matches both prefixed URLs (http://, https://, www.) AND bare domains using
+// a TLD allowlist. The bare-domain branch requires a non-alnum boundary on the
+// left so email local-parts (me@example.com → the .com here) and version
+// strings don't trip it.
+// TLDs commonly used to circumvent Etsy's no-off-platform rule. The list is
+// deliberately narrow (popular ccTLDs that show up in link-aggregator services
+// like linktr.ee + the standard commercial TLDs) so we don't trip on legitimate
+// version strings or product codes.
+const _TLD_GROUP =
+  "com|net|org|io|co|shop|store|me|link|ly|tk|app|page|site|online|biz|info|ee|bio|gg|to";
+export const EXTERNAL_URL_PATTERN = new RegExp(
+  // 1) http(s):// or www.
+  `\\b(?:https?:\\/\\/|www\\.)\\S+` +
+    // 2) bare domain like mystore.com or linktr.ee/x
+    `|(?<![\\w@.])[A-Za-z0-9-]{2,}(?:\\.[A-Za-z0-9-]{2,}){0,2}\\.(?:${_TLD_GROUP})\\b(?:\\/\\S*)?`,
+  "i"
+);
+
+// @handle must NOT be preceded by an alphanumeric (otherwise it's an email
+// local part: me@example.com). The lookbehind variant is cleaner than the
+// previous `(?:^|[\s.,;:!?])` form which over-restricted preceding context.
+export const SOCIAL_HANDLE_PATTERN = /(?<![A-Za-z0-9])@[A-Za-z0-9_.]{2,}/;
+
+// Phrases that signal off-platform redirection. validateNoOffPlatform() applies
+// word-boundary matching (the same helper used for FORBIDDEN_LISTING_TERMS) so
+// "find us on" only fires on the actual phrase, not as a substring of e.g.
+// "find users on the list".
 export const OFF_PLATFORM_PHRASES = [
   "buy direct",
   "off etsy",

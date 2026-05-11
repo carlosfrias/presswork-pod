@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { computeEtsyFees, lookupPrintCost, UnknownBlueprintError } from "./economics.js";
+import {
+  computeEtsyFees,
+  lookupPrintCost,
+  normalizeToUsd,
+  UnknownBlueprintError,
+  UnknownCurrencyError,
+} from "./economics.js";
 
 describe("computeEtsyFees", () => {
   it("matches the specified fee formula for a $24.99 sale", () => {
@@ -27,5 +33,25 @@ describe("lookupPrintCost", () => {
   it("throws UnknownBlueprintError for an unknown blueprint ID", () => {
     expect(() => lookupPrintCost(99999)).toThrow(UnknownBlueprintError);
     expect(() => lookupPrintCost(99999)).toThrow("99999");
+  });
+});
+
+describe("normalizeToUsd (bug #28)", () => {
+  it("returns USD amount unchanged", () => {
+    expect(normalizeToUsd(24.99, "USD")).toBeCloseTo(24.99, 2);
+  });
+
+  it("converts EUR via rate table", () => {
+    const usd = normalizeToUsd(24.99, "EUR");
+    expect(usd).toBeGreaterThan(24.99);
+    expect(usd).toBeCloseTo(24.99 * 1.08, 2);
+  });
+
+  it("accepts lowercase currency codes", () => {
+    expect(normalizeToUsd(10, "eur")).toBeCloseTo(10 * 1.08, 2);
+  });
+
+  it("throws UnknownCurrencyError on an unknown code", () => {
+    expect(() => normalizeToUsd(10, "XYZ")).toThrow(UnknownCurrencyError);
   });
 });

@@ -155,6 +155,50 @@ const server = setupServer();
 beforeEach(() => server.listen({ onUnhandledRequest: "warn" }));
 afterEach(() => { server.resetHandlers(); server.close(); });
 
+describe("splitBuyerName (bug #27)", () => {
+  it("splits a two-word name into first + last", async () => {
+    const { splitBuyerName } = await import("./order-processor.js");
+    expect(splitBuyerName("Jane Doe")).toEqual({ firstName: "Jane", lastName: "Doe" });
+  });
+
+  it("treats trailing token as last, rest as first (Mary Anne Smith)", async () => {
+    const { splitBuyerName } = await import("./order-processor.js");
+    expect(splitBuyerName("Mary Anne Smith")).toEqual({
+      firstName: "Mary Anne",
+      lastName: "Smith",
+    });
+  });
+
+  it("single-word name duplicates into both fields (Cher)", async () => {
+    const { splitBuyerName } = await import("./order-processor.js");
+    expect(splitBuyerName("Cher")).toEqual({ firstName: "Cher", lastName: "Cher" });
+  });
+
+  it("preserves Unicode names", async () => {
+    const { splitBuyerName } = await import("./order-processor.js");
+    expect(splitBuyerName("José García")).toEqual({
+      firstName: "José",
+      lastName: "García",
+    });
+  });
+
+  it("preserves hyphenated last names", async () => {
+    const { splitBuyerName } = await import("./order-processor.js");
+    expect(splitBuyerName("Mary Smith-Jones")).toEqual({
+      firstName: "Mary",
+      lastName: "Smith-Jones",
+    });
+  });
+
+  it("collapses extra whitespace", async () => {
+    const { splitBuyerName } = await import("./order-processor.js");
+    expect(splitBuyerName("  Jane   Doe  ")).toEqual({
+      firstName: "Jane",
+      lastName: "Doe",
+    });
+  });
+});
+
 describe("processOrder", () => {
   let savedEnv: NodeJS.ProcessEnv;
 
@@ -264,6 +308,34 @@ describe("processOrder", () => {
     const arg = errorUpdate![0] as Record<string, unknown>;
     expect(arg?.["status"]).toBe("received");
   }, 20000);
+
+  it("persists buyer currency and normalizes sale_price_usd (bug #28)", async () => {
+    vi.doMock("@presswork/shared", async () => ({
+      ...(await import("@presswork/shared")),
+      getReceipt: vi.fn().mockResolvedValue({
+        ...RECEIPT,
+        grandtotal: { amount: 2499, divisor: 100, currency_code: "EUR" },
+      }),
+      notifySlack: vi.fn(),
+    }));
+
+    server.use(
+      http.post("https://api.printify.com/v1/shops/shop-1/orders.json", () =>
+        HttpResponse.json({ id: "pf-eur-1" })
+      )
+    );
+
+    const { processOrder } = await import("./order-processor.js");
+    const db = makeDbMock();
+    await processOrder({ from: db.from } as never, "42");
+
+    const econUpdate = db.updateCalls.find((c) => "sale_price_usd" in c.data);
+    expect(econUpdate).toBeDefined();
+    // EUR 24.99 → USD via static rate (~$26.99)
+    expect(econUpdate!.data.currency_code).toBe("EUR");
+    expect(econUpdate!.data.sale_price).toBeCloseTo(24.99, 2);
+    expect(Number(econUpdate!.data.sale_price_usd)).toBeGreaterThan(24.99);
+  });
 
   it("recovers from a crash between INSERT and Printify (bug #5)", async () => {
     vi.doMock("@presswork/shared", async () => ({

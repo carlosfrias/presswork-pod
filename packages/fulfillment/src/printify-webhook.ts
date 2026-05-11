@@ -3,6 +3,52 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { type Db, getLogger, getSettings, printifyFetch, submitTracking, normalizeEtsyCarrierName, notifySlack } from "@presswork/shared";
 
+// Known Printify order status values per their docs. Unknown values fall
+// through to the schema's catch (see PrintifyOrderStatusSchema below) so they
+// can be ignored by the webhook handler without corrupting our DB.
+export const PRINTIFY_ORDER_STATUSES = [
+  "pending",
+  "on-hold",
+  "checking-quality",
+  "quality-declined",
+  "payment-not-received",
+  "callback-received",
+  "ready-for-production",
+  "sending-to-production",
+  "in-production",
+  "canceled",
+  "fulfilled",
+  "partially-fulfilled",
+  "shipped",
+  "delivered",
+  "on-the-way",
+  "available-for-pickup",
+  "picked-up",
+  "returned",
+  "having-issues",
+] as const;
+
+const PrintifyOrderStatusSchema = z
+  .enum(PRINTIFY_ORDER_STATUSES)
+  .catch("__unknown__" as never);
+
+// Translation: Printify status → our orders.status state machine.
+// Anything not in this map leaves our DB row untouched so an unexpected value
+// from Printify can't drive the row outside its documented states.
+const PRINTIFY_TO_INTERNAL_STATUS: Record<string, "submitted" | "shipped" | "error"> = {
+  "ready-for-production": "submitted",
+  "sending-to-production": "submitted",
+  "in-production": "submitted",
+  "fulfilled": "shipped",
+  "shipped": "shipped",
+  "on-the-way": "shipped",
+  "delivered": "shipped",
+  "canceled": "error",
+  "quality-declined": "error",
+  "having-issues": "error",
+  "returned": "error",
+};
+
 // Minimal webhook payload — only fields we act on
 const PrintifyWebhookPayloadSchema = z.object({
   type: z.string(),
@@ -11,7 +57,7 @@ const PrintifyWebhookPayloadSchema = z.object({
     type: z.string(),
     data: z.object({
       id: z.string(), // Printify order ID
-      status: z.string().optional(),
+      status: PrintifyOrderStatusSchema.optional(),
       shipments: z
         .array(
           z.object({
@@ -156,6 +202,11 @@ export async function handlePrintifyWebhook(
           tracking_code: shipment.number,
           carrier_name: normalizedCarrier,
         });
+        // Mark Etsy delivery so the tracking_poller doesn't re-attempt this row.
+        await db
+          .from("orders")
+          .update({ etsy_tracking_submitted_at: new Date().toISOString() })
+          .eq("id", order.id);
       } catch (err) {
         log.error({
           agent: "fulfillment",
@@ -173,21 +224,42 @@ export async function handlePrintifyWebhook(
       tracking: shipment.number,
     });
   } else if (eventType === "order:updated") {
-    const newStatus = payload.resource.data.status;
+    const rawStatus = payload.resource.data.status;
 
-    // Idempotency: status unchanged
-    if (!newStatus || order.status === newStatus) {
+    // Unknown / missing status: log and skip rather than overwrite our DB with
+    // an undocumented value (bug #29). Treat as a no-op success since Printify
+    // re-deliveries with the same payload would loop forever otherwise.
+    if (!rawStatus || rawStatus === ("__unknown__" as string)) {
+      log.warn({
+        agent: "fulfillment",
+        action: "printify_webhook_unknown_status",
+        record_id: order.id,
+      });
+      res.status(200).json({ ok: true, skipped: "unknown_status" });
+      return;
+    }
+
+    const internalStatus = PRINTIFY_TO_INTERNAL_STATUS[rawStatus];
+    if (!internalStatus) {
+      // Known Printify value that doesn't have a meaningful mapping (e.g.
+      // "pending", "on-hold") — keep our state machine where it is.
+      res.status(200).json({ ok: true, skipped: "no_internal_mapping" });
+      return;
+    }
+
+    if (order.status === internalStatus) {
       res.status(200).json({ ok: true, skipped: "status_unchanged" });
       return;
     }
 
-    await db.from("orders").update({ status: newStatus }).eq("id", order.id);
+    await db.from("orders").update({ status: internalStatus }).eq("id", order.id);
 
     log.info({
       agent: "fulfillment",
       action: "printify_webhook_status_updated",
       record_id: order.id,
-      new_status: newStatus,
+      printify_status: rawStatus,
+      new_status: internalStatus,
     });
   }
 
@@ -197,6 +269,14 @@ export async function handlePrintifyWebhook(
 // ── Bootstrap ──────────────────────────────────────────────────────────────────
 
 const WEBHOOK_TOPICS = ["order:updated", "order:shipment:created"] as const;
+
+const PrintifyWebhookSubscriptionSchema = z.object({
+  id: z.string(),
+  topic: z.string(),
+  url: z.string(),
+});
+const PrintifyWebhookSubscriptionListSchema = z.array(PrintifyWebhookSubscriptionSchema);
+const PrintifyWebhookCreateResponseSchema = z.object({ id: z.string() });
 
 export async function registerPrintifyWebhooks(db: Db): Promise<void> {
   const log = getLogger("fulfillment");
@@ -213,23 +293,59 @@ export async function registerPrintifyWebhooks(db: Db): Promise<void> {
 
   const targetUrl = `${PRINTIFY_WEBHOOK_BASE_URL}/webhook/printify-order`;
 
-  const existing = (await printifyFetch(
-    `/shops/${PRINTIFY_SHOP_ID}/webhooks.json`
-  )) as Array<{ topic: string; url: string; id: string }>;
+  // Zod-validate the list response so an unexpected shape fails loudly rather
+  // than silently treating malformed entries as "already registered".
+  const rawExisting = await printifyFetch(`/shops/${PRINTIFY_SHOP_ID}/webhooks.json`);
+  const existing = PrintifyWebhookSubscriptionListSchema.parse(rawExisting);
 
   for (const topic of WEBHOOK_TOPICS) {
-    if (existing.some((w) => w.topic === topic && w.url === targetUrl)) {
+    const matches = existing.filter((w) => w.topic === topic);
+    const stale = matches.filter((w) => w.url !== targetUrl);
+    const live = matches.find((w) => w.url === targetUrl);
+
+    // Delete any stale subscriptions for this topic before creating a new one.
+    // Without this, changing PRINTIFY_WEBHOOK_BASE_URL leaves dead URLs
+    // subscribed at Printify forever.
+    for (const s of stale) {
+      try {
+        await printifyFetch(`/shops/${PRINTIFY_SHOP_ID}/webhooks/${s.id}.json`, {
+          method: "DELETE",
+        });
+        await db
+          .from("config")
+          .delete()
+          .eq("key", `printify_webhook_id_${topic}`);
+        log.info({
+          agent: "fulfillment",
+          action: "printify_webhook_stale_deleted",
+          topic,
+          stale_id: s.id,
+          stale_url: s.url,
+        });
+      } catch (err) {
+        log.warn({
+          agent: "fulfillment",
+          action: "printify_webhook_stale_delete_failed",
+          topic,
+          stale_id: s.id,
+          error: String(err),
+        });
+      }
+    }
+
+    if (live) {
       log.info({ agent: "fulfillment", action: "printify_webhook_already_registered", topic });
       continue;
     }
 
-    const created = (await printifyFetch(
+    const rawCreated = await printifyFetch(
       `/shops/${PRINTIFY_SHOP_ID}/webhooks.json`,
       {
         method: "POST",
         body: JSON.stringify({ topic, url: targetUrl, secret: PRINTIFY_WEBHOOK_SECRET }),
       }
-    )) as { id: string };
+    );
+    const created = PrintifyWebhookCreateResponseSchema.parse(rawCreated);
 
     try {
       await db

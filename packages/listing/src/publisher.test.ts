@@ -122,6 +122,10 @@ function makeDb(updates: CaptureEntry[], opts: DbMockOpts = {}) {
         error: null,
       };
     }
+    // resumePublish reads a multi-column row; fall through to existingListing.
+    if (currentSelectCols.startsWith("status,") && opts.existingListing) {
+      return { data: opts.existingListing, error: null };
+    }
     return { data: { id: LISTING_ID }, error: null };
   });
 
@@ -558,6 +562,71 @@ describe("publishOne", () => {
     const { publishOne } = await import("./publisher.js");
     await publishOne(db, design, brief);
 
+    expect(createDraftListing).not.toHaveBeenCalled();
+  });
+
+  it("second-pass validateProductionPartnerId throws if partner ID is cleared mid-flow (bug #37)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+
+    // Resume via resumePublish drives executeEtsyPublish directly. We mock
+    // getSettings to return a valid partner ID for the SELECT-then-publish
+    // setup, then null it just before the inner validateProductionPartnerId
+    // re-check fires. The second-pass validator must throw.
+    let partnerId: number | null = PARTNER_ID;
+    const createDraftListing = vi.fn().mockResolvedValue({
+      listing_id: 777,
+      state: "draft",
+      title: COMPLIANT_TITLE,
+    });
+
+    vi.doMock("@presswork/shared", async () => {
+      const actual = await vi.importActual<typeof import("@presswork/shared")>("@presswork/shared");
+      return {
+        ...actual,
+        createDraftListing,
+        uploadListingImage: vi.fn().mockResolvedValue(undefined),
+        activateListing: vi.fn().mockResolvedValue(undefined),
+        getTaxonomyId: vi.fn().mockResolvedValue(68887043),
+        getSettings: vi.fn(() => ({
+          HUMAN_REVIEW_ENABLED: false,
+          ETSY_SHIPPING_PROFILE_ID: 99,
+          ETSY_READINESS_STATE_ID: 42,
+          ETSY_PRODUCTION_PARTNER_ID: partnerId,
+        })),
+        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn() }),
+      };
+    });
+
+    const db = makeDb([], {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending_publish",
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+        price_usd: 24.99,
+        printify_product_id: "existing-product-xyz",
+        is_active: false,
+        retry_count: 0,
+      },
+    });
+
+    const { resumePublish } = await import("./publisher.js");
+    const { ComplianceError } = await import("./compliance.js");
+
+    // Clear the partner ID so the second-pass check inside executeEtsyPublish
+    // fires. This simulates a config drift between publishOne's outer check
+    // and the inner one before Etsy is contacted.
+    partnerId = null;
+
+    await expect(resumePublish(db, LISTING_ID)).rejects.toThrow(ComplianceError);
     expect(createDraftListing).not.toHaveBeenCalled();
   });
 

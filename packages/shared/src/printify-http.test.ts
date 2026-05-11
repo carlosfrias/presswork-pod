@@ -144,7 +144,7 @@ describe("printifyFetch — 429 handling", () => {
     sleepSpy.mockRestore();
   });
 
-  it("exhausts 429 retries and throws after 3 retries", async () => {
+  it("exhausts 429 retries within the MAX_ATTEMPTS budget (bug #18)", async () => {
     let attempts = 0;
 
     server.use(
@@ -157,14 +157,66 @@ describe("printifyFetch — 429 handling", () => {
       })
     );
 
-    const { printifyFetch, _printifyTestHooks, PrintifyError } = await import("./printify-http.js");
+    const { printifyFetch, _printifyTestHooks, PrintifyError, MAX_ATTEMPTS } = await import(
+      "./printify-http.js"
+    );
 
     const sleepSpy = vi.spyOn(_printifyTestHooks, "sleep").mockResolvedValue(undefined);
 
     await expect(printifyFetch("/test-429-exhaust", { method: "POST" })).rejects.toThrow(PrintifyError);
-    // 1 initial + 3 retries = 4 total attempts
-    expect(attempts).toBe(4);
+    // Unified budget: exactly MAX_ATTEMPTS outgoing requests, no nested fan-out.
+    expect(attempts).toBe(MAX_ATTEMPTS);
 
+    sleepSpy.mockRestore();
+  });
+
+  it("mixed 429 + 5xx cascade stays within MAX_ATTEMPTS (bug #18)", async () => {
+    let attempts = 0;
+
+    server.use(
+      http.post("https://api.printify.com/v1/test-mixed", () => {
+        attempts++;
+        if (attempts === 1) return new HttpResponse("rate limited", { status: 429 });
+        return new HttpResponse("server error", { status: 500 });
+      })
+    );
+
+    const { printifyFetch, _printifyTestHooks, PrintifyError, MAX_ATTEMPTS } = await import(
+      "./printify-http.js"
+    );
+
+    const sleepSpy = vi.spyOn(_printifyTestHooks, "sleep").mockResolvedValue(undefined);
+
+    await expect(printifyFetch("/test-mixed", { method: "POST" })).rejects.toThrow(PrintifyError);
+    // Total attempts across both error types must respect the unified budget.
+    expect(attempts).toBe(MAX_ATTEMPTS);
+
+    sleepSpy.mockRestore();
+  });
+
+  it("caps an oversized Retry-After at 60s (bug #18)", async () => {
+    let attempts = 0;
+
+    server.use(
+      http.post("https://api.printify.com/v1/test-big-retry-after", () => {
+        attempts++;
+        if (attempts === 1) {
+          // 1 hour — must be capped
+          return new HttpResponse("rate limited", {
+            status: 429,
+            headers: { "Retry-After": "3600" },
+          });
+        }
+        return HttpResponse.json({ ok: true });
+      })
+    );
+
+    const { printifyFetch, _printifyTestHooks } = await import("./printify-http.js");
+    const sleepSpy = vi.spyOn(_printifyTestHooks, "sleep").mockResolvedValue(undefined);
+
+    await printifyFetch("/test-big-retry-after", { method: "POST" });
+
+    expect(sleepSpy).toHaveBeenCalledWith(60_000);
     sleepSpy.mockRestore();
   });
 });

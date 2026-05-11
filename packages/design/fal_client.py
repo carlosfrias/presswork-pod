@@ -1,5 +1,3 @@
-import os
-
 import fal_client
 import httpx
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
@@ -28,9 +26,12 @@ async def _download_image(url: str) -> bytes:
 
 async def generate_image(prompt: FluxPrompt) -> bytes:
     settings = get_settings()
-    os.environ["FAL_KEY"] = settings.fal_key
+    # Pass FAL_KEY explicitly to AsyncClient. Mutating os.environ on every call
+    # is not safe under concurrent coroutines and leaks the secret to any
+    # subprocess we spawn while a generation is in-flight.
+    client = fal_client.AsyncClient(key=settings.fal_key)
 
-    result = await fal_client.run_async(
+    result = await client.run(
         FLUX_MODEL,
         arguments={
             "prompt": prompt.prompt,

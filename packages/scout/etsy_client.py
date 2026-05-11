@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
+from aiolimiter import AsyncLimiter
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from packages.shared_py.config import get_settings
@@ -29,7 +30,10 @@ class EtsyClient:
         self._db = get_db()
         self._tokens: EtsyTokens = load_tokens(self._db)
         self._api_key: str = settings.etsy_api_key
-        self._semaphore = asyncio.Semaphore(5)
+        # Etsy's documented limit is 10 req/sec. AsyncLimiter caps actual rate
+        # (not concurrency) — the previous Semaphore(5) only limited in-flight
+        # requests, allowing bursts well above the API ceiling.
+        self._limiter = AsyncLimiter(10, 1)
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._tokens.access_token}"}
@@ -67,7 +71,7 @@ class EtsyClient:
         url: str,
         params: dict[str, Any],
     ) -> httpx.Response:
-        async with self._semaphore:
+        async with self._limiter:
             return await client.get(url, params=params, headers=self._headers())
 
     @retry(

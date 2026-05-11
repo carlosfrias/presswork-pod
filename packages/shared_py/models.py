@@ -38,8 +38,6 @@ class TrendBriefCreate(BaseModel):
 
 DesignPackageStatus = Literal["pending", "processing", "done", "error"]
 
-_FLUX_DISALLOW_LIST = ["banksy", "disney", "marvel", "nike", "supreme"]
-
 FLUX_REQUIRED_TERMS = [
     "print on demand design",
     "transparent background",
@@ -47,20 +45,18 @@ FLUX_REQUIRED_TERMS = [
     "vector-style",
 ]
 
+# Trademark/IP protection lives upstream (the copywriter system prompt in
+# packages/listing/src/copywriter.ts forbids names of artists, brands, living
+# people, and copyrighted characters) and downstream (validateCopyCompliance in
+# packages/listing/src/compliance.ts). A 5-name substring blocklist on the FLUX
+# prompt was theater — anything slightly creative would slip through it and a
+# substring match could over-trigger on legitimate words. Removed.
+
 
 class FluxPrompt(BaseModel):
     prompt: str
     negative_prompt: str | None = None
     style_descriptors: list[str]
-
-    @field_validator("prompt")
-    @classmethod
-    def no_banned_names(cls, v: str) -> str:
-        lower = v.lower()
-        for name in _FLUX_DISALLOW_LIST:
-            if name in lower:
-                raise ValueError(f"Prompt contains disallowed term: '{name}'")
-        return v
 
     @field_validator("prompt")
     @classmethod

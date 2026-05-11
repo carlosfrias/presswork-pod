@@ -88,6 +88,36 @@ describe("getReceipt", () => {
     expect(attempts).toBe(3);
   });
 
+  it("honors Retry-After on 429 (bug #17)", async () => {
+    vi.doMock("./etsy-auth.js", () => ({
+      getValidAccessToken: vi.fn().mockResolvedValue("test-token"),
+      EtsyAuthError: class EtsyAuthError extends Error {},
+    }));
+    let attempts = 0;
+    let firstAttemptAt = 0;
+    let secondAttemptAt = 0;
+    server.use(
+      http.get("https://openapi.etsy.com/v3/application/shops/99/receipts/42", () => {
+        attempts++;
+        if (attempts === 1) {
+          firstAttemptAt = Date.now();
+          return new HttpResponse("slow down", {
+            status: 429,
+            headers: { "Retry-After": "1" },
+          });
+        }
+        secondAttemptAt = Date.now();
+        return HttpResponse.json(RECEIPT_RESPONSE);
+      })
+    );
+    const { getReceipt } = await import("./etsy-api.js");
+    const receipt = await getReceipt({} as never, 42);
+    expect(receipt.receipt_id).toBe(42);
+    expect(attempts).toBe(2);
+    // Retry-After: 1s — second attempt must wait at least ~900ms after first.
+    expect(secondAttemptAt - firstAttemptAt).toBeGreaterThanOrEqual(900);
+  });
+
   it("surfaces 4xx (non-401, non-429) immediately without retrying", async () => {
     vi.doMock("./etsy-auth.js", () => ({
       getValidAccessToken: vi.fn().mockResolvedValue("test-token"),

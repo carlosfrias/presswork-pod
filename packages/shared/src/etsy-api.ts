@@ -12,10 +12,29 @@ export class EtsyApiError extends Error {
   }
 }
 
-// Shared limiter: 10 req/sec across all Etsy API wrappers
-const limiter = new Bottleneck({ maxConcurrent: 1, minTime: 100 });
+// Shared limiter: 8 req/sec across all Etsy API wrappers. Etsy's documented
+// ceiling is 10 req/sec; the headroom absorbs the token-refresh + create +
+// image-upload + activate burst that previously hit 429.
+const limiter = new Bottleneck({ maxConcurrent: 1, minTime: 125 });
 
-async function etsyFetch(db: Db, path: string, init: RequestInit = {}): Promise<unknown> {
+// Misbehaving servers can send wildly large Retry-After values. Cap so a
+// single 429 can't freeze the whole listing pipeline (single-concurrency).
+const MAX_RETRY_AFTER_MS = 60_000;
+
+function parseRetryAfter(header: string | null): number | null {
+  if (!header) return null;
+  const asInt = Number(header);
+  if (Number.isFinite(asInt) && asInt >= 0) {
+    return Math.min(asInt * 1000, MAX_RETRY_AFTER_MS);
+  }
+  const asDate = Date.parse(header);
+  if (Number.isFinite(asDate)) {
+    return Math.min(Math.max(asDate - Date.now(), 0), MAX_RETRY_AFTER_MS);
+  }
+  return null;
+}
+
+export async function etsyFetch(db: Db, path: string, init: RequestInit = {}): Promise<unknown> {
   const { ETSY_API_KEY } = getSettings();
 
   return limiter.schedule(() =>
@@ -37,6 +56,14 @@ async function etsyFetch(db: Db, path: string, init: RequestInit = {}): Promise<
           if (res.status !== 429 && res.status < 500) {
             bail(new EtsyApiError(`Etsy ${res.status}: ${body}`, res.status));
             return;
+          }
+          // Honor Retry-After on 429 (parity with the Printify client). Cap
+          // the wait so a runaway header can't stall the pipeline.
+          if (res.status === 429) {
+            const waitMs = parseRetryAfter(res.headers.get("Retry-After"));
+            if (waitMs !== null) {
+              await new Promise((r) => setTimeout(r, waitMs));
+            }
           }
           throw new EtsyApiError(`Etsy ${res.status}: ${body}`, res.status);
         }
@@ -178,6 +205,12 @@ async function etsyMultipartFetch(
           if (res.status !== 429 && res.status < 500) {
             bail(new EtsyApiError(`Etsy ${res.status}: ${body}`, res.status));
             return;
+          }
+          if (res.status === 429) {
+            const waitMs = parseRetryAfter(res.headers.get("Retry-After"));
+            if (waitMs !== null) {
+              await new Promise((r) => setTimeout(r, waitMs));
+            }
           }
           throw new EtsyApiError(`Etsy ${res.status}: ${body}`, res.status);
         }

@@ -16,10 +16,15 @@ export async function pollTracking(db: Db): Promise<PollTrackingResult> {
   const log = getLogger("fulfillment");
   const result: PollTrackingResult = { scanned: 0, shipped: 0, stillInProgress: 0, errored: 0 };
 
+  // Pick up two distinct cases:
+  //   (a) status='submitted' — normal "is it shipped yet?" poll.
+  //   (b) status='shipped' AND etsy_tracking_submitted_at IS NULL — webhook
+  //       flipped us to shipped but the Etsy tracking PATCH failed silently;
+  //       previously these rows were stranded.
   const { data: rows, error } = await db
     .from("orders")
-    .select("id, printify_order_id, etsy_order_id, retry_count")
-    .eq("status", "submitted")
+    .select("id, status, printify_order_id, etsy_order_id, retry_count")
+    .or("status.eq.submitted,and(status.eq.shipped,etsy_tracking_submitted_at.is.null)")
     .not("printify_order_id", "is", null);
 
   if (error) {
@@ -29,6 +34,7 @@ export async function pollTracking(db: Db): Promise<PollTrackingResult> {
 
   const orders = (rows ?? []) as Array<{
     id: string;
+    status: string;
     printify_order_id: string;
     etsy_order_id: string;
     retry_count: number;
@@ -41,15 +47,22 @@ export async function pollTracking(db: Db): Promise<PollTrackingResult> {
       const detail = await getOrder(order.printify_order_id);
 
       if (SHIPPED_STATUSES.has(detail.status) && detail.tracking) {
-        // Write tracking to DB
-        await db
-          .from("orders")
-          .update({
-            tracking_number: detail.tracking.number,
-            tracking_url: detail.tracking.url,
-            status: "shipped",
-          })
-          .eq("id", order.id);
+        // For status='submitted' rows: flip to 'shipped' and write tracking.
+        // For status='shipped' rows (re-attempting Etsy after a prior failure):
+        // leave status alone but refresh tracking fields with what Printify
+        // currently reports. Either way the local update is conditional —
+        // a concurrent webhook can't race with us here.
+        if (order.status === "submitted") {
+          await db
+            .from("orders")
+            .update({
+              tracking_number: detail.tracking.number,
+              tracking_url: detail.tracking.url,
+              status: "shipped",
+            })
+            .eq("id", order.id)
+            .eq("status", "submitted");
+        }
 
         // Post tracking back to Etsy (normalize carrier to Etsy's accepted enum)
         const normalizedCarrier = normalizeEtsyCarrierName(detail.tracking.carrier);
@@ -69,6 +82,12 @@ export async function pollTracking(db: Db): Promise<PollTrackingResult> {
             tracking_code: detail.tracking.number,
             carrier_name: normalizedCarrier,
           });
+          // Mark Etsy as having received the tracking so the poller does not
+          // re-fire for this row on every subsequent run (bug #30).
+          await db
+            .from("orders")
+            .update({ etsy_tracking_submitted_at: new Date().toISOString() })
+            .eq("id", order.id);
         }
 
         log.info({

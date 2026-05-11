@@ -28,9 +28,15 @@ def mock_settings(mocker):
 @pytest.fixture()
 def mock_fal_run(mocker):
     result = {"images": [{"url": _FAKE_IMAGE_URL}]}
-    mock = AsyncMock(return_value=result)
-    mocker.patch("packages.design.fal_client.fal_client.run_async", mock)
-    return mock
+    run_mock = AsyncMock(return_value=result)
+    client_instance = MagicMock()
+    client_instance.run = run_mock
+    # Capture the AsyncClient constructor so tests can assert key= was passed.
+    ctor = MagicMock(return_value=client_instance)
+    mocker.patch("packages.design.fal_client.fal_client.AsyncClient", ctor)
+    # Expose both for assertions
+    run_mock._ctor = ctor
+    return run_mock
 
 
 @respx.mock
@@ -53,12 +59,27 @@ async def test_fal_run_called_with_correct_args(mock_fal_run):
     respx.get(_FAKE_IMAGE_URL).mock(return_value=httpx.Response(200, content=_FAKE_PNG))
     await generate_image(_PROMPT)
     mock_fal_run.assert_called_once()
-    _, kwargs = mock_fal_run.call_args
     args_positional = mock_fal_run.call_args.args
-    call_model = args_positional[0] if args_positional else mock_fal_run.call_args.args[0]
+    call_model = args_positional[0]
     assert call_model == FLUX_MODEL
-    call_args = mock_fal_run.call_args.kwargs.get("arguments") or mock_fal_run.call_args.args[1]
+    call_args = mock_fal_run.call_args.kwargs.get("arguments") or args_positional[1]
     assert call_args["output_format"] == "png"
     assert call_args["safety_tolerance"] == "2"
     assert call_args["num_images"] == 1
     assert call_args["image_size"] == FLUX_IMAGE_SIZE
+
+
+@respx.mock
+async def test_fal_key_passed_to_client_no_environ_mutation(mock_fal_run, monkeypatch):
+    """Bug #24: FAL_KEY threaded explicitly; os.environ['FAL_KEY'] never set."""
+    import os
+
+    monkeypatch.delenv("FAL_KEY", raising=False)
+
+    respx.get(_FAKE_IMAGE_URL).mock(return_value=httpx.Response(200, content=_FAKE_PNG))
+    await generate_image(_PROMPT)
+
+    # AsyncClient(key=...) called exactly once with the settings.fal_key value
+    mock_fal_run._ctor.assert_called_once_with(key="test-fal-key")
+    # And no global state mutation
+    assert os.environ.get("FAL_KEY") is None

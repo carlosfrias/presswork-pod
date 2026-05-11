@@ -1,7 +1,7 @@
 import { type Db, getLogger, getSettings, notifySlack } from "@presswork/shared";
 import * as etsyApi from "@presswork/shared";
 import { createOrder } from "./printify-orders.js";
-import { computeEtsyFees, lookupPrintCost } from "./economics.js";
+import { computeEtsyFees, lookupPrintCost, normalizeToUsd } from "./economics.js";
 import { MAX_RETRIES } from "./constants.js";
 
 export type ProcessOrderOutcome = "created" | "duplicate" | "error";
@@ -57,8 +57,14 @@ export async function processOrder(
     log.info({ agent: "fulfillment", action: "fetch_receipt", record_id: orderId, status: "started" });
     const receipt = await etsyApi.getReceipt(db, etsyReceiptId);
 
-    const salePriceUsd =
+    // Receipt.grandtotal.amount/divisor is in the BUYER's currency. Previously
+    // we wrote this raw value into sale_price_usd which corrupted economics
+    // for any non-USD buyer. Now we persist both: sale_price in the buyer's
+    // currency + sale_price_usd normalized via the static USD_RATES table.
+    const salePrice =
       receipt.grandtotal.amount / receipt.grandtotal.divisor;
+    const currencyCode = receipt.grandtotal.currency_code;
+    const salePriceUsd = normalizeToUsd(salePrice, currencyCode);
 
     // Step 3: resolve listing → design_package for the first line item
     const firstItem = receipt.transactions[0];
@@ -114,7 +120,9 @@ export async function processOrder(
       .from("orders")
       .update({
         listing_id: (listingRow as { id: string }).id,
+        sale_price: salePrice,
         sale_price_usd: salePriceUsd,
+        currency_code: currencyCode,
         etsy_fees_usd: etsyFeesUsd,
         print_cost_usd: printCostUsd,
         buyer_country: receipt.country_iso,
@@ -158,8 +166,7 @@ export async function processOrder(
       etsyReceiptId,
       lineItems: resolvedLineItems,
       address: {
-        firstName: receipt.name.split(" ")[0] ?? receipt.name,
-        lastName: receipt.name.split(" ").slice(1).join(" ") || receipt.name,
+        ...splitBuyerName(receipt.name),
         email: receipt.buyer_email ?? "",
         address1: receipt.first_line,
         ...(receipt.second_line ? { address2: receipt.second_line } : {}),
@@ -210,6 +217,28 @@ export async function processOrder(
     log.error({ agent: "fulfillment", action: "process_order", record_id: orderId, status: "error", duration_ms: Date.now() - t0, error: message });
     return { orderId, outcome: "error", error: message };
   }
+}
+
+// Split a single-field buyer name into Printify's required firstName/lastName.
+// Last whitespace-separated token becomes lastName, everything else firstName.
+// Single-word names duplicate into both fields — Printify rejects empty
+// lastName, and that's the least bad option carriers accept.
+//
+//   "Mary Anne Smith" → first="Mary Anne",  last="Smith"
+//   "Cher"            → first="Cher",       last="Cher"
+//   "José García"     → first="José",       last="García"
+//   "  spaced  out  " → first="spaced",     last="out"
+export function splitBuyerName(name: string): { firstName: string; lastName: string } {
+  const tokens = name.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) {
+    return { firstName: name, lastName: name };
+  }
+  if (tokens.length === 1) {
+    return { firstName: tokens[0]!, lastName: tokens[0]! };
+  }
+  const lastName = tokens[tokens.length - 1]!;
+  const firstName = tokens.slice(0, -1).join(" ");
+  return { firstName, lastName };
 }
 
 // Map a receipt transaction's variations (size/color) onto the right Printify

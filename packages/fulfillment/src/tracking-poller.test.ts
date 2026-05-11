@@ -30,23 +30,55 @@ beforeEach(() => server.listen({ onUnhandledRequest: "warn" }));
 afterEach(() => { server.resetHandlers(); server.close(); });
 
 function makeDbMock(opts: {
-  orders: Array<{ id: string; printify_order_id: string; etsy_order_id: string; retry_count: number }>;
+  orders: Array<{
+    id: string;
+    status?: string;
+    printify_order_id: string;
+    etsy_order_id: string;
+    retry_count: number;
+  }>;
 }) {
-  const updateEq = vi.fn().mockResolvedValue({ error: null });
-  const updateMock = vi.fn().mockReturnValue({ eq: updateEq });
-
-  const selectResult = {
-    eq: vi.fn().mockReturnValue({
-      not: vi.fn().mockResolvedValue({ data: opts.orders, error: null }),
-    }),
+  // Update returns a chain that can take any number of .eq(...) filters and
+  // ultimately resolves. Captures the filters for assertions.
+  type UpdateCall = { data: Record<string, unknown>; filters: Array<[string, unknown]> };
+  const updateCalls: UpdateCall[] = [];
+  type Chain = {
+    eq: ReturnType<typeof vi.fn>;
+    then: (resolve: (v: { error: null }) => void) => void;
   };
+  const updateMock = vi.fn().mockImplementation((data: Record<string, unknown>) => {
+    const entry: UpdateCall = { data, filters: [] };
+    updateCalls.push(entry);
+    const chain: Chain = {
+      eq: vi.fn(),
+      then: (resolve: (v: { error: null }) => void) => resolve({ error: null }),
+    };
+    chain.eq.mockImplementation((col: string, val: unknown) => {
+      entry.filters.push([col, val]);
+      return chain;
+    });
+    return chain;
+  });
+
+  // Default: orders default to status='submitted' so existing tests behave
+  // identically to before. The new shipped+unsent test seeds status='shipped'.
+  const ordersWithStatus = opts.orders.map((o) => ({ status: "submitted", ...o }));
 
   const fromMock = vi.fn(() => ({
-    select: vi.fn().mockReturnValue(selectResult),
+    select: vi.fn().mockReturnValue({
+      // New code path: .select().or().not() returns rows.
+      or: vi.fn().mockReturnValue({
+        not: vi.fn().mockResolvedValue({ data: ordersWithStatus, error: null }),
+      }),
+      // Legacy path retained in case anything still wires through .eq().not().
+      eq: vi.fn().mockReturnValue({
+        not: vi.fn().mockResolvedValue({ data: ordersWithStatus, error: null }),
+      }),
+    }),
     update: updateMock,
   }));
 
-  return { from: fromMock, updateMock, updateEq };
+  return { from: fromMock, updateMock, updateCalls };
 }
 
 describe("pollTracking", () => {
@@ -170,6 +202,94 @@ describe("pollTracking", () => {
     // Row is still counted as shipped (DB update happened before normalization)
     expect(stats.shipped).toBe(1);
     expect(stats.errored).toBe(0);
+  });
+
+  it("conditional UPDATE includes WHERE status='submitted' (bug #34 race guard)", async () => {
+    vi.doMock("@presswork/shared", async () => ({
+      ...(await import("@presswork/shared")),
+      getValidAccessToken: vi.fn().mockResolvedValue("token"),
+      submitTracking: vi.fn().mockResolvedValue(undefined),
+      notifySlack: vi.fn(),
+    }));
+
+    server.use(
+      http.get("https://api.printify.com/v1/shops/shop-1/orders/pf-1.json", () =>
+        HttpResponse.json({
+          id: "pf-1",
+          status: "shipped",
+          shipments: [{ carrier: "USPS", number: "1Z999", url: "" }],
+        })
+      )
+    );
+
+    const db = makeDbMock({
+      orders: [
+        { id: "order-1", status: "submitted", printify_order_id: "pf-1", etsy_order_id: "receipt-1", retry_count: 0 },
+      ],
+    });
+
+    const { pollTracking } = await import("./tracking-poller.js");
+    await pollTracking({ from: db.from } as never);
+
+    // The flip-to-shipped update must carry both id and status filters.
+    const flipCall = db.updateCalls.find((c) => c.data["status"] === "shipped");
+    expect(flipCall).toBeDefined();
+    expect(flipCall!.filters).toEqual(
+      expect.arrayContaining([
+        ["id", "order-1"],
+        ["status", "submitted"],
+      ])
+    );
+  });
+
+  it("re-submits Etsy tracking for shipped+unsent rows without flipping status (bug #30)", async () => {
+    const submitTrackingMock = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("@presswork/shared", async () => ({
+      ...(await import("@presswork/shared")),
+      getValidAccessToken: vi.fn().mockResolvedValue("token"),
+      submitTracking: submitTrackingMock,
+      notifySlack: vi.fn(),
+    }));
+
+    server.use(
+      http.get("https://api.printify.com/v1/shops/shop-1/orders/pf-1.json", () =>
+        HttpResponse.json({
+          id: "pf-1",
+          status: "shipped",
+          shipments: [{ carrier: "USPS", number: "1Z999", url: "https://usps.com/1Z999" }],
+        })
+      )
+    );
+
+    const db = makeDbMock({
+      orders: [
+        {
+          id: "order-1",
+          status: "shipped", // already shipped per the webhook; Etsy submission failed previously
+          printify_order_id: "pf-1",
+          etsy_order_id: "receipt-1",
+          retry_count: 0,
+        },
+      ],
+    });
+
+    const { pollTracking } = await import("./tracking-poller.js");
+    const stats = await pollTracking({ from: db.from } as never);
+
+    expect(stats.shipped).toBe(1);
+    expect(submitTrackingMock).toHaveBeenCalledTimes(1);
+
+    // No update should write status='shipped' again — row is already there.
+    const statusUpdates = db.updateCalls.filter(
+      (c) => c.data["status"] === "shipped"
+    );
+    expect(statusUpdates).toHaveLength(0);
+
+    // But etsy_tracking_submitted_at must be set after the successful PATCH.
+    const markUpdates = db.updateCalls.filter(
+      (c) => "etsy_tracking_submitted_at" in c.data
+    );
+    expect(markUpdates).toHaveLength(1);
   });
 
   it("Printify cancelled status: row → error, Slack alert fired", async () => {

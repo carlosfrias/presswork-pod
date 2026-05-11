@@ -52,7 +52,7 @@ export function validateNoForbiddenTerms(text: string): void {
 export function validateNoOffPlatform(text: string): void {
   if (EXTERNAL_URL_PATTERN.test(text)) {
     throw new ComplianceError(
-      "Etsy off-platform policy: listing copy contains an external URL"
+      "Etsy off-platform policy: listing copy contains an external URL or bare domain"
     );
   }
   if (SOCIAL_HANDLE_PATTERN.test(text)) {
@@ -60,8 +60,16 @@ export function validateNoOffPlatform(text: string): void {
       "Etsy off-platform policy: listing copy contains a social handle (@...)"
     );
   }
-  const lower = text.toLowerCase();
-  const phraseHits = OFF_PLATFORM_PHRASES.filter((p) => lower.includes(p));
+  // Word-boundary match — substring on lowercased text used to fire on benign
+  // substrings (e.g. "find us on" matching inside "find user solutions on").
+  // Reuses the same boundary helper that validateNoForbiddenTerms uses.
+  const phraseHits = OFF_PLATFORM_PHRASES.filter((p) => {
+    const pattern = new RegExp(
+      `(?:^|[^A-Za-z0-9])${escapeRegex(p)}(?=$|[^A-Za-z0-9])`,
+      "i"
+    );
+    return pattern.test(text);
+  });
   if (phraseHits.length > 0) {
     throw new ComplianceError(
       `Etsy off-platform policy: listing copy contains forbidden phrase(s): ${phraseHits.join(", ")}`

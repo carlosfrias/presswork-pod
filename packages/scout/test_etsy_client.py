@@ -50,27 +50,20 @@ async def test_happy_path():
 
 
 @respx.mock
-async def test_rate_limit_max_5_concurrent():
-    """10 simultaneous calls must never exceed 5 in-flight at once."""
-    peak = 0
-    current = 0
-    lock = asyncio.Lock()
+async def test_rate_limited_to_10_per_second():
+    """Bug #19: limiter must cap rate (not just concurrency). 20 calls at
+    10 req/s should take at least ~1 second total wall-clock."""
+    import time
 
-    async def counting_handler(request: httpx.Request) -> httpx.Response:
-        nonlocal peak, current
-        async with lock:
-            current += 1
-            if current > peak:
-                peak = current
-        await asyncio.sleep(0.05)
-        async with lock:
-            current -= 1
-        return httpx.Response(200, json={"results": []})
-
-    respx.get(_LISTINGS_URL).mock(side_effect=counting_handler)
+    respx.get(_LISTINGS_URL).mock(
+        return_value=httpx.Response(200, json={"results": []})
+    )
     client = EtsyClient()
-    await asyncio.gather(*[client.fetch_top_listings(f"niche-{i}") for i in range(10)])
-    assert peak <= 5
+    t0 = time.monotonic()
+    await asyncio.gather(*[client.fetch_top_listings(f"niche-{i}") for i in range(20)])
+    elapsed = time.monotonic() - t0
+    # 20 calls / 10 rps → at least ~1.0s. Give some slack for scheduling jitter.
+    assert elapsed >= 0.9, f"Expected ≥0.9s for 20 calls at 10 rps, got {elapsed:.2f}s"
 
 
 @respx.mock

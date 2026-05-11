@@ -137,6 +137,51 @@ describe("validateNoOffPlatform", () => {
   it("rejects 'instagram.com' domain mention", () => {
     expect(() => validateNoOffPlatform("we are at instagram.com/x")).toThrow(ComplianceError);
   });
+
+  // bug #21 — emails must NOT trigger SOCIAL_HANDLE_PATTERN
+  it("does not reject a benign email address (bug #21)", () => {
+    expect(() =>
+      validateNoOffPlatform("contact me at help@example.org for questions")
+    ).not.toThrow();
+  });
+
+  it("still rejects an @handle preceded by whitespace", () => {
+    expect(() =>
+      validateNoOffPlatform("find me at @mystore for updates")
+    ).toThrow(ComplianceError);
+  });
+
+  // bug #22 — word-boundary off-platform phrases
+  it("does not falsely match 'find us on' inside 'find user solutions on' (bug #22)", () => {
+    expect(() =>
+      validateNoOffPlatform("we can help you find user solutions on the platform")
+    ).not.toThrow();
+  });
+
+  it("rejects 'find us on' as a phrase (bug #22)", () => {
+    expect(() =>
+      validateNoOffPlatform("find us on instagram for more cat designs")
+    ).toThrow(ComplianceError);
+  });
+
+  // bug #23 — bare domains
+  it("rejects a bare domain like mystore.com (bug #23)", () => {
+    expect(() =>
+      validateNoOffPlatform("buy at mystore.com to skip Etsy fees")
+    ).toThrow(ComplianceError);
+  });
+
+  it("rejects a bare domain with subdomain + path like linktr.ee/x (bug #23)", () => {
+    expect(() =>
+      validateNoOffPlatform("more at linktr.ee/x")
+    ).toThrow(ComplianceError);
+  });
+
+  it("does not falsely match version-like strings (bug #23)", () => {
+    expect(() =>
+      validateNoOffPlatform("v1.2 of our soft cotton tee")
+    ).not.toThrow();
+  });
 });
 
 describe("validateProductionPartnerId", () => {

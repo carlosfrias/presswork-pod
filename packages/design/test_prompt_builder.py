@@ -81,11 +81,16 @@ def test_valid_response_parses_to_flux_prompt(mocker):
     assert result.style_descriptors == ["minimalist", "nature", "warm tones"]
 
 
-def test_banned_artist_name_raises_validation_error(mocker):
+# Bug #25: the FluxPrompt no_banned_names validator was removed (theater — a
+# 5-name substring blocklist could not credibly police IP). Compliance is now
+# enforced by the copywriter system prompt and validateCopyCompliance, both
+# downstream. This test is intentionally left in place as a marker.
+def test_banned_artist_name_passes_through_at_flux_level(mocker):
     bad = {**_VALID_PROMPT, "prompt": _VALID_PROMPT["prompt"] + " banksy style"}
     _mock_client(mocker, json.dumps(bad))
-    with pytest.raises(ValidationError, match="disallowed term"):
-        build_flux_prompt(_SAMPLE_BRIEF)
+    # No longer raises at the FluxPrompt model boundary; compliance is enforced
+    # upstream (copywriter) and downstream (validateCopyCompliance).
+    build_flux_prompt(_SAMPLE_BRIEF)
 
 
 def test_missing_required_flux_term_raises_validation_error(mocker):
