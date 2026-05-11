@@ -19,7 +19,7 @@ def _is_service_role_key(key: str) -> bool:
             payload_b64 += "=" * padding
         payload = json.loads(base64.urlsafe_b64decode(payload_b64))
         return payload.get("role") == "service_role"
-    except Exception:
+    except (IndexError, ValueError, UnicodeDecodeError, json.JSONDecodeError):
         return False
 
 
@@ -32,4 +32,4 @@ def get_db() -> Client:
             "SUPABASE_SERVICE_ROLE_KEY does not appear to be a service role key. "
             "Check that you are not using the anon key."
         )
-    return create_client(settings.supabase_url, key)
+    return create_client(str(settings.supabase_url), key)

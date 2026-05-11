@@ -8,6 +8,12 @@ from pydantic import BaseModel, Field, field_validator
 
 TrendBriefStatus = Literal["pending", "processing", "done", "error"]
 
+# Classification used by Design to choose prompt phrasing and image post-processing.
+# 'screen_print' triggers an interior-whitespace strip after rembg so the negative
+# space inside a single-ink design becomes transparent (lets shirt color show through).
+# NULL is treated as 'full_color' (legacy rows).
+PrintStyle = Literal["full_color", "screen_print"]
+
 
 class TrendBrief(BaseModel):
     id: UUID
@@ -19,6 +25,7 @@ class TrendBrief(BaseModel):
     top_tags: list[str] | None = None
     price_target_usd: float | None = None
     color_palette: list[str] | None = None
+    print_style: PrintStyle | None = None
     raw_etsy_data: Any | None = None
     claude_analysis: Any | None = None
     error_message: str | None = None
@@ -32,6 +39,7 @@ class TrendBriefCreate(BaseModel):
     top_tags: list[str] | None = None
     price_target_usd: float | None = None
     color_palette: list[str] | None = None
+    print_style: PrintStyle | None = None
     raw_etsy_data: Any | None = None
     claude_analysis: Any | None = None
 
@@ -132,6 +140,7 @@ class ClaudeAnalysis(BaseModel):
     top_tags: list[str] = Field(..., max_length=13)
     price_target_usd: float
     color_palette: list[str]
+    print_style: PrintStyle
 
     @field_validator("top_tags")
     @classmethod

@@ -14,8 +14,19 @@ Respond ONLY with valid JSON matching this schema:
   "style_keywords": [str],  // aesthetic descriptors, NOT brand names
   "top_tags": [str],        // 13 max, Etsy tag format
   "price_target_usd": float,
-  "color_palette": [str]    // hex or color names
+  "color_palette": [str],   // hex or color names
+  "print_style": "screen_print" | "full_color"
 }
+print_style classification rules:
+- "screen_print" when the niche/style signals a one-color, single-ink design:
+  vinyl decal, screen-print tee, bold silhouette, vintage typography, retro
+  varsity, line-art logo, monochrome graphic, sticker-style sticker pack. These
+  designs print as one solid ink color with no gradients or shading.
+- "full_color" when the niche signals photographic, watercolor, painterly,
+  multi-color illustration, gradient, or any design that needs tonal range
+  (e.g. watercolor florals, photo-realistic pets, full-color cartoons).
+- When in doubt, choose "full_color" — it is the safer default and matches the
+  current pipeline's existing behavior.
 Never reference specific shop names, artist names, or existing IP."""
 
 

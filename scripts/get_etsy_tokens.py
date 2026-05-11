@@ -76,6 +76,7 @@ def _exchange(api_key: str, verifier: str, code: str) -> dict:
             "code": code,
             "code_verifier": verifier,
         },
+        timeout=30,
     )
     resp.raise_for_status()
     return resp.json()

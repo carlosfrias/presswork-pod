@@ -33,3 +33,34 @@ export function printifyVariantPriceCents(blueprintId: number): number {
     PRINTIFY_VARIANT_PRICE_FALLBACK_CENTS
   );
 }
+
+// Canonical (blueprint_id → print_provider_id) pairing. Printify variant IDs are
+// scoped to a (blueprint, provider) pair — sending a mismatched pair returns a
+// silent 4xx. Migration 008 backfilled provider=3 only for blueprint 145, so
+// any new blueprint added in Design without a row here would write NULL to
+// design_packages.printify_print_provider_id. Migration 014's CHECK catches
+// that at the DB; this map catches it earlier with an actionable error.
+//
+// To support a new blueprint: add the entry here AND have Design write the
+// matching provider_id when inserting the design row.
+const PRINTIFY_BLUEPRINT_PROVIDERS: Record<number, number> = {
+  // Gildan 64000 Softstyle Unisex T-Shirt → Marco Fine Arts
+  145: 3,
+};
+
+export function assertBlueprintSupported(
+  blueprintId: number,
+  printProviderId: number
+): void {
+  const expected = PRINTIFY_BLUEPRINT_PROVIDERS[blueprintId];
+  if (expected === undefined) {
+    throw new Error(
+      `Unknown Printify blueprint ${blueprintId}. Register the (blueprint, provider) pair in PRINTIFY_BLUEPRINT_PROVIDERS (packages/listing/src/constants.ts) before publishing.`
+    );
+  }
+  if (expected !== printProviderId) {
+    throw new Error(
+      `Printify (blueprint ${blueprintId}, provider ${printProviderId}) does not match the registered pairing (expected provider ${expected}).`
+    );
+  }
+}

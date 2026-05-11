@@ -39,9 +39,11 @@ class Settings(BaseSettings):
     supabase_url: HttpUrl
     supabase_service_role_key: str
 
-    # Alerts
-    resend_api_key: str
-    alert_email: EmailStr
+    # Alerts. Resend is not yet implemented (notifier.py only sends to Slack),
+    # so resend_api_key / alert_email are optional — declaring them as required
+    # would crash every agent at boot for a feature that doesn't exist yet.
+    resend_api_key: str | None = None
+    alert_email: EmailStr | None = None
     slack_webhook_url: HttpUrl | None = None
 
     # Runtime

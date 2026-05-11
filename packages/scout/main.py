@@ -1,5 +1,6 @@
 import asyncio
 import time
+from typing import Any
 
 from packages.scout.analyzer import analyze_niche
 from packages.scout.dedup import is_recent_duplicate, is_semantic_duplicate
@@ -56,16 +57,25 @@ async def run() -> None:
                 "status": "pending",
             }
 
-            def _insert() -> None:
-                db.table("trend_briefs").insert(row).execute()
+            def _insert() -> Any:
+                return db.table("trend_briefs").insert(row).execute()
 
-            await asyncio.to_thread(_insert)
+            insert_resp = await asyncio.to_thread(_insert)
+            # Capture the generated row id so log lines can be correlated back to the
+            # specific trend_briefs row without scanning by niche+timestamp.
+            record_id: str | None = None
+            try:
+                if getattr(insert_resp, "data", None):
+                    record_id = insert_resp.data[0].get("id")
+            except (AttributeError, IndexError, KeyError, TypeError):
+                record_id = None
 
             inserted += 1
             log.info(
                 "trend_brief_created",
                 action="trend_brief_created",
                 niche=niche,
+                record_id=record_id,
                 status="pending",
                 duration_ms=round((time.monotonic() - t0) * 1000),
             )
@@ -74,6 +84,34 @@ async def run() -> None:
                 break
 
         except Exception as e:
+            # Write the failure to trend_briefs so (a) it shows up in the same
+            # observability surface as successful runs, and (b) is_recent_duplicate
+            # suppresses the niche for 7 days — natural backoff. Without this the
+            # nightly cron would re-attempt the failing niche forever and fire a
+            # Slack alert each time.
+            error_row = {
+                "niche": niche,
+                "status": "error",
+                "error_message": str(e),
+                "retry_count": 1,
+            }
+
+            def _insert_error() -> None:
+                db.table("trend_briefs").insert(error_row).execute()
+
+            try:
+                await asyncio.to_thread(_insert_error)
+            except Exception as db_exc:
+                # If the error-row write itself fails, don't mask the original
+                # cause — log both and continue. The alert below still fires.
+                log.error(
+                    "scout_error_write_failed",
+                    action="scout_error_write_failed",
+                    niche=niche,
+                    db_error=str(db_exc),
+                    original_error=str(e),
+                )
+
             log.error(
                 "scout_failure",
                 action="scout_failure",

@@ -1,5 +1,8 @@
 -r ../shared_py/requirements.txt
 fal-client>=0.5
+# numpy is a transitive dep of rembg/onnxruntime but the image_processor uses
+# it directly for the screen-print interior-whitespace pass — pin it explicitly.
+numpy>=1.26
 Pillow>=10.2
 rembg[cpu]>=2.0.50
 tenacity>=8.2

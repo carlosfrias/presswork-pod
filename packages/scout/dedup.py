@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
 from anthropic import AsyncAnthropic
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from packages.shared_py.config import get_settings
 from supabase import Client
@@ -91,7 +91,12 @@ async def is_semantic_duplicate(niche: str, db: Client) -> tuple[bool, str | Non
 
     try:
         parsed = _SemanticDupResult.model_validate_json(first_block.text)
-    except Exception:
+    except (ValidationError, ValueError, json.JSONDecodeError):
+        # Treat malformed Claude output as "no duplicate" so the pipeline can proceed.
+        # Network/auth errors from AsyncAnthropic above are NOT caught here — they
+        # propagate up to scout/main.py where the failure is logged and the niche
+        # is marked errored. Silently swallowing them would let a Claude outage
+        # masquerade as "no duplicates ever," wasting fal.ai credits and DB rows.
         return False, None
 
     return parsed.is_duplicate, parsed.matched_niche

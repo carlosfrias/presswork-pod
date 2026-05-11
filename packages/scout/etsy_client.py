@@ -20,8 +20,13 @@ _LISTINGS_URL = "https://api.etsy.com/v3/application/listings/active"
 _TOKEN_URL = "https://api.etsy.com/v3/public/oauth/token"
 
 
-def _is_server_error(exc: BaseException) -> bool:
-    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500
+def _is_retryable(exc: BaseException) -> bool:
+    # 5xx + transient transport errors (connection reset, DNS, timeout). Without
+    # the transport branch, a single TCP hiccup against api.etsy.com fails the
+    # whole scout run instead of going through tenacity's exponential backoff.
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return isinstance(exc, (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException))
 
 
 class EtsyClient:
@@ -51,7 +56,7 @@ class EtsyClient:
                 self._tokens = fresh
                 return
 
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=30) as client:
                 resp = await client.post(
                     _TOKEN_URL,
                     data={
@@ -80,7 +85,7 @@ class EtsyClient:
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=1, max=10),
-        retry=retry_if_exception(_is_server_error),
+        retry=retry_if_exception(_is_retryable),
         reraise=True,
     )
     async def _fetch_with_retry(
@@ -99,7 +104,7 @@ class EtsyClient:
             "sort_on": "score",
             "limit": limit,
         }
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             resp = await self._fetch_with_retry(client, params)
             if resp.status_code == 401:
                 await self._refresh()

@@ -18,7 +18,7 @@ import {
   validateMockupProvenance,
   validateProductionPartnerId,
 } from "./compliance.js";
-import { GILDAN_64000_PRINT_COST_USD } from "./constants.js";
+import { GILDAN_64000_PRINT_COST_USD, assertBlueprintSupported } from "./constants.js";
 
 const MAX_RETRIES = 3;
 
@@ -124,15 +124,21 @@ export async function publishOne(
         printify_product_id: productId,
       });
     } else {
-      if (!design.printify_print_provider_id) {
+      if (!design.printify_blueprint_id || !design.printify_print_provider_id) {
         throw new PublisherError(
-          `design_packages.printify_print_provider_id is required (design ${design.id})`
+          `design ${design.id} missing printify_blueprint_id or printify_print_provider_id`
         );
       }
+      // Catches a future blueprint added in Design without its paired provider
+      // in PRINTIFY_BLUEPRINT_PROVIDERS, before we burn a Printify API call.
+      assertBlueprintSupported(
+        design.printify_blueprint_id,
+        design.printify_print_provider_id
+      );
       log.info({ action: "create_printify_product", record_id: listingId, status: "started" });
       const result = await createHiddenProduct({
         imageUrl: design.image_url ?? "",
-        blueprintId: design.printify_blueprint_id ?? 5,
+        blueprintId: design.printify_blueprint_id,
         printProviderId: design.printify_print_provider_id,
         variantIds: design.printify_variant_ids ?? [],
         title: copy.title,

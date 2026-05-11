@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 
 from packages.design.main import run
-from packages.shared_py.models import FluxPrompt, TrendBrief
+from packages.shared_py.models import FluxPrompt, PrintStyle, TrendBrief
 
 _FLUX_PROMPT = FluxPrompt(
     prompt="print on demand design, transparent background, high resolution, vector-style mountains",
@@ -15,7 +15,7 @@ _FLUX_PROMPT = FluxPrompt(
 _FAKE_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
 
 
-def _make_brief(retry_count: int = 0) -> TrendBrief:
+def _make_brief(retry_count: int = 0, print_style: PrintStyle | None = None) -> TrendBrief:
     return TrendBrief(
         id=uuid4(),
         created_at=datetime.now(tz=UTC),
@@ -23,6 +23,7 @@ def _make_brief(retry_count: int = 0) -> TrendBrief:
         status="processing",
         niche="test-niche",
         retry_count=retry_count,
+        print_style=print_style,
     )
 
 
@@ -280,6 +281,70 @@ async def test_cross_row_dedup_chain_matches_production(mocker):
         "limit",
         "execute",
     ], f"cross-row dedup chain changed: {cross_row.calls} (audit #48 — update _mock_db too)"
+
+
+@pytest.mark.asyncio
+async def test_screen_print_brief_dispatches_screen_print_mode(mocker):
+    """A brief with print_style='screen_print' must invoke process_for_print(mode='screen_print')."""
+    brief = _make_brief(print_style="screen_print")
+    db = _mock_db([])
+
+    mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
+    mocker.patch("packages.design.main.get_db", return_value=db)
+    mocker.patch("packages.design.main.build_flux_prompt", return_value=_FLUX_PROMPT)
+    mock_process = mocker.patch("packages.design.main.process_for_print", return_value=_FAKE_PNG)
+    mocker.patch(
+        "packages.design.main.upload_design", return_value="https://storage.example.com/design.png"
+    )
+    mocker.patch("packages.design.main.generate_image", AsyncMock(return_value=_FAKE_PNG))
+
+    await run()
+
+    mock_process.assert_called_once()
+    assert mock_process.call_args.kwargs.get("mode") == "screen_print", (
+        f"expected mode='screen_print', got {mock_process.call_args.kwargs}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_null_print_style_defaults_to_full_color(mocker):
+    """Legacy briefs with print_style=None must route to full_color (existing behavior)."""
+    brief = _make_brief(print_style=None)
+    db = _mock_db([])
+
+    mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
+    mocker.patch("packages.design.main.get_db", return_value=db)
+    mocker.patch("packages.design.main.build_flux_prompt", return_value=_FLUX_PROMPT)
+    mock_process = mocker.patch("packages.design.main.process_for_print", return_value=_FAKE_PNG)
+    mocker.patch(
+        "packages.design.main.upload_design", return_value="https://storage.example.com/design.png"
+    )
+    mocker.patch("packages.design.main.generate_image", AsyncMock(return_value=_FAKE_PNG))
+
+    await run()
+
+    mock_process.assert_called_once()
+    assert mock_process.call_args.kwargs.get("mode") == "full_color"
+
+
+@pytest.mark.asyncio
+async def test_full_color_brief_dispatches_full_color_mode(mocker):
+    brief = _make_brief(print_style="full_color")
+    db = _mock_db([])
+
+    mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
+    mocker.patch("packages.design.main.get_db", return_value=db)
+    mocker.patch("packages.design.main.build_flux_prompt", return_value=_FLUX_PROMPT)
+    mock_process = mocker.patch("packages.design.main.process_for_print", return_value=_FAKE_PNG)
+    mocker.patch(
+        "packages.design.main.upload_design", return_value="https://storage.example.com/design.png"
+    )
+    mocker.patch("packages.design.main.generate_image", AsyncMock(return_value=_FAKE_PNG))
+
+    await run()
+
+    mock_process.assert_called_once()
+    assert mock_process.call_args.kwargs.get("mode") == "full_color"
 
 
 @pytest.mark.asyncio

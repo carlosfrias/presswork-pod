@@ -13,6 +13,7 @@ _VALID_ANALYSIS = {
     "top_tags": ["dog mom", "dog lover gift", "fur mama"],
     "price_target_usd": 24.99,
     "color_palette": ["#3D5AFE", "white", "tan"],
+    "print_style": "full_color",
 }
 
 # price.amount is in CENTS per Etsy's API (2499 = $24.99). _slim_listings
@@ -72,6 +73,32 @@ async def test_system_prompt_has_cache_control(mocker):
     kwargs = client.messages.create.call_args.kwargs
     system_blocks = kwargs["system"]
     assert any(block.get("cache_control") == {"type": "ephemeral"} for block in system_blocks)
+
+
+@pytest.mark.asyncio
+async def test_print_style_screen_print_parses(mocker):
+    """ClaudeAnalysis must accept screen_print classifications."""
+    payload = {**_VALID_ANALYSIS, "print_style": "screen_print"}
+    _mock_client(mocker, json.dumps(payload))
+    result = await analyze_niche(_SAMPLE_LISTINGS)
+    assert result.print_style == "screen_print"
+
+
+@pytest.mark.asyncio
+async def test_missing_print_style_raises_validation_error(mocker):
+    """print_style is required — Claude must classify, no silent default."""
+    bad = {k: v for k, v in _VALID_ANALYSIS.items() if k != "print_style"}
+    _mock_client(mocker, json.dumps(bad))
+    with pytest.raises(ValidationError):
+        await analyze_niche(_SAMPLE_LISTINGS)
+
+
+@pytest.mark.asyncio
+async def test_invalid_print_style_value_raises_validation_error(mocker):
+    bad = {**_VALID_ANALYSIS, "print_style": "halftone"}
+    _mock_client(mocker, json.dumps(bad))
+    with pytest.raises(ValidationError):
+        await analyze_niche(_SAMPLE_LISTINGS)
 
 
 def test_slim_listings_converts_cents_to_usd():

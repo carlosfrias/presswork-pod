@@ -7,14 +7,19 @@ from packages.shared_py.config import get_settings
 from packages.shared_py.models import FluxPrompt
 
 
-def _is_server_error(exc: BaseException) -> bool:
-    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500
+def _is_retryable(exc: BaseException) -> bool:
+    # 5xx is the obvious retry case. Connection resets / DNS hiccups / timeouts
+    # are equally transient — without them, a flaky 60s image download fails
+    # the whole pipeline on a single network blip.
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return isinstance(exc, (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException))
 
 
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception(_is_server_error),
+    retry=retry_if_exception(_is_retryable),
     reraise=True,
 )
 async def _download_image(url: str) -> bytes:

@@ -33,6 +33,7 @@ import httpx
 
 from packages.design.constants import (
     GILDAN_64000_BLUEPRINT_ID,
+    GILDAN_64000_PRINT_PROVIDER_ID,
     GILDAN_64000_VARIANT_IDS,
 )
 from packages.design.fal_client import generate_image
@@ -43,7 +44,7 @@ from packages.shared_py.models import TrendBrief
 
 # Print provider that owns the Gildan 64000 variant IDs in design/constants.py.
 # (Blueprint 145 + variants 38163/38177/38191/38205/38219 belong to Marco Fine Arts.)
-PRINTIFY_PRINT_PROVIDER_ID = 3
+PRINTIFY_PRINT_PROVIDER_ID = GILDAN_64000_PRINT_PROVIDER_ID
 
 OUT_ROOT = Path(__file__).resolve().parents[1] / ".tmp" / "smoke"
 

@@ -21,3 +21,12 @@ FLUX_IMAGE_SIZE = "square_hd"  # 1024×1024
 
 OUTPUT_DPI = 300
 OUTPUT_DIMENSIONS_PX = (4500, 5400)  # t-shirt print area at 300dpi (15"×18")
+
+# Endpoints of the linear alpha ramp used when stripping interior whitespace
+# from screen-print designs. Pixels with luminance >= WHITE_HARD become fully
+# transparent; pixels with luminance <= WHITE_SOFT keep their original alpha;
+# in between, alpha is multiplied by a linear factor in [0.0, 1.0]. The soft
+# edge preserves the anti-aliasing rembg produces on curved boundaries, so
+# letterforms and silhouettes don't show stair-stepping after threshold.
+SCREEN_PRINT_WHITE_HARD = 245
+SCREEN_PRINT_WHITE_SOFT = 225
