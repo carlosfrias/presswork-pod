@@ -12,7 +12,9 @@ Given a trend brief, craft an image generation prompt for FLUX Pro 1.1.
 Rules (non-negotiable):
 - The prompt MUST include ALL of these exact phrases:
   "print on demand design", "transparent background", "high resolution", "vector-style"
-- NEVER include: artist names, brand names, living people, copyrighted characters
+- NEVER include: brand names, registered trademarks (e.g. Stratocaster, Coca-Cola, Nike), copyrighted characters (e.g. Disney/Marvel characters), or named living celebrities (politicians, musicians, actors currently alive)
+- People ARE allowed: name historical figures (e.g. Abraham Lincoln, Einstein, Washington), depict generic/anonymous people of any era, and use public-domain characters. Generate the likeness directly when the subject is a historical figure
+- Avoid attribution to specific living artists for style — use descriptive art-movement language instead (e.g. "art-deco style" not "Mucha-style")
 - NEVER produce wallpaper patterns, repeating motifs, all-over florals, abstract color fields,
   gradient washes, or seamless/tileable backgrounds. The downstream background remover cannot
   process these and apparel printing needs a clear focal subject.

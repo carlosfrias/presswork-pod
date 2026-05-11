@@ -19,6 +19,12 @@ GILDAN_64000_VARIANT_IDS: list[int] = [38163, 38177, 38191, 38205, 38219]
 FLUX_MODEL = "fal-ai/flux-pro/v1.1"
 FLUX_IMAGE_SIZE = "square_hd"  # 1024×1024
 
+# aura-sr is a feed-forward (GAN-style) 4× upscaler. Deterministic, ~3-6s,
+# preserves graphic-style lines without diffusion drift. Fed the raw FLUX RGB
+# output BEFORE rembg/whitespace stripping so it sees clean pixels.
+UPSCALER_MODEL = "fal-ai/aura-sr"
+UPSCALER_SCALE = 4
+
 OUTPUT_DPI = 300
 OUTPUT_DIMENSIONS_PX = (4500, 5400)  # t-shirt print area at 300dpi (15"×18")
 

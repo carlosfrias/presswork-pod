@@ -14,6 +14,8 @@ from packages.design.image_processor import process_for_print
 from packages.design.poller import claim_next_brief
 from packages.design.prompt_builder import build_flux_prompt
 from packages.design.storage import upload_design
+from packages.design.upscaler import upscale_image
+from packages.shared_py.config import get_settings
 from packages.shared_py.db import get_db
 from packages.shared_py.logger import get_logger
 from packages.shared_py.notifier import notify_slack
@@ -128,6 +130,29 @@ async def run() -> None:
                 continue
 
             png_bytes = await generate_image(flux_prompt)
+
+            # AI upscale (aura-sr 4×) on the clean RGB before rembg/whitespace
+            # stripping run inside process_for_print. Soft-fail: if the upscaler
+            # errors, drop back to the original LANCZOS-only path so a flaky
+            # fal.ai endpoint doesn't consume the 3-retry budget. The downstream
+            # `_resize_with_padding` still pads to 4500×5400 either way.
+            if get_settings().upscaler_enabled:
+                try:
+                    png_bytes = await upscale_image(png_bytes)
+                except Exception as upscale_err:
+                    log.warning(
+                        "upscaler_failed_fallback",
+                        agent="design",
+                        action="upscale",
+                        brief_id=brief_id,
+                        design_id=str(design_id),
+                        error=str(upscale_err),
+                    )
+                    await notify_slack(
+                        f"Upscaler failed for brief {brief_id}, falling back to LANCZOS: {upscale_err}",
+                        severity="warn",
+                    )
+
             # NULL print_style on legacy briefs is treated as full_color (the
             # existing pre-screen-print behavior).
             mode = brief.print_style or "full_color"

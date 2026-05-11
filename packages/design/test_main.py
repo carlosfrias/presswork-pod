@@ -13,6 +13,22 @@ _FLUX_PROMPT = FluxPrompt(
 )
 
 _FAKE_PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+_UPSCALED_PNG = b"\x89PNG\r\n\x1a\n" + b"\xff" * 400
+
+
+@pytest.fixture(autouse=True)
+def _mock_settings_and_upscale(mocker):
+    """Default mocks for the upscaler step. get_settings() returns
+    upscaler_enabled=True; upscale_image is a passthrough AsyncMock that
+    returns _UPSCALED_PNG. Individual tests override these as needed.
+
+    Autouse so every pre-existing test that exercises the happy path through
+    main.run() doesn't try to load real settings or hit fal.ai's upscaler.
+    """
+    settings = MagicMock()
+    settings.upscaler_enabled = True
+    mocker.patch("packages.design.main.get_settings", return_value=settings)
+    mocker.patch("packages.design.main.upscale_image", AsyncMock(return_value=_UPSCALED_PNG))
 
 
 def _make_brief(retry_count: int = 0, print_style: PrintStyle | None = None) -> TrendBrief:
@@ -345,6 +361,101 @@ async def test_full_color_brief_dispatches_full_color_mode(mocker):
 
     mock_process.assert_called_once()
     assert mock_process.call_args.kwargs.get("mode") == "full_color"
+
+
+@pytest.mark.asyncio
+async def test_upscaler_called_when_enabled(mocker):
+    """When upscaler_enabled=True, the FLUX output flows through upscale_image
+    and the upscaled bytes are what process_for_print receives."""
+    brief = _make_brief()
+    db = _mock_db([])
+
+    mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
+    mocker.patch("packages.design.main.get_db", return_value=db)
+    mocker.patch("packages.design.main.build_flux_prompt", return_value=_FLUX_PROMPT)
+    mock_process = mocker.patch("packages.design.main.process_for_print", return_value=_FAKE_PNG)
+    mocker.patch(
+        "packages.design.main.upload_design", return_value="https://storage.example.com/design.png"
+    )
+    mocker.patch("packages.design.main.generate_image", AsyncMock(return_value=_FAKE_PNG))
+    mock_upscale = AsyncMock(return_value=_UPSCALED_PNG)
+    mocker.patch("packages.design.main.upscale_image", mock_upscale)
+
+    await run()
+
+    mock_upscale.assert_called_once_with(_FAKE_PNG)
+    # process_for_print sees the upscaled bytes, not the original FLUX output.
+    assert mock_process.call_args.args[0] == _UPSCALED_PNG
+
+
+@pytest.mark.asyncio
+async def test_upscaler_disabled_skips_step(mocker):
+    """upscaler_enabled=False bypasses upscale_image entirely. process_for_print
+    receives the raw FLUX output (current pre-upscaler behavior)."""
+    brief = _make_brief()
+    db = _mock_db([])
+
+    settings = MagicMock()
+    settings.upscaler_enabled = False
+    mocker.patch("packages.design.main.get_settings", return_value=settings)
+
+    mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
+    mocker.patch("packages.design.main.get_db", return_value=db)
+    mocker.patch("packages.design.main.build_flux_prompt", return_value=_FLUX_PROMPT)
+    mock_process = mocker.patch("packages.design.main.process_for_print", return_value=_FAKE_PNG)
+    mocker.patch(
+        "packages.design.main.upload_design", return_value="https://storage.example.com/design.png"
+    )
+    mocker.patch("packages.design.main.generate_image", AsyncMock(return_value=_FAKE_PNG))
+    mock_upscale = AsyncMock(return_value=_UPSCALED_PNG)
+    mocker.patch("packages.design.main.upscale_image", mock_upscale)
+
+    await run()
+
+    mock_upscale.assert_not_called()
+    assert mock_process.call_args.args[0] == _FAKE_PNG
+
+
+@pytest.mark.asyncio
+async def test_upscaler_soft_failure_falls_back(mocker):
+    """When upscale_image raises, the design still completes using the
+    pre-upscale bytes, status hits 'done', and a Slack warning is posted.
+    The 3-retry budget is NOT consumed (no design_packages.upsert with status='error')."""
+    brief = _make_brief()
+    db = _mock_db([])
+
+    mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
+    mocker.patch("packages.design.main.get_db", return_value=db)
+    mocker.patch("packages.design.main.build_flux_prompt", return_value=_FLUX_PROMPT)
+    mock_process = mocker.patch("packages.design.main.process_for_print", return_value=_FAKE_PNG)
+    mocker.patch(
+        "packages.design.main.upload_design", return_value="https://storage.example.com/design.png"
+    )
+    mocker.patch("packages.design.main.generate_image", AsyncMock(return_value=_FAKE_PNG))
+    mocker.patch(
+        "packages.design.main.upscale_image",
+        AsyncMock(side_effect=RuntimeError("aura-sr 503")),
+    )
+    mock_notify = AsyncMock()
+    mocker.patch("packages.design.main.notify_slack", mock_notify)
+
+    await run()
+
+    # Pipeline continued past the upscaler with the original FLUX bytes.
+    assert mock_process.call_args.args[0] == _FAKE_PNG
+
+    # Slack warn alert fired (severity must be "warn", not "error").
+    mock_notify.assert_called_once()
+    assert mock_notify.call_args.kwargs.get("severity") == "warn"
+
+    # No error upsert — soft fail must not consume the retry budget.
+    dp_mock = db.table("design_packages")
+    error_upserts = [
+        call
+        for call in dp_mock.upsert.call_args_list
+        if call.args and call.args[0].get("status") == "error"
+    ]
+    assert error_upserts == [], f"soft-fail must not write status=error, got {error_upserts}"
 
 
 @pytest.mark.asyncio

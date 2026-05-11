@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     node_env: str = "development"
     log_level: str = "info"
     human_review_enabled: bool = True
+    # Operator kill-switch for the AI upscaler step in the Design agent.
+    # On = call fal.ai aura-sr between FLUX and Pillow (real 4× SR, ~$0.01/image).
+    # Off = skip the step, fall through to current LANCZOS-only path.
+    upscaler_enabled: bool = True
 
 
 @lru_cache
