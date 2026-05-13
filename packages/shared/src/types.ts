@@ -3,7 +3,20 @@ import { AI_DISCLOSURE_TEXT, MAX_TAGS, MAX_TITLE_LEN, MAX_TAG_LEN } from "./cons
 
 // ── TrendBrief ────────────────────────────────────────────────────────────────
 
-export const TrendBriefStatusSchema = z.enum(["pending", "processing", "done", "error"]);
+// State machine after migration 021:
+//   needs_review → needs_description → approved → processing → done | error
+// `pending` is retained for legacy rows only (migration 021 backfilled them
+// to `needs_review`); no agent writes `pending` today, but we accept it for
+// any straggler row that pre-dates the gate.
+export const TrendBriefStatusSchema = z.enum([
+  "pending",
+  "needs_review",
+  "needs_description",
+  "approved",
+  "processing",
+  "done",
+  "error",
+]);
 
 export const TrendBriefSchema = z.object({
   id: z.string().uuid(),
@@ -25,7 +38,17 @@ export type TrendBrief = z.infer<typeof TrendBriefSchema>;
 
 // ── DesignPackage ─────────────────────────────────────────────────────────────
 
-export const DesignPackageStatusSchema = z.enum(["pending", "processing", "done", "error"]);
+// State machine after migration 021:
+//   needs_review → approved → processing → done | error
+// `pending` retained for legacy rows pre-dating the review gate.
+export const DesignPackageStatusSchema = z.enum([
+  "pending",
+  "needs_review",
+  "approved",
+  "processing",
+  "done",
+  "error",
+]);
 
 export const DesignPackageSchema = z.object({
   id: z.string().uuid(),

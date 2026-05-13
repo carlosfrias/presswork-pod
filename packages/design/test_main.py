@@ -352,6 +352,101 @@ async def test_trend_briefs_retry_count_not_incremented(mocker):
 
 
 @pytest.mark.asyncio
+async def test_slack_alert_fires_even_when_select_retry_count_raises(mocker):
+    """AUDIT_4 H7: if the SELECT retry_count call inside the exception
+    handler itself raises, the brief used to stay stuck in 'processing'
+    and no operator alert ever fired. The handler now wraps each
+    secondary DB call in its own try/except so notify_slack always runs.
+    """
+    brief = _make_brief()
+
+    # Custom db mock: dp_mock.select(...).eq(...).execute() raises. Everything
+    # else still works so the test can reach the catch block normally.
+    db = MagicMock()
+    dp_mock = MagicMock()
+    tb_mock = MagicMock()
+    db.table.side_effect = lambda name: dp_mock if name == "design_packages" else tb_mock
+
+    def dp_select(fields: str) -> MagicMock:
+        result = MagicMock()
+        if "retry_count" in fields:
+            result.eq.return_value.execute.side_effect = RuntimeError("supabase timeout")
+        else:
+            result.eq.return_value.execute.return_value.data = []
+            result.eq.return_value.not_.is_.return_value.order.return_value.limit.return_value.execute.return_value.data = []
+        return result
+
+    dp_mock.select.side_effect = dp_select
+
+    mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
+    mocker.patch("packages.design.main.get_db", return_value=db)
+    mocker.patch("packages.design.main.build_image_prompt", return_value=_FLUX_PROMPT)
+    mocker.patch(
+        "packages.design.main.generate_flux_image_url",
+        AsyncMock(side_effect=RuntimeError("fal down")),
+    )
+
+    mock_notify = AsyncMock()
+    mocker.patch("packages.design.main.notify_slack", mock_notify)
+
+    await run()
+
+    # Alert still fires even though _select_retry_count raised.
+    mock_notify.assert_called_once()
+    assert mock_notify.call_args.kwargs.get("severity") == "error"
+
+
+@pytest.mark.asyncio
+async def test_slack_alert_fires_even_when_design_upsert_raises(mocker):
+    """AUDIT_4 H7: if the design_packages upsert inside the exception
+    handler raises (e.g. transient transport error after RLS reload),
+    the trend_briefs status flip and Slack alert must still execute."""
+    brief = _make_brief()
+
+    db = MagicMock()
+    dp_mock = MagicMock()
+    tb_mock = MagicMock()
+    db.table.side_effect = lambda name: dp_mock if name == "design_packages" else tb_mock
+
+    def dp_select(fields: str) -> MagicMock:
+        result = MagicMock()
+        if "retry_count" in fields:
+            result.eq.return_value.execute.return_value.data = []
+        else:
+            result.eq.return_value.execute.return_value.data = []
+            result.eq.return_value.not_.is_.return_value.order.return_value.limit.return_value.execute.return_value.data = []
+        return result
+
+    dp_mock.select.side_effect = dp_select
+    # design_packages.upsert(...).execute() raises.
+    dp_mock.upsert.return_value.execute.side_effect = RuntimeError("supabase write failed")
+
+    mocker.patch("packages.design.main.claim_next_brief", side_effect=[brief, None])
+    mocker.patch("packages.design.main.get_db", return_value=db)
+    mocker.patch("packages.design.main.build_image_prompt", return_value=_FLUX_PROMPT)
+    mocker.patch(
+        "packages.design.main.generate_flux_image_url",
+        AsyncMock(side_effect=RuntimeError("fal down")),
+    )
+
+    mock_notify = AsyncMock()
+    mocker.patch("packages.design.main.notify_slack", mock_notify)
+
+    await run()
+
+    mock_notify.assert_called_once()
+    assert mock_notify.call_args.kwargs.get("severity") == "error"
+
+    # trend_briefs.update(status=error) must still have been attempted.
+    update_statuses = [
+        call.args[0].get("status")
+        for call in tb_mock.update.call_args_list
+        if call.args and isinstance(call.args[0], dict)
+    ]
+    assert "error" in update_statuses
+
+
+@pytest.mark.asyncio
 async def test_cross_row_dedup_chain_matches_production(mocker):
     """Audit #48: the cross-row dedup mock chain in _mock_db hardcodes
     .eq().not_.is_().order().limit().execute(). Verify production main.run()

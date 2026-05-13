@@ -66,16 +66,53 @@ async def run() -> None:
                 "status": _BRIEF_WRITE_STATUS,
             }
 
+            # Route through the atomic RPC (migration 033) so dedupe + insert
+            # run inside a single transaction with an advisory lock on the
+            # niche. The Python-side dedupes above are still useful as a
+            # cheap fast-path, but they can race; the RPC is authoritative.
+            # The belt UNIQUE (niche, day) index also rejects same-day
+            # duplicates with PostgrestAPIError code 23505.
             def _insert() -> Any:
-                return db.table("trend_briefs").insert(row).execute()
+                return db.rpc("insert_trend_brief_if_no_recent", {"p_row": row}).execute()
 
-            insert_resp = await asyncio.to_thread(_insert)
-            # Capture the generated row id so log lines can be correlated back to the
-            # specific trend_briefs row without scanning by niche+timestamp.
+            try:
+                insert_resp = await asyncio.to_thread(_insert)
+            except Exception as rpc_exc:
+                # Belt index unique-violation lands here — treat as a
+                # duplicate-after-dedupe and skip to the next niche. Any
+                # other DB error propagates to the outer except.
+                if "23505" in str(rpc_exc) or "duplicate key" in str(rpc_exc).lower():
+                    log.info(
+                        "dedup_skip",
+                        action="dedup_skip",
+                        niche=niche,
+                        match_reason="db_unique_violation",
+                        status="skipped",
+                        duration_ms=round((time.monotonic() - t0) * 1000),
+                    )
+                    continue
+                raise
+
+            # The RPC returns the inserted row, or NULL if a recent
+            # duplicate already exists. Supabase normalizes NULL to an
+            # empty data list.
+            rpc_data = getattr(insert_resp, "data", None)
+            if not rpc_data:
+                log.info(
+                    "dedup_skip",
+                    action="dedup_skip",
+                    niche=niche,
+                    match_reason="rpc_recent_duplicate",
+                    status="skipped",
+                    duration_ms=round((time.monotonic() - t0) * 1000),
+                )
+                continue
+
             record_id: str | None = None
             try:
-                if getattr(insert_resp, "data", None):
-                    record_id = insert_resp.data[0].get("id")
+                first = rpc_data[0] if isinstance(rpc_data, list) else rpc_data
+                if isinstance(first, dict):
+                    record_id = first.get("id")
             except (AttributeError, IndexError, KeyError, TypeError):
                 record_id = None
 
@@ -85,7 +122,7 @@ async def run() -> None:
                 action="trend_brief_created",
                 niche=niche,
                 record_id=record_id,
-                status="pending",
+                status=_BRIEF_WRITE_STATUS,
                 duration_ms=round((time.monotonic() - t0) * 1000),
             )
 

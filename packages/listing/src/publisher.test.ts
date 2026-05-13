@@ -721,6 +721,144 @@ describe("publishOne", () => {
     expect(createDraftListing).not.toHaveBeenCalled();
   });
 
+  // ── H2 — Terminal-error Slack alert ─────────────────────────────────────────
+  //
+  // CLAUDE.md mandates an alert when retry_count reaches MAX_RETRIES. Both
+  // publishOne and resumePublish share the same retry budget; whichever
+  // reaches the cap first must fire the alert.
+
+  function mockSharedWithSlack(overrides?: { partnerId?: number | null }) {
+    const notifySlack = vi.fn().mockResolvedValue(undefined);
+    const createDraftListing = vi
+      .fn()
+      .mockResolvedValue({ listing_id: 777, state: "draft", title: COMPLIANT_TITLE });
+
+    vi.doMock("@presswork/shared", async () => {
+      const actual = await vi.importActual<typeof import("@presswork/shared")>("@presswork/shared");
+      return {
+        ...actual,
+        createDraftListing,
+        uploadListingImage: vi.fn().mockResolvedValue(undefined),
+        activateListing: vi.fn().mockResolvedValue(undefined),
+        getTaxonomyId: vi.fn().mockResolvedValue(68887043),
+        getSettings: vi.fn().mockReturnValue({
+          ETSY_SHIPPING_PROFILE_ID: 99,
+          ETSY_READINESS_STATE_ID: 42,
+          ETSY_PRODUCTION_PARTNER_ID:
+            overrides && "partnerId" in overrides ? overrides.partnerId : PARTNER_ID,
+        }),
+        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn() }),
+        notifySlack,
+      };
+    });
+
+    return { notifySlack };
+  }
+
+  it("publishOne fires notifySlack with severity='error' on terminal retry-cap failure (H2)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintifyFailure();
+    const { notifySlack } = mockSharedWithSlack();
+
+    // retry_count=2; +1 = 3 → terminal.
+    const db = makeDb([], { retryCount: 2 });
+
+    const { publishOne } = await import("./publisher.js");
+    await expect(publishOne(db, design, brief)).rejects.toThrow();
+
+    expect(notifySlack).toHaveBeenCalledTimes(1);
+    const [message, opts] = notifySlack.mock.calls[0] as [string, { severity?: string }];
+    expect(opts?.severity).toBe("error");
+    expect(message).toContain(LISTING_ID);
+    expect(message).toMatch(/terminal/i);
+  });
+
+  it("publishOne does NOT fire notifySlack on retryable failure below the cap (H2 negative)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintifyFailure();
+    const { notifySlack } = mockSharedWithSlack();
+
+    // retry_count=0; +1 = 1 → still below MAX_RETRIES.
+    const db = makeDb([], { retryCount: 0 });
+
+    const { publishOne } = await import("./publisher.js");
+    await expect(publishOne(db, design, brief)).rejects.toThrow();
+
+    expect(notifySlack).not.toHaveBeenCalled();
+  });
+
+  it("resumePublish fires notifySlack with severity='error' on terminal retry-cap failure (H2)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    const { notifySlack } = mockSharedWithSlack();
+    // Force the Etsy publish to fail so resumePublish enters its catch block.
+    // mockSharedWithSlack returns a successful createDraftListing — override
+    // by re-mocking activateListing to throw on the inbound call.
+    vi.doMock("@presswork/shared", async () => {
+      const actual = await vi.importActual<typeof import("@presswork/shared")>("@presswork/shared");
+      return {
+        ...actual,
+        createDraftListing: vi.fn().mockResolvedValue({
+          listing_id: 777,
+          state: "draft",
+          title: COMPLIANT_TITLE,
+        }),
+        uploadListingImage: vi.fn().mockResolvedValue(undefined),
+        activateListing: vi.fn().mockRejectedValue(new Error("etsy 500")),
+        getTaxonomyId: vi.fn().mockResolvedValue(68887043),
+        getSettings: vi.fn().mockReturnValue({
+          ETSY_SHIPPING_PROFILE_ID: 99,
+          ETSY_READINESS_STATE_ID: 42,
+          ETSY_PRODUCTION_PARTNER_ID: PARTNER_ID,
+        }),
+        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn() }),
+        notifySlack,
+      };
+    });
+
+    // retry_count starts at 2; +1 = 3 → terminal.
+    const db = makeDb([], {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending_publish",
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+        price_usd: 24.99,
+        printify_product_id: PRODUCT_ID,
+        is_active: false,
+        retry_count: 2,
+      },
+    });
+
+    const { resumePublish } = await import("./publisher.js");
+    await expect(resumePublish(db, LISTING_ID)).rejects.toThrow();
+
+    expect(notifySlack).toHaveBeenCalledTimes(1);
+    const [message, opts] = notifySlack.mock.calls[0] as [string, { severity?: string }];
+    expect(opts?.severity).toBe("error");
+    expect(message).toContain(LISTING_ID);
+    expect(message).toMatch(/resume/i);
+  });
+
   it("aborts when an active listing already exists for this design", async () => {
     vi.doMock("./copywriter.js", () => ({
       writeCopy: vi.fn().mockResolvedValue({

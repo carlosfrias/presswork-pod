@@ -58,13 +58,28 @@ export async function rejectListing(formData: FormData) {
   const reason = (formData.get("reason") ?? "").toString().slice(0, 500);
   const db = serviceClient();
 
+  // Re-fetch the listing to confirm it's still at needs_review — guards
+  // against a stale tab rejecting something that already moved on
+  // (publishing, active, or another terminal state). Mirrors the
+  // approveListing guard at the top of this file (AUDIT_4 H3).
+  const { data: row } = await db
+    .from("listings")
+    .select("status")
+    .eq("id", id)
+    .maybeSingle();
+  if (!row) throw new Error("Listing not found");
+  if (row.status !== "needs_review") {
+    throw new Error(`Cannot reject from status='${row.status}'`);
+  }
+
   const { error } = await db
     .from("listings")
     .update({
       status: "error",
       error_message: `manual reject (${email}): ${reason || "no reason given"}`,
     })
-    .eq("id", id);
+    .eq("id", id)
+    .eq("status", "needs_review"); // optimistic concurrency guard
   if (error) throw new Error(`Reject failed: ${error.message}`);
 
   revalidatePath("/listings");

@@ -9,6 +9,7 @@ import {
   getTaxonomyId,
   getLogger,
   getSettings,
+  notifySlack,
 } from "@presswork/shared";
 import { writeCopy } from "./copywriter.js";
 import { validatePricingFloor } from "./pricing.js";
@@ -223,6 +224,13 @@ export async function publishOne(
         .from("design_packages")
         .update({ status: "error", error_message: message })
         .eq("id", design.id);
+      // Terminal-error alert (AUDIT_4 H2). notifySlack absorbs its own
+      // errors, so a Slack outage can't propagate out of the catch and
+      // mask the original failure.
+      await notifySlack(
+        `Listing terminal error (id=${listingId}, retry_count=${retryCount}): ${message}`,
+        { severity: "error" }
+      );
     }
 
     log.error({
@@ -421,6 +429,13 @@ export async function resumePublish(db: Db, listingId: string): Promise<void> {
           .update({ status: "error", error_message: message })
           .eq("id", listing.design_package_id);
       }
+      // Terminal-error alert (AUDIT_4 H2). resumePublish shares the
+      // retry budget with publishOne, so the alert fires from whichever
+      // function reaches MAX_RETRIES first.
+      await notifySlack(
+        `Listing terminal error in resume (id=${listingId}, retry_count=${retryCount}): ${message}`,
+        { severity: "error" }
+      );
     }
 
     log.error({

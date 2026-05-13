@@ -1,7 +1,8 @@
 import json
 import re
+from typing import Any
 
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 
 from packages.shared_py.config import get_settings
 from packages.shared_py.models import FluxPrompt, ImagePrompt, TrendBrief
@@ -347,43 +348,47 @@ def _constraint_clause(constraint: str | None) -> str | None:
     return f"\n\nOperator instruction (must follow): {text}"
 
 
-def build_flux_prompt(brief: TrendBrief) -> FluxPrompt:
-    # Dashboard-injected override path: caller pre-baked the prompt, skip
-    # Claude entirely. The FluxPrompt validator still enforces
-    # FLUX_REQUIRED_TERMS — prompts missing the required phrases will raise
-    # and the row will land in 'error' with a useful message.
-    #
-    # Palette is injected here too: the operator's custom prompt may have been
-    # written before they picked colors, or the colors may have been edited on
-    # the review card without rewriting the prompt. Append the palette clause
-    # unless the operator already named these hexes inline.
-    custom = (brief.custom_flux_prompt or "").strip()
-    if custom:
-        if not _palette_already_in_prompt(custom, brief.color_palette):
-            clause = _palette_clause(brief.color_palette)
-            if clause:
-                custom = custom + clause
-        if not _framing_already_in_prompt(custom):
-            custom = custom + FRAMING_CLAUSE
-        if not _constraint_already_in_prompt(custom):
-            constraint_clause = _constraint_clause(brief.prompt_constraint)
-            if constraint_clause:
-                custom = custom + constraint_clause
-        return FluxPrompt(prompt=custom, negative_prompt=None, style_descriptors=[])
+# ---------------------------------------------------------------------------
+# Shared helpers (used by both build_flux_prompt and build_gpt_image_prompt)
+# ---------------------------------------------------------------------------
 
-    settings = get_settings()
-    client = Anthropic(api_key=settings.anthropic_api_key)
+_CLAUDE_MODEL = "claude-sonnet-4-20250514"
 
-    subject_centric = is_subject_centric_brief(brief)
 
-    system_text = SYSTEM_PROMPT
-    if subject_centric:
-        system_text += SUBJECT_CENTRIC_RULES
+def _preprocess_custom_prompt(
+    custom: str,
+    palette: list[str] | None,
+    constraint: str | None,
+) -> str:
+    """Inject palette / framing / operator-constraint clauses into a
+    dashboard-injected custom prompt.
 
-    # `prompt_constraint` flows into the user JSON as a high-priority hint.
-    # The system prompt explicitly names this field so Claude treats it as
-    # a non-optional directive when constructing the FLUX prompt.
-    user_content = json.dumps(
+    Each clause is added only when it isn't already present in the
+    operator's text (idempotent on regen). The order matters: palette
+    first (style-neutral color list), then the framing reminder, then the
+    operator instruction at the very end so it can override anything that
+    came before. Shared by both FLUX and gpt-image-2 builders — keep
+    parity so the two backends behave identically on injected prompts.
+    """
+    if not _palette_already_in_prompt(custom, palette):
+        clause = _palette_clause(palette)
+        if clause:
+            custom = custom + clause
+    if not _framing_already_in_prompt(custom):
+        custom = custom + FRAMING_CLAUSE
+    if not _constraint_already_in_prompt(custom):
+        constraint_clause = _constraint_clause(constraint)
+        if constraint_clause:
+            custom = custom + constraint_clause
+    return custom
+
+
+def _build_user_content(brief: TrendBrief) -> str:
+    """Canonical user-content JSON sent to Claude — same five fields for
+    both backends. `prompt_constraint` is treated as a high-priority hint
+    by both system prompts when it's non-null.
+    """
+    return json.dumps(
         {
             "niche": brief.niche,
             "style_keywords": brief.style_keywords,
@@ -394,8 +399,43 @@ def build_flux_prompt(brief: TrendBrief) -> FluxPrompt:
         indent=2,
     )
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
+
+def _parse_json_response(text: str) -> dict[str, Any]:
+    """Strip optional markdown fences and decode JSON. Both builders use
+    the same fence/decode handling; the only difference is the schema
+    that downstream model_validate runs against."""
+    raw = text.strip()
+    if raw.startswith("```"):
+        raw = raw.split("```", 2)[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+        raw = raw.strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Claude returned invalid JSON: {raw!r}") from exc
+
+
+async def _call_claude(
+    *,
+    system_text: str,
+    user_content: str,
+    operation: str,
+    metadata: dict[str, Any],
+) -> tuple[str, Any]:
+    """Async Anthropic call with ephemeral cache + best-effort usage
+    tracking. Returns ``(raw_text, response)`` — the response is exposed
+    so tests can still inspect ``client.messages.create.call_args``.
+
+    Converged on ``AsyncAnthropic`` (matches ``scout/dedup.py``). The
+    previous sync ``Anthropic`` client was only safe because callers
+    wrapped this in ``asyncio.to_thread`` — AUDIT_4 H8 flagged that
+    fragility; this helper resolves it for both backends.
+    """
+    settings = get_settings()
+    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+    response = await client.messages.create(
+        model=_CLAUDE_MODEL,
         max_tokens=1024,
         system=[
             {
@@ -407,7 +447,9 @@ def build_flux_prompt(brief: TrendBrief) -> FluxPrompt:
         messages=[{"role": "user", "content": user_content}],
     )
 
-    # Best-effort consumption log for the dashboard.
+    # Best-effort consumption log for the dashboard. Imported inline to
+    # avoid pulling llm_usage into the import graph when the module is
+    # used purely for its constants (e.g. compliance tests).
     from packages.shared_py.llm_usage import (  # noqa: PLC0415
         estimate_anthropic_cost_usd,
         record_usage,
@@ -418,9 +460,9 @@ def build_flux_prompt(brief: TrendBrief) -> FluxPrompt:
         record_usage(
             agent="design",
             provider="anthropic",
-            operation="build_flux_prompt",
+            operation=operation,
             cost_usd=estimate_anthropic_cost_usd(
-                model="claude-sonnet-4-20250514",
+                model=_CLAUDE_MODEL,
                 input_tokens=getattr(usage, "input_tokens", 0) or 0,
                 output_tokens=getattr(usage, "output_tokens", 0) or 0,
                 cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
@@ -428,33 +470,48 @@ def build_flux_prompt(brief: TrendBrief) -> FluxPrompt:
             ),
             input_tokens=getattr(usage, "input_tokens", None),
             output_tokens=getattr(usage, "output_tokens", None),
-            metadata={
-                "model": "claude-sonnet-4-20250514",
-                "niche": brief.niche,
-                "subject_centric": subject_centric,
-            },
+            metadata=metadata,
         )
 
     first_block = response.content[0]
     if first_block.type != "text":
         raise ValueError(f"Claude returned unexpected block type: {first_block.type}")
-    raw_text = first_block.text.strip()
-    if raw_text.startswith("```"):
-        raw_text = raw_text.split("```", 2)[1]
-        if raw_text.startswith("json"):
-            raw_text = raw_text[4:]
-        raw_text = raw_text.strip()
-    try:
-        data = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Claude returned invalid JSON: {raw_text!r}") from exc
+    return first_block.text, response
 
-    flux = FluxPrompt.model_validate(data)
 
+# ---------------------------------------------------------------------------
+# Public builders
+# ---------------------------------------------------------------------------
+
+
+async def build_flux_prompt(brief: TrendBrief) -> FluxPrompt:
+    # Dashboard-injected override path: caller pre-baked the prompt, skip
+    # Claude entirely. The FluxPrompt validator still enforces
+    # FLUX_REQUIRED_TERMS — prompts missing the required phrases will raise
+    # and the row will land in 'error' with a useful message.
+    custom = (brief.custom_flux_prompt or "").strip()
+    if custom:
+        custom = _preprocess_custom_prompt(custom, brief.color_palette, brief.prompt_constraint)
+        return FluxPrompt(prompt=custom, negative_prompt=None, style_descriptors=[])
+
+    subject_centric = is_subject_centric_brief(brief)
+    system_text = SYSTEM_PROMPT + (SUBJECT_CENTRIC_RULES if subject_centric else "")
+
+    raw_text, _response = await _call_claude(
+        system_text=system_text,
+        user_content=_build_user_content(brief),
+        operation="build_flux_prompt",
+        metadata={
+            "model": _CLAUDE_MODEL,
+            "niche": brief.niche,
+            "subject_centric": subject_centric,
+        },
+    )
+
+    flux = FluxPrompt.model_validate(_parse_json_response(raw_text))
     _reject_abstract_phrasing(flux)
     if subject_centric:
         _require_subject_terms(flux)
-
     return flux
 
 
@@ -624,99 +681,34 @@ Respond ONLY with valid JSON matching this schema exactly:
 }"""
 
 
-def build_gpt_image_prompt(brief: TrendBrief) -> ImagePrompt:
+async def build_gpt_image_prompt(brief: TrendBrief) -> ImagePrompt:
     # Dashboard-injected override path: use the operator's literal prompt.
     # No FLUX-required-phrase enforcement — gpt-image-2 takes plain English.
-    # Palette is auto-appended when set but not already inline (same flow as
-    # the FLUX builder — keep them parallel).
+    # Palette / framing / constraint clauses are auto-appended via the
+    # shared helper so both backends behave identically on injected
+    # prompts.
     custom = (brief.custom_flux_prompt or "").strip()
     if custom:
-        if not _palette_already_in_prompt(custom, brief.color_palette):
-            clause = _palette_clause(brief.color_palette)
-            if clause:
-                custom = custom + clause
-        if not _framing_already_in_prompt(custom):
-            custom = custom + FRAMING_CLAUSE
-        if not _constraint_already_in_prompt(custom):
-            constraint_clause = _constraint_clause(brief.prompt_constraint)
-            if constraint_clause:
-                custom = custom + constraint_clause
+        custom = _preprocess_custom_prompt(custom, brief.color_palette, brief.prompt_constraint)
         return ImagePrompt(prompt=custom, style_descriptors=[])
 
-    settings = get_settings()
-    client = Anthropic(api_key=settings.anthropic_api_key)
-
-    user_content = json.dumps(
-        {
+    raw_text, _response = await _call_claude(
+        system_text=GPT_IMAGE_SYSTEM_PROMPT,
+        user_content=_build_user_content(brief),
+        operation="build_gpt_image_prompt",
+        metadata={
+            "model": _CLAUDE_MODEL,
             "niche": brief.niche,
-            "style_keywords": brief.style_keywords,
-            "color_palette": brief.color_palette,
-            "top_tags": brief.top_tags,
-            "prompt_constraint": brief.prompt_constraint,
+            "image_model": "fal_gpt_image_2",
         },
-        indent=2,
     )
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1024,
-        system=[
-            {
-                "type": "text",
-                "text": GPT_IMAGE_SYSTEM_PROMPT,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ],
-        messages=[{"role": "user", "content": user_content}],
-    )
-
-    from packages.shared_py.llm_usage import (  # noqa: PLC0415
-        estimate_anthropic_cost_usd,
-        record_usage,
-    )
-
-    usage = getattr(response, "usage", None)
-    if usage is not None:
-        record_usage(
-            agent="design",
-            provider="anthropic",
-            operation="build_gpt_image_prompt",
-            cost_usd=estimate_anthropic_cost_usd(
-                model="claude-sonnet-4-20250514",
-                input_tokens=getattr(usage, "input_tokens", 0) or 0,
-                output_tokens=getattr(usage, "output_tokens", 0) or 0,
-                cache_read_input_tokens=getattr(usage, "cache_read_input_tokens", 0) or 0,
-                cache_creation_input_tokens=getattr(usage, "cache_creation_input_tokens", 0) or 0,
-            ),
-            input_tokens=getattr(usage, "input_tokens", None),
-            output_tokens=getattr(usage, "output_tokens", None),
-            metadata={
-                "model": "claude-sonnet-4-20250514",
-                "niche": brief.niche,
-                "image_model": "fal_gpt_image_2",
-            },
-        )
-
-    first_block = response.content[0]
-    if first_block.type != "text":
-        raise ValueError(f"Claude returned unexpected block type: {first_block.type}")
-    raw_text = first_block.text.strip()
-    if raw_text.startswith("```"):
-        raw_text = raw_text.split("```", 2)[1]
-        if raw_text.startswith("json"):
-            raw_text = raw_text[4:]
-        raw_text = raw_text.strip()
-    try:
-        data = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Claude returned invalid JSON: {raw_text!r}") from exc
-
-    return ImagePrompt.model_validate(data)
+    return ImagePrompt.model_validate(_parse_json_response(raw_text))
 
 
-def build_image_prompt(brief: TrendBrief) -> FluxPrompt | ImagePrompt:
+async def build_image_prompt(brief: TrendBrief) -> FluxPrompt | ImagePrompt:
     """Backend dispatcher. FLUX briefs go through the validated FLUX builder;
     everything else through the natural-English builder for gpt-image-2."""
     if brief.image_model == "fal_flux_pro":
-        return build_flux_prompt(brief)
-    return build_gpt_image_prompt(brief)
+        return await build_flux_prompt(brief)
+    return await build_gpt_image_prompt(brief)

@@ -1,7 +1,7 @@
 import json
 import re
 from datetime import UTC, datetime
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -69,15 +69,19 @@ def _mock_client(mocker, response_text: str) -> MagicMock:
     block.text = response_text
     message = MagicMock()
     message.content = [block]
+    # Native async client (AsyncAnthropic) — `messages.create` must be an
+    # AsyncMock so `await client.messages.create(...)` resolves to the
+    # message. The rest of the MagicMock surface stays as-is so tests can
+    # still inspect ``client.messages.create.call_args``.
     client = MagicMock()
-    client.messages.create.return_value = message
-    mocker.patch("packages.design.prompt_builder.Anthropic", return_value=client)
+    client.messages.create = AsyncMock(return_value=message)
+    mocker.patch("packages.design.prompt_builder.AsyncAnthropic", return_value=client)
     return client
 
 
-def test_valid_response_parses_to_flux_prompt(mocker):
+async def test_valid_response_parses_to_flux_prompt(mocker):
     _mock_client(mocker, json.dumps(_VALID_PROMPT))
-    result = build_flux_prompt(_SAMPLE_BRIEF)
+    result = await build_flux_prompt(_SAMPLE_BRIEF)
     assert isinstance(result, FluxPrompt)
     assert "white background" in result.prompt
     assert result.style_descriptors == ["minimalist", "nature", "warm tones"]
@@ -87,28 +91,28 @@ def test_valid_response_parses_to_flux_prompt(mocker):
 # 5-name substring blocklist could not credibly police IP). Compliance is now
 # enforced by the copywriter system prompt and validateCopyCompliance, both
 # downstream. This test is intentionally left in place as a marker.
-def test_banned_artist_name_passes_through_at_flux_level(mocker):
+async def test_banned_artist_name_passes_through_at_flux_level(mocker):
     bad = {**_VALID_PROMPT, "prompt": _VALID_PROMPT["prompt"] + " banksy style"}
     _mock_client(mocker, json.dumps(bad))
-    build_flux_prompt(_SAMPLE_BRIEF)
+    await build_flux_prompt(_SAMPLE_BRIEF)
 
 
-def test_missing_required_flux_term_raises_validation_error(mocker):
+async def test_missing_required_flux_term_raises_validation_error(mocker):
     bad = {**_VALID_PROMPT, "prompt": "a mountain scene without the required boilerplate"}
     _mock_client(mocker, json.dumps(bad))
     with pytest.raises(ValidationError, match="required FLUX term"):
-        build_flux_prompt(_SAMPLE_BRIEF)
+        await build_flux_prompt(_SAMPLE_BRIEF)
 
 
-def test_invalid_json_raises_value_error(mocker):
+async def test_invalid_json_raises_value_error(mocker):
     _mock_client(mocker, "not valid json at all")
     with pytest.raises(ValueError, match="invalid JSON"):
-        build_flux_prompt(_SAMPLE_BRIEF)
+        await build_flux_prompt(_SAMPLE_BRIEF)
 
 
-def test_system_prompt_has_cache_control(mocker):
+async def test_system_prompt_has_cache_control(mocker):
     client = _mock_client(mocker, json.dumps(_VALID_PROMPT))
-    build_flux_prompt(_SAMPLE_BRIEF)
+    await build_flux_prompt(_SAMPLE_BRIEF)
     kwargs = client.messages.create.call_args.kwargs
     system_blocks = kwargs["system"]
     assert any(block.get("cache_control") == {"type": "ephemeral"} for block in system_blocks)
@@ -129,7 +133,7 @@ def test_system_prompt_has_cache_control(mocker):
         ("mid-century geometric", ["modern decor"], False),
     ],
 )
-def test_is_subject_centric_brief_classification(niche, top_tags, expected):
+async def test_is_subject_centric_brief_classification(niche, top_tags, expected):
     brief = TrendBrief(
         id=uuid4(),
         created_at=_NOW,
@@ -144,9 +148,9 @@ def test_is_subject_centric_brief_classification(niche, top_tags, expected):
 # --- System-prompt branching -------------------------------------------------
 
 
-def test_subject_centric_brief_appends_subject_rules_to_system_prompt(mocker):
+async def test_subject_centric_brief_appends_subject_rules_to_system_prompt(mocker):
     client = _mock_client(mocker, json.dumps(_SUBJECT_VALID_PROMPT))
-    build_flux_prompt(_NURSE_BRIEF)
+    await build_flux_prompt(_NURSE_BRIEF)
     kwargs = client.messages.create.call_args.kwargs
     system_text = kwargs["system"][0]["text"]
     assert SUBJECT_CENTRIC_RULES.strip() in system_text
@@ -154,9 +158,9 @@ def test_subject_centric_brief_appends_subject_rules_to_system_prompt(mocker):
     assert "single subject" in system_text
 
 
-def test_non_subject_centric_brief_does_not_append_subject_rules(mocker):
+async def test_non_subject_centric_brief_does_not_append_subject_rules(mocker):
     client = _mock_client(mocker, json.dumps(_VALID_PROMPT))
-    build_flux_prompt(_SAMPLE_BRIEF)
+    await build_flux_prompt(_SAMPLE_BRIEF)
     kwargs = client.messages.create.call_args.kwargs
     system_text = kwargs["system"][0]["text"]
     assert SUBJECT_CENTRIC_RULES.strip() not in system_text
@@ -165,33 +169,33 @@ def test_non_subject_centric_brief_does_not_append_subject_rules(mocker):
 # --- Post-generation validator ----------------------------------------------
 
 
-def test_subject_centric_brief_rejects_prompt_missing_required_terms(mocker):
+async def test_subject_centric_brief_rejects_prompt_missing_required_terms(mocker):
     # Same generic prompt that passes for non-subject-centric briefs must FAIL here.
     _mock_client(mocker, json.dumps(_VALID_PROMPT))
     with pytest.raises(ValueError, match="missing required subject-centered phrasing"):
-        build_flux_prompt(_NURSE_BRIEF)
+        await build_flux_prompt(_NURSE_BRIEF)
 
 
-def test_subject_centric_brief_accepts_prompt_with_all_required_terms(mocker):
+async def test_subject_centric_brief_accepts_prompt_with_all_required_terms(mocker):
     _mock_client(mocker, json.dumps(_SUBJECT_VALID_PROMPT))
-    result = build_flux_prompt(_NURSE_BRIEF)
+    result = await build_flux_prompt(_NURSE_BRIEF)
     assert isinstance(result, FluxPrompt)
     assert "centered illustration" in result.prompt
 
 
-def test_enforcement_is_conditional_not_global(mocker):
+async def test_enforcement_is_conditional_not_global(mocker):
     # The exact same Claude response that fails for nurse passes for abstract wall art.
     _mock_client(mocker, json.dumps(_VALID_PROMPT))
-    result = build_flux_prompt(_SAMPLE_BRIEF)
+    result = await build_flux_prompt(_SAMPLE_BRIEF)
     assert isinstance(result, FluxPrompt)
 
 
 # --- Anti-abstract / anti-wallpaper enforcement ------------------------------
 
 
-def test_base_system_prompt_includes_anti_abstract_rules(mocker):
+async def test_base_system_prompt_includes_anti_abstract_rules(mocker):
     client = _mock_client(mocker, json.dumps(_VALID_PROMPT))
-    build_flux_prompt(_SAMPLE_BRIEF)
+    await build_flux_prompt(_SAMPLE_BRIEF)
     kwargs = client.messages.create.call_args.kwargs
     system_text = kwargs["system"][0]["text"].lower()
     assert "wallpaper" in system_text
@@ -209,40 +213,40 @@ def test_base_system_prompt_includes_anti_abstract_rules(mocker):
         "gradient wash",
     ],
 )
-def test_abstract_phrasing_in_prompt_is_rejected(mocker, bad_term):
+async def test_abstract_phrasing_in_prompt_is_rejected(mocker, bad_term):
     bad = {**_VALID_PROMPT, "prompt": _VALID_PROMPT["prompt"] + " " + bad_term}
     _mock_client(mocker, json.dumps(bad))
     with pytest.raises(ValueError, match="forbidden abstract/wallpaper phrasing"):
-        build_flux_prompt(_SAMPLE_BRIEF)
+        await build_flux_prompt(_SAMPLE_BRIEF)
 
 
-def test_abstract_phrasing_in_style_descriptors_is_rejected(mocker):
+async def test_abstract_phrasing_in_style_descriptors_is_rejected(mocker):
     bad = {**_VALID_PROMPT, "style_descriptors": ["minimalist", "color field", "muted"]}
     _mock_client(mocker, json.dumps(bad))
     with pytest.raises(ValueError, match="forbidden abstract/wallpaper phrasing"):
-        build_flux_prompt(_SAMPLE_BRIEF)
+        await build_flux_prompt(_SAMPLE_BRIEF)
 
 
-def test_abstract_phrasing_in_negative_prompt_is_allowed(mocker):
+async def test_abstract_phrasing_in_negative_prompt_is_allowed(mocker):
     # Negative prompt is the correct place to tell FLUX what to avoid.
     ok = {
         **_VALID_PROMPT,
         "negative_prompt": "wallpaper pattern, repeating motif, color field, tileable",
     }
     _mock_client(mocker, json.dumps(ok))
-    result = build_flux_prompt(_SAMPLE_BRIEF)
+    result = await build_flux_prompt(_SAMPLE_BRIEF)
     assert isinstance(result, FluxPrompt)
     assert "wallpaper" in (result.negative_prompt or "")
 
 
-def test_anti_abstract_rule_applies_to_subject_centric_briefs_too(mocker):
+async def test_anti_abstract_rule_applies_to_subject_centric_briefs_too(mocker):
     bad = {
         **_SUBJECT_VALID_PROMPT,
         "prompt": _SUBJECT_VALID_PROMPT["prompt"] + " on a tileable wallpaper background",
     }
     _mock_client(mocker, json.dumps(bad))
     with pytest.raises(ValueError, match="forbidden abstract/wallpaper phrasing"):
-        build_flux_prompt(_NURSE_BRIEF)
+        await build_flux_prompt(_NURSE_BRIEF)
 
 
 # --- Custom-prompt palette injection ----------------------------------------
@@ -275,13 +279,13 @@ def _brief_with_custom(prompt: str, *, palette: list[str] | None, image_model: s
     )
 
 
-def test_gpt_image_custom_prompt_appends_palette_clause_when_set():
+async def test_gpt_image_custom_prompt_appends_palette_clause_when_set():
     brief = _brief_with_custom(
         _CUSTOM_GPT_PROMPT,
         palette=["#E8EEF2", "#D6C9C9", "#C7D3DD", "#77B6EA", "#37393A"],
         image_model="fal_gpt_image_2",
     )
-    result = build_gpt_image_prompt(brief)
+    result = await build_gpt_image_prompt(brief)
     assert isinstance(result, ImagePrompt)
     # Operator's prompt survives verbatim at the front.
     assert result.prompt.startswith(_CUSTOM_GPT_PROMPT)
@@ -295,7 +299,7 @@ def test_gpt_image_custom_prompt_appends_palette_clause_when_set():
     assert "no gradients" not in result.prompt
 
 
-def test_gpt_image_custom_prompt_skips_palette_when_already_inline():
+async def test_gpt_image_custom_prompt_skips_palette_when_already_inline():
     """Operator wrote the colors into the prompt themselves — don't double-list.
     Framing still auto-appends (separate concern), so just assert the auto
     palette clause is absent and the operator's text survives at the front.
@@ -306,13 +310,13 @@ def test_gpt_image_custom_prompt_skips_palette_when_already_inline():
         palette=["#E8EEF2", "#77B6EA", "#37393A"],
         image_model="fal_gpt_image_2",
     )
-    result = build_gpt_image_prompt(brief)
+    result = await build_gpt_image_prompt(brief)
     assert result.prompt.startswith(custom_with_colors)
     # The auto palette clause must NOT have been appended on top.
     assert "Use only these colors:" not in result.prompt
 
 
-def test_gpt_image_custom_prompt_no_palette_keeps_operator_text_intact():
+async def test_gpt_image_custom_prompt_no_palette_keeps_operator_text_intact():
     """No palette → operator's prompt stays at the front (framing may append
     after it; that's exercised separately)."""
     brief = _brief_with_custom(
@@ -320,18 +324,18 @@ def test_gpt_image_custom_prompt_no_palette_keeps_operator_text_intact():
         palette=None,
         image_model="fal_gpt_image_2",
     )
-    result = build_gpt_image_prompt(brief)
+    result = await build_gpt_image_prompt(brief)
     assert result.prompt.startswith(_CUSTOM_GPT_PROMPT)
     assert "Use only these colors:" not in result.prompt
 
 
-def test_flux_custom_prompt_appends_palette_clause_when_set():
+async def test_flux_custom_prompt_appends_palette_clause_when_set():
     brief = _brief_with_custom(
         _CUSTOM_FLUX_PROMPT,
         palette=["#E8EEF2", "#D6C9C9", "#C7D3DD"],
         image_model="fal_flux_pro",
     )
-    result = build_flux_prompt(brief)
+    result = await build_flux_prompt(brief)
     assert isinstance(result, FluxPrompt)
     assert result.prompt.startswith(_CUSTOM_FLUX_PROMPT)
     assert "Use only these colors: E8EEF2 D6C9C9 C7D3DD" in result.prompt
@@ -340,21 +344,21 @@ def test_flux_custom_prompt_appends_palette_clause_when_set():
     assert "flat, solid fill" not in result.prompt
 
 
-def test_flux_custom_prompt_skips_palette_when_already_inline():
+async def test_flux_custom_prompt_skips_palette_when_already_inline():
     custom_with_colors = _CUSTOM_FLUX_PROMPT + " using colors #E8EEF2 #D6C9C9"
     brief = _brief_with_custom(
         custom_with_colors,
         palette=["#E8EEF2", "#D6C9C9"],
         image_model="fal_flux_pro",
     )
-    result = build_flux_prompt(brief)
+    result = await build_flux_prompt(brief)
     # Operator text + their inline palette survives at the front; auto-palette
     # clause is suppressed. Framing may auto-append after — separate concern.
     assert result.prompt.startswith(custom_with_colors)
     assert "Use only these colors:" not in result.prompt
 
 
-def test_palette_clause_ignores_malformed_entries():
+async def test_palette_clause_ignores_malformed_entries():
     """Sparse / partially-invalid palettes still inject the valid entries.
     Defends against the dashboard's color picker returning whitespace or
     short-form ('#abc') strings that the validator strips earlier — we accept
@@ -365,7 +369,7 @@ def test_palette_clause_ignores_malformed_entries():
         palette=["#E8EEF2", "not-a-hex", "", "77B6EA"],
         image_model="fal_gpt_image_2",
     )
-    result = build_gpt_image_prompt(brief)
+    result = await build_gpt_image_prompt(brief)
     assert "Use only these colors: E8EEF2 77B6EA" in result.prompt
 
 
@@ -377,19 +381,19 @@ def test_palette_clause_ignores_malformed_entries():
 # appends a framing clause unless the operator already addressed it.
 
 
-def test_gpt_image_custom_prompt_appends_framing_clause():
+async def test_gpt_image_custom_prompt_appends_framing_clause():
     brief = _brief_with_custom(
         _CUSTOM_GPT_PROMPT,
         palette=None,
         image_model="fal_gpt_image_2",
     )
-    result = build_gpt_image_prompt(brief)
+    result = await build_gpt_image_prompt(brief)
     lower = result.prompt.lower()
     assert "generous empty border" in lower
     assert "never touch the top, bottom, left, or right" in lower
 
 
-def test_gpt_image_custom_prompt_skips_framing_when_already_inline():
+async def test_gpt_image_custom_prompt_skips_framing_when_already_inline():
     """Operator already wrote the framing rule — don't double-append."""
     custom_with_framing = _CUSTOM_GPT_PROMPT + " Subject must not touch the edges of the image."
     brief = _brief_with_custom(
@@ -397,24 +401,24 @@ def test_gpt_image_custom_prompt_skips_framing_when_already_inline():
         palette=None,
         image_model="fal_gpt_image_2",
     )
-    result = build_gpt_image_prompt(brief)
+    result = await build_gpt_image_prompt(brief)
     # The operator's phrase survives, but our literal opener "generous empty
     # border" is NOT also injected on top.
     assert "Subject must not touch the edges" in result.prompt
     assert "generous empty border" not in result.prompt.lower()
 
 
-def test_flux_custom_prompt_appends_framing_clause():
+async def test_flux_custom_prompt_appends_framing_clause():
     brief = _brief_with_custom(
         _CUSTOM_FLUX_PROMPT,
         palette=None,
         image_model="fal_flux_pro",
     )
-    result = build_flux_prompt(brief)
+    result = await build_flux_prompt(brief)
     assert "generous empty border" in result.prompt.lower()
 
 
-def test_palette_and_framing_compose_in_order():
+async def test_palette_and_framing_compose_in_order():
     """Both auto-append clauses run on the same custom prompt — palette first
     (it's about WHAT colors to paint), framing second (it's about WHERE the
     composition lives). Both must be present in the final prompt."""
@@ -423,7 +427,7 @@ def test_palette_and_framing_compose_in_order():
         palette=["#E8EEF2", "#77B6EA"],
         image_model="fal_gpt_image_2",
     )
-    result = build_gpt_image_prompt(brief)
+    result = await build_gpt_image_prompt(brief)
     # Palette clause present.
     assert "Use only these colors: E8EEF2 77B6EA" in result.prompt
     # Framing clause present.
@@ -445,7 +449,7 @@ def test_palette_and_framing_compose_in_order():
 # idempotent regardless of palette changes.
 
 
-def test_regen_with_old_palette_clause_does_not_double_when_palette_changes():
+async def test_regen_with_old_palette_clause_does_not_double_when_palette_changes():
     """Operator's saved prompt has an OLD palette clause inline. brief
     .color_palette now contains a DIFFERENT set of hexes. Dedup must fire on
     the sentinel phrase so a second palette clause is not appended."""
@@ -459,7 +463,7 @@ def test_regen_with_old_palette_clause_does_not_double_when_palette_changes():
         palette=["#111111", "#222222", "#333333"],  # NEW hexes, none in the text
         image_model="fal_gpt_image_2",
     )
-    result = build_gpt_image_prompt(brief)
+    result = await build_gpt_image_prompt(brief)
     # Exactly ONE palette clause survives — the operator's old one. The new
     # palette field's hexes are NOT added on top.
     count = result.prompt.lower().count("use only these colors:")
@@ -467,7 +471,7 @@ def test_regen_with_old_palette_clause_does_not_double_when_palette_changes():
     assert "111111" not in result.prompt.upper()
 
 
-def test_regen_with_existing_constraint_clause_does_not_double():
+async def test_regen_with_existing_constraint_clause_does_not_double():
     """Operator's saved prompt already contains an 'Operator instruction
     (must follow):' suffix from a prior regen. brief.prompt_constraint is set.
     The clause must NOT be appended again."""
@@ -481,12 +485,12 @@ def test_regen_with_existing_constraint_clause_does_not_double():
         image_model="fal_gpt_image_2",
     )
     brief = brief.model_copy(update={"prompt_constraint": "grumpy but cute, frog-shaped head"})
-    result = build_gpt_image_prompt(brief)
+    result = await build_gpt_image_prompt(brief)
     count = result.prompt.lower().count("operator instruction (must follow):")
     assert count == 1, f"expected exactly one constraint clause, got {count}"
 
 
-def test_regen_full_round_trip_is_idempotent():
+async def test_regen_full_round_trip_is_idempotent():
     """Take a prompt the builder would output (palette + framing + constraint
     all auto-appended on a fresh build), feed it back in as custom_flux_prompt
     with the SAME palette and prompt_constraint, and the builder must NOT
@@ -500,20 +504,20 @@ def test_regen_full_round_trip_is_idempotent():
         image_model="fal_gpt_image_2",
     )
     initial = initial.model_copy(update={"prompt_constraint": constraint})
-    first = build_gpt_image_prompt(initial)
+    first = await build_gpt_image_prompt(initial)
 
     # Now simulate the regen path: the brief's custom_flux_prompt becomes the
     # output of the previous build (which is what the dashboard's edit form
     # would round-trip).
     regen_brief = initial.model_copy(update={"custom_flux_prompt": first.prompt})
-    second = build_gpt_image_prompt(regen_brief)
+    second = await build_gpt_image_prompt(regen_brief)
 
     assert second.prompt.lower().count("use only these colors:") == 1
     assert second.prompt.lower().count("generous empty border") == 1
     assert second.prompt.lower().count("operator instruction (must follow):") == 1
 
 
-def test_legacy_ink_colors_clause_is_also_detected():
+async def test_legacy_ink_colors_clause_is_also_detected():
     """A custom prompt carrying the pre-refactor 'Use only these ink colors:'
     sentinel (older saved prompts in the wild) must also block re-append."""
     legacy = (
@@ -526,7 +530,7 @@ def test_legacy_ink_colors_clause_is_also_detected():
         palette=["#111111"],
         image_model="fal_gpt_image_2",
     )
-    result = build_gpt_image_prompt(brief)
+    result = await build_gpt_image_prompt(brief)
     # Neither marker re-appended.
     assert result.prompt.lower().count("use only these colors:") == 0
     assert result.prompt.lower().count("use only these ink colors:") == 1
@@ -540,7 +544,7 @@ def test_legacy_ink_colors_clause_is_also_detected():
 # is a full override).
 
 
-def test_claude_path_receives_prompt_constraint_in_user_content(mocker):
+async def test_claude_path_receives_prompt_constraint_in_user_content(mocker):
     """Constraint flows into the user JSON sent to Claude so the prompt
     builder treats it as a high-priority directive."""
     brief = TrendBrief(
@@ -552,23 +556,23 @@ def test_claude_path_receives_prompt_constraint_in_user_content(mocker):
         prompt_constraint="lean hard into single-ink screen print, no shading",
     )
     client = _mock_client(mocker, json.dumps(_VALID_PROMPT))
-    build_flux_prompt(brief)
+    await build_flux_prompt(brief)
     user_content = client.messages.create.call_args.kwargs["messages"][0]["content"]
     assert "lean hard into single-ink screen print" in user_content
     # Field name is named so Claude can match the system-prompt section header.
     assert "prompt_constraint" in user_content
 
 
-def test_claude_system_prompt_documents_prompt_constraint(mocker):
+async def test_claude_system_prompt_documents_prompt_constraint(mocker):
     """The system prompt must reference the `prompt_constraint` field by name
     so Claude knows it's authoritative."""
     client = _mock_client(mocker, json.dumps(_VALID_PROMPT))
-    build_flux_prompt(_SAMPLE_BRIEF)
+    await build_flux_prompt(_SAMPLE_BRIEF)
     system_text = client.messages.create.call_args.kwargs["system"][0]["text"]
     assert "prompt_constraint" in system_text
 
 
-def test_custom_prompt_appends_prompt_constraint_clause():
+async def test_custom_prompt_appends_prompt_constraint_clause():
     """In the custom-prompt path (Scout inject + custom Design inject combined,
     or any regen of a brief that has both fields set), the constraint MUST
     survive to the final fal.ai prompt — not silently dropped."""
@@ -580,14 +584,14 @@ def test_custom_prompt_appends_prompt_constraint_clause():
     brief = brief.model_copy(
         update={"prompt_constraint": "make the head look grumpy but still cute"}
     )
-    result = build_gpt_image_prompt(brief)
+    result = await build_gpt_image_prompt(brief)
     assert (
         "Operator instruction (must follow): make the head look grumpy but still cute"
         in result.prompt
     )
 
 
-def test_custom_prompt_empty_constraint_is_a_no_op():
+async def test_custom_prompt_empty_constraint_is_a_no_op():
     """Empty / whitespace-only constraint must NOT inject a hollow clause —
     otherwise every brief without a constraint would pick up a meaningless
     'Operator instruction:' suffix."""
@@ -597,7 +601,7 @@ def test_custom_prompt_empty_constraint_is_a_no_op():
         image_model="fal_gpt_image_2",
     )
     brief = brief.model_copy(update={"prompt_constraint": "   "})
-    result = build_gpt_image_prompt(brief)
+    result = await build_gpt_image_prompt(brief)
     assert "Operator instruction" not in result.prompt
 
 
@@ -609,7 +613,7 @@ def test_custom_prompt_empty_constraint_is_a_no_op():
 # a baked-in house formula. The prompt enforces print-readiness and IP only.
 
 
-def test_gpt_image_system_prompt_states_constraint_is_highest_priority(mocker):
+async def test_gpt_image_system_prompt_states_constraint_is_highest_priority(mocker):
     """The priority-ordering language must be present in the system prompt so
     Claude knows operator constraint overrides any style guidance below."""
     from packages.design.prompt_builder import GPT_IMAGE_SYSTEM_PROMPT
@@ -625,7 +629,7 @@ def test_gpt_image_system_prompt_states_constraint_is_highest_priority(mocker):
     assert "constraint wins" in text
 
 
-def test_gpt_image_system_prompt_includes_painting_recreation_example(mocker):
+async def test_gpt_image_system_prompt_includes_painting_recreation_example(mocker):
     """The painting-recreation worked example must be present so Claude has
     a concrete pattern for 'pick a specific famous painting' constraints —
     the exact failure mode that produced the boring generic cat output."""
@@ -640,7 +644,7 @@ def test_gpt_image_system_prompt_includes_painting_recreation_example(mocker):
     assert "chiaroscuro" in text.lower() or "preserve" in text.lower()
 
 
-def test_gpt_image_system_prompt_has_no_default_house_style(mocker):
+async def test_gpt_image_system_prompt_has_no_default_house_style(mocker):
     """Design is content-neutral. The system prompt MUST NOT bake in a default
     visual register (screen print, flat colors, character print study, etc.).
     Style direction comes from the brief's `style_keywords` /
@@ -672,7 +676,7 @@ def test_gpt_image_system_prompt_has_no_default_house_style(mocker):
     assert "prompt_constraint" in text
 
 
-def test_palette_clause_does_not_impose_rendering_style():
+async def test_palette_clause_does_not_impose_rendering_style():
     """The auto-appended palette clause must enforce WHICH colors appear, not
     HOW they're rendered. Forcing flat fills inside the palette clause was
     baking screen-print style into every palette-enabled brief — that style
@@ -693,7 +697,7 @@ def test_palette_clause_does_not_impose_rendering_style():
     assert "solid fill" not in clause.lower()
 
 
-def test_flux_system_prompt_palette_example_is_style_neutral():
+async def test_flux_system_prompt_palette_example_is_style_neutral():
     """The FLUX system prompt's palette-enforcement example must not bake a
     screen-print rendering directive into the canonical phrasing."""
     from packages.design.prompt_builder import SYSTEM_PROMPT
@@ -707,7 +711,7 @@ def test_flux_system_prompt_palette_example_is_style_neutral():
     assert "every color in the image must come from this exact list" in text.lower()
 
 
-def test_flux_system_prompt_declares_content_neutrality():
+async def test_flux_system_prompt_declares_content_neutrality():
     """The FLUX system prompt must explicitly state that style direction comes
     from the brief's `style_keywords` / `prompt_constraint`, not from this
     agent. Prevents drift back toward baked screen-print defaults."""

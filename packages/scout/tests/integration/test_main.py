@@ -62,7 +62,7 @@ def setup(monkeypatch, mocker):
     from packages.shared_py import db as db_module
 
     config.get_settings.cache_clear()
-    db_module.get_db.cache_clear()
+    db_module._reset_db_client()
 
     mocker.patch("packages.scout.main.NICHE_SEEDS", _TEST_SEEDS)
 
@@ -86,7 +86,7 @@ def setup(monkeypatch, mocker):
     ).execute()
 
 
-async def test_run_inserts_pending_rows():
+async def test_run_inserts_needs_review_rows():
     await main.run()
 
     check = create_client(_SUPABASE_URL, _SUPABASE_KEY)
@@ -94,7 +94,9 @@ async def test_run_inserts_pending_rows():
     test_rows = [r for r in rows.data if r["niche"] in _TEST_SEEDS]
 
     assert 3 <= len(test_rows) <= 5
-    assert all(r["status"] == "pending" for r in test_rows)
+    # Every brief lands at 'needs_review' — the review queue. Scout never
+    # writes 'pending' (that status was retired in migration 021).
+    assert all(r["status"] == "needs_review" for r in test_rows)
 
 
 async def test_second_run_inserts_nothing():

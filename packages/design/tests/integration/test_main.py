@@ -77,7 +77,7 @@ def setup_env(monkeypatch, mocker):
     from packages.shared_py import db as db_module
 
     config.get_settings.cache_clear()
-    db_module.get_db.cache_clear()
+    db_module._reset_db_client()
 
     yield
 

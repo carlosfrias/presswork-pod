@@ -81,11 +81,11 @@ async def run() -> None:
         design_id: UUID = UUID(existing_row["id"]) if existing_row else uuid4()
 
         try:
-            # build_image_prompt makes a blocking sync Anthropic HTTP call; offload
-            # so the event loop (and any rate-limit semaphores it holds) stays alive.
             # Returns FluxPrompt for fal_flux_pro briefs, ImagePrompt for
-            # fal_gpt_image_2 briefs — both have `.prompt` and `.style_descriptors`.
-            image_prompt = await asyncio.to_thread(build_image_prompt, brief)
+            # fal_gpt_image_2 briefs — both have `.prompt` and
+            # `.style_descriptors`. Native async via AsyncAnthropic (the
+            # builders no longer block the event loop, so no asyncio.to_thread).
+            image_prompt = await build_image_prompt(brief)
             # Hash includes image_model so identical prompt text against different
             # backends doesn't collide in the cross-row dedup cache.
             fal_prompt_hash = hashlib.sha256(
@@ -296,36 +296,56 @@ async def run() -> None:
             # captures it would fail with NameError. Snapshot to a local first.
             err_msg = str(e)
 
-            # Retry counter lives on design_packages (not trend_briefs — trend_briefs.retry_count
-            # belongs to the Scout). Read what's there, increment, and write the new error
-            # state. If the row doesn't exist yet (exception fired before the insert) we
-            # upsert a stub so the next retry can read its retry_count.
-            def _select_retry_count() -> Any:
-                return (
-                    db.table("design_packages")
-                    .select("retry_count")
-                    .eq("id", str(design_id))
-                    .execute()
+            # The error handler used to perform two unguarded secondary DB
+            # calls (select retry_count + upsert design_packages) before the
+            # trend_briefs status flip and Slack alert. A transient DB
+            # timeout on either of those left the brief stuck in 'processing'
+            # forever (AUDIT_4 H7). Each secondary write now lives inside
+            # its own try/except so the alert always fires.
+
+            new_retry = 0
+            try:
+                # Retry counter lives on design_packages (not trend_briefs —
+                # trend_briefs.retry_count belongs to Scout). Read what's
+                # there, increment, and write the new error state. If the
+                # row doesn't exist yet (exception fired before the insert)
+                # we upsert a stub so the next retry can read its retry_count.
+                def _select_retry_count() -> Any:
+                    return (
+                        db.table("design_packages")
+                        .select("retry_count")
+                        .eq("id", str(design_id))
+                        .execute()
+                    )
+
+                current_resp = await asyncio.to_thread(_select_retry_count)
+                current_retry = (
+                    cast(dict[str, Any], current_resp.data[0])["retry_count"]
+                    if current_resp.data
+                    else 0
                 )
+                new_retry = current_retry + 1
 
-            current_resp = await asyncio.to_thread(_select_retry_count)
-            current_retry = (
-                cast(dict[str, Any], current_resp.data[0])["retry_count"]
-                if current_resp.data
-                else 0
-            )
-            new_retry = current_retry + 1
-
-            design_error_row = {
-                "id": str(design_id),
-                "trend_brief_id": brief_id,
-                "status": "error",
-                "error_message": err_msg,
-                "retry_count": new_retry,
-            }
-            await asyncio.to_thread(
-                lambda: db.table("design_packages").upsert(design_error_row).execute()
-            )
+                design_error_row = {
+                    "id": str(design_id),
+                    "trend_brief_id": brief_id,
+                    "status": "error",
+                    "error_message": err_msg,
+                    "retry_count": new_retry,
+                }
+                await asyncio.to_thread(
+                    lambda: db.table("design_packages").upsert(design_error_row).execute()
+                )
+            except Exception as inner:
+                log.error(
+                    "design_error_handler_db_failed",
+                    agent="design",
+                    action="design_error_handler_db_failed",
+                    brief_id=brief_id,
+                    design_id=str(design_id),
+                    db_error=str(inner),
+                    original_error=err_msg,
+                )
 
             # Any design failure is terminal: park trend_briefs at 'error' with the
             # message, alert Slack, and stop. No auto-retry, no revert to 'pending'.
@@ -333,19 +353,32 @@ async def run() -> None:
             # 'processing' → 'done' is forward; failures require operator inspection
             # (re-approve the brief in the dashboard to retry). Do NOT touch
             # trend_briefs.retry_count — that counter belongs to Scout.
-            await asyncio.to_thread(
-                lambda: (
-                    db.table("trend_briefs")
-                    .update(
-                        {
-                            "status": "error",
-                            "error_message": err_msg,
-                        }
+            try:
+                await asyncio.to_thread(
+                    lambda: (
+                        db.table("trend_briefs")
+                        .update(
+                            {
+                                "status": "error",
+                                "error_message": err_msg,
+                            }
+                        )
+                        .eq("id", brief_id)
+                        .execute()
                     )
-                    .eq("id", brief_id)
-                    .execute()
                 )
-            )
+            except Exception as inner:
+                log.error(
+                    "design_error_handler_brief_update_failed",
+                    agent="design",
+                    action="design_error_handler_brief_update_failed",
+                    brief_id=brief_id,
+                    db_error=str(inner),
+                    original_error=err_msg,
+                )
+
+            # Alert always fires regardless of the secondary DB outcomes
+            # above. notify_slack itself swallows its own errors.
             await notify_slack(
                 f"Design failed for trend_brief={brief_id} "
                 f"(design_packages.retry_count={new_retry}): {err_msg}",
