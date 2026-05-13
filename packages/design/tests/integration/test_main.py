@@ -27,7 +27,7 @@ _SUPABASE_KEY = os.getenv(
 _TEST_NICHE = "main-integration-test-niche"
 
 _VALID_FLUX_PROMPT = {
-    "prompt": "print on demand design, transparent background, high resolution, vector-style mountain",
+    "prompt": "print on demand design, vector-style mountain, white background",
     "negative_prompt": "blurry",
     "style_descriptors": ["minimalist", "nature"],
 }
@@ -95,10 +95,18 @@ def _mock_anthropic(mocker):
 
 
 def _mock_fal(mocker):
-    result = {"images": [{"url": _FAKE_IMAGE_URL}]}
-    mock = AsyncMock(return_value=result)
-    mocker.patch("packages.design.fal_client.fal_client.run_async", mock)
-    return mock
+    """Mock every fal stage. FLUX (generate_image_url), aura-sr (upscale_url),
+    and birefnet (remove_background_birefnet_url) all return the same fake URL
+    so the integration test exercises the URL-threading path without hitting
+    fal.ai. The single download_image call at the end pulls _small_png_bytes
+    from respx so process_for_print has something to work with."""
+    flux_mock = AsyncMock(return_value=_FAKE_IMAGE_URL)
+    upscale_mock = AsyncMock(return_value=_FAKE_IMAGE_URL)
+    birefnet_mock = AsyncMock(return_value=_FAKE_IMAGE_URL)
+    mocker.patch("packages.design.main.generate_image_url", flux_mock)
+    mocker.patch("packages.design.main.upscale_url", upscale_mock)
+    mocker.patch("packages.design.main.remove_background_birefnet_url", birefnet_mock)
+    return flux_mock
 
 
 def _insert_brief(db: Client) -> str:
@@ -141,7 +149,7 @@ async def test_happy_path_creates_done_design_package(db: Client, mocker):
 async def test_retryable_failure_flips_back_to_pending(db: Client, mocker):
     _mock_anthropic(mocker)
     mocker.patch(
-        "packages.design.main.generate_image",
+        "packages.design.main.generate_image_url",
         new=AsyncMock(side_effect=RuntimeError("fal.ai down")),
     )
 
@@ -157,7 +165,7 @@ async def test_retryable_failure_flips_back_to_pending(db: Client, mocker):
 async def test_exhausted_retries_leave_row_in_error(db: Client, mocker):
     _mock_anthropic(mocker)
     mocker.patch(
-        "packages.design.main.generate_image",
+        "packages.design.main.generate_image_url",
         new=AsyncMock(side_effect=RuntimeError("fal.ai down")),
     )
 

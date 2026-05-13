@@ -44,10 +44,6 @@ const SettingsSchema = z.object({
   // Runtime
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   LOG_LEVEL: z.enum(["trace", "debug", "info", "warn", "error", "fatal"]).default("info"),
-  HUMAN_REVIEW_ENABLED: z
-    .string()
-    .transform((v) => v === "true")
-    .default("true"),
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;

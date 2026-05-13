@@ -13,6 +13,12 @@ __pycache__/
 node_modules/
 dist/
 
+# Next.js build cache (per-package)
+.next/
+
+# TypeScript incremental build info — regenerated per machine
+*.tsbuildinfo
+
 # IDE
 .idea/
 .vscode/
@@ -31,3 +37,6 @@ Thumbs.db
 
 # Smoke test outputs
 .tmp/
+
+# Large binary fixtures — host externally, not in git
+scripts/shirt-template.png

@@ -112,6 +112,30 @@ async def test_401_refresh_still_401_raises():
 
 
 @respx.mock
+async def test_fetch_top_listings_includes_images_when_requested():
+    route = respx.get(_LISTINGS_URL).mock(
+        return_value=httpx.Response(200, json={"results": _FAKE_LISTINGS})
+    )
+    client = EtsyClient()
+    await client.fetch_top_listings("dog mom", include_images=True)
+    assert route.call_count == 1
+    request = route.calls.last.request
+    assert request.url.params.get("includes") == "Images"
+
+
+@respx.mock
+async def test_fetch_top_listings_omits_includes_by_default():
+    route = respx.get(_LISTINGS_URL).mock(
+        return_value=httpx.Response(200, json={"results": _FAKE_LISTINGS})
+    )
+    client = EtsyClient()
+    await client.fetch_top_listings("dog mom")
+    assert route.call_count == 1
+    request = route.calls.last.request
+    assert "includes" not in request.url.params
+
+
+@respx.mock
 async def test_refresh_persists_rotated_refresh_token_to_supabase(mock_db):
     """Bug #11: Etsy rotates refresh_token on each refresh; must persist it."""
     respx.post(_TOKEN_URL).mock(

@@ -1,0 +1,270 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+import { z } from "zod";
+import { serviceClient } from "@/lib/supabase/server";
+import { requireOwnerEmail } from "@/lib/auth";
+import { maybeAutoTrigger } from "@/lib/actions/triggers";
+import {
+  buildPromptDescription,
+  BuildPromptError,
+  type ScoutSignals,
+} from "@/lib/builder/build-prompt";
+
+/**
+ * Server actions for the Builder step.
+ *
+ * Pipeline:
+ *   Scout writes brief at 'needs_review'
+ *   → operator approves on Scout page → status='needs_description'
+ *   → operator opens it in Builder, types a free-form seed
+ *   → Builder calls Claude to flesh the seed into a render-ready description
+ *   → operator edits if needed, then sends it to Design
+ *   → Builder writes prompt_constraint and flips status='approved'
+ *   → Design claims status='approved' and generates the print-ready image
+ *
+ * Four entry points:
+ *   - buildPromptForBrief — Claude call for a from-Scout brief. Reads Scout's
+ *     trend signals from the brief and uses them as priors. Does NOT mutate
+ *     the brief; returns the fleshed description to the client.
+ *   - buildPromptManual — Claude call for a manual entry. No Scout priors.
+ *   - sendToDesign — from-Scout flow: writes the (possibly operator-edited)
+ *     description to prompt_constraint and flips status='approved'.
+ *   - createManualBrief — manual flow: creates a new brief at status='approved'
+ *     with the operator's niche + description.
+ */
+
+async function assertOwner(): Promise<string> {
+  const email = await requireOwnerEmail();
+  if (!email) throw new Error("Unauthorized");
+  return email;
+}
+
+const idSchema = z.string().uuid();
+const descriptionSchema = z
+  .string()
+  .min(10, "Description must be at least 10 characters")
+  .max(2000, "Description must be 2000 characters or fewer");
+
+// Operator seeds are free-form: a bare subject like "bulldog trashman" is fine
+// (3+ chars covers it), and the upper bound is generous so a seasoned operator
+// can paste a near-complete description if they want Builder to only polish it.
+const seedSchema = z
+  .string()
+  .trim()
+  .min(3, "Seed must be at least 3 characters")
+  .max(1000, "Seed must be 1000 characters or fewer");
+
+// Up to three reference images per build — caps Claude vision cost per call
+// (~$0.005 each) and prevents the "too many anchors" failure mode where the
+// model averages references into mush instead of treating each as a distinct
+// composition/style/palette anchor. URLs are consumed at build time only and
+// never persisted.
+const MAX_REFERENCE_IMAGES = 3;
+
+// Accepts a comma-separated string from the UI ("https://a.jpg, https://b.png"),
+// trims, drops empties, validates each as http(s), and rejects if > MAX. Returns
+// string[] | null — null when no URLs were given so downstream code can branch
+// on presence cleanly.
+const referenceUrlsSchema = z
+  .string()
+  .trim()
+  .max(6000) // generous: 3 URLs × ~2000 chars each
+  .transform((v) => v.split(",").map((s) => s.trim()).filter((s) => s.length > 0))
+  .refine(
+    (urls) => urls.every((u) => /^https?:\/\//i.test(u)),
+    { message: "Each reference URL must start with http:// or https://" },
+  )
+  .refine(
+    (urls) => urls.length <= MAX_REFERENCE_IMAGES,
+    { message: `At most ${MAX_REFERENCE_IMAGES} reference URLs allowed (comma-separated)` },
+  )
+  .transform((urls) => (urls.length === 0 ? null : urls));
+
+// Default niche for manual entries when the operator doesn't pick one.
+// Matches the "original design" language the operator uses for one-off pieces
+// that don't sit under a specific trend niche.
+const DEFAULT_MANUAL_NICHE = "original design";
+const nicheSchema = z.string().trim().min(2).max(120);
+
+/** Discriminated return so client components can render the error in-line
+ * instead of bubbling it to the Next.js error boundary. Build is an expected-
+ * fallible operation (Claude hiccups, schema mismatches) — surfaced gently. */
+export type BuildResult =
+  | { ok: true; description: string }
+  | { ok: false; error: string };
+
+export async function buildPromptForBrief(
+  briefId: string,
+  rawSeed: string,
+  rawReferenceUrls = "",
+): Promise<BuildResult> {
+  await assertOwner();
+  const parsedId = idSchema.safeParse(briefId);
+  if (!parsedId.success) {
+    return { ok: false, error: "Invalid brief id" };
+  }
+  const parsedSeed = seedSchema.safeParse(rawSeed);
+  if (!parsedSeed.success) {
+    return { ok: false, error: parsedSeed.error.issues[0]?.message ?? "Invalid seed" };
+  }
+  const parsedUrls = referenceUrlsSchema.safeParse(rawReferenceUrls);
+  if (!parsedUrls.success) {
+    return { ok: false, error: parsedUrls.error.issues[0]?.message ?? "Invalid URL(s)" };
+  }
+
+  const db = serviceClient();
+  const { data: brief, error: readErr } = await db
+    .from("trend_briefs")
+    .select("niche, style_keywords, top_tags, color_palette, status")
+    .eq("id", parsedId.data)
+    .maybeSingle();
+  if (readErr) {
+    return { ok: false, error: `Brief read failed: ${readErr.message}` };
+  }
+  if (!brief) {
+    return { ok: false, error: "Brief not found" };
+  }
+  if (brief.status !== "needs_description") {
+    return {
+      ok: false,
+      error: `Cannot build for status='${brief.status}' (expected 'needs_description')`,
+    };
+  }
+
+  const scout: ScoutSignals = {
+    niche: brief.niche as string,
+    style_keywords: brief.style_keywords as string[] | null,
+    top_tags: brief.top_tags as string[] | null,
+    color_palette: brief.color_palette as string[] | null,
+  };
+
+  try {
+    const description = await buildPromptDescription(parsedSeed.data, scout, parsedUrls.data);
+    return { ok: true, description };
+  } catch (err) {
+    const message =
+      err instanceof BuildPromptError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    return { ok: false, error: `Builder failed: ${message}` };
+  }
+}
+
+export async function buildPromptManual(
+  rawSeed: string,
+  rawReferenceUrls = "",
+): Promise<BuildResult> {
+  await assertOwner();
+  const parsedSeed = seedSchema.safeParse(rawSeed);
+  if (!parsedSeed.success) {
+    return { ok: false, error: parsedSeed.error.issues[0]?.message ?? "Invalid seed" };
+  }
+  const parsedUrls = referenceUrlsSchema.safeParse(rawReferenceUrls);
+  if (!parsedUrls.success) {
+    return { ok: false, error: parsedUrls.error.issues[0]?.message ?? "Invalid URL(s)" };
+  }
+
+  try {
+    const description = await buildPromptDescription(parsedSeed.data, null, parsedUrls.data);
+    return { ok: true, description };
+  } catch (err) {
+    const message =
+      err instanceof BuildPromptError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    return { ok: false, error: `Builder failed: ${message}` };
+  }
+}
+
+export async function sendToDesign(formData: FormData): Promise<void> {
+  const email = await assertOwner();
+  const id = idSchema.parse(formData.get("id"));
+  const description = descriptionSchema.parse(formData.get("description"));
+
+  const db = serviceClient();
+
+  // The parent brief stays in the Builder queue so the operator can spawn
+  // multiple designs from the same trend signal + seed iteration. Each
+  // "Send to Design" creates a CHILD brief — a clone of the parent's research
+  // fields with the operator's image description attached and status=approved
+  // so Design's claim RPC picks it up. The parent's status is never touched.
+  const { data: parent, error: readErr } = await db
+    .from("trend_briefs")
+    .select(
+      "id, status, niche, style_keywords, top_tags, color_palette, price_target_usd, raw_etsy_data, claude_analysis, image_model, image_quality",
+    )
+    .eq("id", id)
+    .maybeSingle();
+  if (readErr) throw new Error(`Brief read failed: ${readErr.message}`);
+  if (!parent) throw new Error("Brief not found");
+  if (parent.status !== "needs_description") {
+    throw new Error(
+      `Cannot send from status='${parent.status}' (expected 'needs_description')`,
+    );
+  }
+
+  // Provenance: tag the child so the dashboard can distinguish spawned briefs
+  // from Scout-research briefs, and so future code can backtrack to the parent.
+  const parentAnalysis =
+    parent.claude_analysis && typeof parent.claude_analysis === "object"
+      ? (parent.claude_analysis as Record<string, unknown>)
+      : {};
+  const childAnalysis = {
+    ...parentAnalysis,
+    source: "builder_spawn",
+    parent_brief_id: parent.id,
+  };
+
+  const { error: insertErr } = await db.from("trend_briefs").insert({
+    niche: parent.niche,
+    style_keywords: parent.style_keywords,
+    top_tags: parent.top_tags,
+    color_palette: parent.color_palette,
+    price_target_usd: parent.price_target_usd,
+    raw_etsy_data: parent.raw_etsy_data,
+    claude_analysis: childAnalysis,
+    image_model: parent.image_model,
+    image_quality: parent.image_quality,
+    prompt_constraint: description.trim(),
+    status: "approved",
+  });
+  if (insertErr) throw new Error(`Send to Design failed: ${insertErr.message}`);
+
+  // Chain into Design when local triggers are enabled + design manual mode is
+  // off. Silently no-ops otherwise — operator clicks Run Design themselves.
+  await maybeAutoTrigger("design", email);
+
+  revalidatePath("/builder");
+  revalidatePath("/design");
+  revalidatePath("/");
+}
+
+export async function createManualBrief(formData: FormData): Promise<void> {
+  const email = await assertOwner();
+  const description = descriptionSchema.parse(formData.get("description"));
+  const rawNiche = formData.get("niche")?.toString().trim() ?? "";
+  const niche = nicheSchema.parse(rawNiche || DEFAULT_MANUAL_NICHE);
+
+  const db = serviceClient();
+  // Manual briefs skip the Scout-research and Scout-approve gates — the
+  // operator authored both the niche and the description themselves. Land
+  // them at status='approved' so Design claims on its next tick.
+  const { error } = await db.from("trend_briefs").insert({
+    niche,
+    prompt_constraint: description.trim(),
+    status: "approved",
+    claude_analysis: { source: "builder_manual" },
+  });
+  if (error) throw new Error(`Create manual brief failed: ${error.message}`);
+
+  await maybeAutoTrigger("design", email);
+
+  revalidatePath("/builder");
+  revalidatePath("/design");
+  revalidatePath("/");
+}

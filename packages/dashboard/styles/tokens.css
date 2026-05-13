@@ -1,0 +1,70 @@
+/* Design tokens for the Presswork dashboard.
+ *
+ * Direction: editorial / instrument-panel. Dark-luxury neutral base, one warm
+ * accent for revenue / positive, one cool accent for warnings, one alert red.
+ * Tokens are oklch so contrast can be reasoned about against the base.
+ */
+
+:root {
+  /* Surface scale — deep neutral with a warm-cool tilt between steps */
+  --surface-0: oklch(13% 0.01 280);   /* page background */
+  --surface-1: oklch(16% 0.012 280);  /* card */
+  --surface-2: oklch(20% 0.014 280);  /* nested card */
+  --surface-3: oklch(25% 0.018 280);  /* hover */
+  --surface-line: oklch(28% 0.02 280); /* hairline */
+
+  /* Text */
+  --text-primary:   oklch(96% 0.005 90);
+  --text-secondary: oklch(75% 0.01 90);
+  --text-muted:     oklch(55% 0.012 90);
+  --text-faint:     oklch(38% 0.012 90);
+
+  /* Accents */
+  --accent-warm:  oklch(78% 0.16 70);   /* revenue, primary action */
+  --accent-cool:  oklch(72% 0.12 235);  /* info, neutral state */
+  --accent-good:  oklch(76% 0.18 150);  /* success / margin positive */
+  --accent-warn:  oklch(80% 0.17 85);   /* warning */
+  --accent-bad:   oklch(68% 0.21 25);   /* error */
+
+  /* Status palette (used by StatusFunnel + ErrorChip) */
+  --status-pending:    var(--accent-cool);
+  --status-processing: var(--accent-warm);
+  --status-done:       var(--accent-good);
+  --status-error:      var(--accent-bad);
+  --status-review:     oklch(75% 0.14 320);
+  --status-publishing: oklch(72% 0.14 50);
+  --status-active:     var(--accent-good);
+
+  /* Typography */
+  --font-display: "Inter", "SF Pro Display", system-ui, sans-serif;
+  --font-sans:    "Inter", system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+
+  --text-xs:   0.75rem;
+  --text-sm:   0.875rem;
+  --text-base: 1rem;
+  --text-lg:   1.125rem;
+  --text-xl:   1.5rem;
+  --text-2xl:  2rem;
+  --text-3xl:  clamp(2.25rem, 1.5rem + 2.5vw, 3.5rem);
+
+  /* Spacing scale */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-7: 3rem;
+  --space-8: 4rem;
+
+  /* Radii — subtle, not pill */
+  --radius-sm: 6px;
+  --radius:    10px;
+  --radius-lg: 14px;
+
+  /* Motion */
+  --duration-fast:   120ms;
+  --duration-normal: 220ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+}

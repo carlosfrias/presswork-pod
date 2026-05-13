@@ -11,7 +11,9 @@ Autonomous 4-agent print-on-demand pipeline on Etsy + Printify:
 1. **Scout** (Python) — scans Etsy for trends → `trend_briefs`
 2. **Design** (Python) — generates art via fal.ai FLUX Pro → `design_packages`
 3. **Listing** (TS) — publishes SEO listings via Etsy API v3 → `listings`
-4. **Fulfillment** (TS) — webhook server, Printify routing, tracking → `orders`
+4. **Ledger** (TS) — polls Etsy receipts, logs economics, emits margin/revenue alerts → `orders`
+
+Order fulfillment itself is handled by **Etsy's native Printify integration**, not by this codebase. The Ledger Agent is metrics-only; it never calls the Printify API.
 
 Agents are **loosely coupled via Supabase**. No direct agent-to-agent calls — each reads inputs and writes outputs through DB tables.
 
@@ -26,7 +28,7 @@ npm workspaces; Python packages own their `requirements.txt`.
 - `packages/scout/` — Agent 1 (Python)
 - `packages/design/` — Agent 2 (Python)
 - `packages/listing/` — Agent 3 (TS) — `compliance.ts` is the policy gate
-- `packages/fulfillment/` — Agent 4 (TS) — Express webhook server
+- `packages/ledger/` — Agent 4 (TS) — Etsy receipt polling, economics logging, margin/revenue digests
 - `infra/supabase/migrations/` — SQL migrations (`001_*.sql` …) — **schema lives here, not in this file**
 - `infra/railway.toml` — Railway service definitions
 - `scripts/` — one-off ops scripts
@@ -38,13 +40,13 @@ npm workspaces; Python packages own their `requirements.txt`.
 | Layer | Tool |
 |---|---|
 | Scout + Design | Python 3.12 (`httpx`, `pydantic`, `structlog`) |
-| Listing + Fulfillment | TypeScript / Node 20 (strict mode, `zod`, `bottleneck`) |
+| Listing + Ledger | TypeScript / Node 20 (strict mode, `zod`, `bottleneck`) |
 | AI reasoning | Claude Sonnet 4 (`claude-sonnet-4-20250514`) |
 | Image gen | fal.ai FLUX Pro 1.1 (~$0.05/image) |
 | Database | Supabase (Postgres) — agent handoff state |
 | Storage | Supabase Storage — design PNGs, mockups |
-| Hosting / cron | Railway (one service per agent) |
-| Print fulfillment | Printify (primary) |
+| Hosting / cron | Local CLI for now (Railway TBD). Dashboard can spawn agents locally via `DASHBOARD_LOCAL_TRIGGERS_ENABLED=true` |
+| Print fulfillment | Etsy's native Printify integration (out of band) |
 | Alerts | Resend (email) + Slack webhooks |
 | Secrets | Railway env vars only — never in code |
 
@@ -60,12 +62,15 @@ ETSY_API_KEY= ETSY_API_SECRET= ETSY_SHOP_ID=
 ETSY_ACCESS_TOKEN= ETSY_REFRESH_TOKEN=
 ETSY_PRODUCTION_PARTNER_ID=   # numeric, from Shop Manager → Production Partners. Required.
 FAL_KEY=
-PRINTIFY_API_TOKEN= PRINTIFY_SHOP_ID=
-PRINTIFY_WEBHOOK_BASE_URL= PRINTIFY_WEBHOOK_SECRET=
+PRINTIFY_API_TOKEN= PRINTIFY_SHOP_ID=        # used by Listing only (product create); Ledger never calls Printify
 SUPABASE_URL= SUPABASE_SERVICE_ROLE_KEY=    # service role only, never anon in backend
 RESEND_API_KEY= ALERT_EMAIL= SLACK_WEBHOOK_URL=
 NODE_ENV=development LOG_LEVEL=info
-HUMAN_REVIEW_ENABLED=true     # false to skip manual review on listings
+SCOUT_VISION_ENABLED=false    # true → Scout sends Etsy thumbnails to Claude (+~3-5× tokens)
+DASHBOARD_ALLOWED_EMAILS=     # comma-separated owner-email allowlist for the dashboard
+NEXT_PUBLIC_SUPABASE_URL=     # same as SUPABASE_URL — read by browser-side dashboard auth
+NEXT_PUBLIC_SUPABASE_ANON_KEY= # publishable key (sb_publishable_...), NOT service role
+DASHBOARD_LOCAL_TRIGGERS_ENABLED=false  # true → dashboard "Run agent" buttons spawn local subprocess
 ```
 
 ---
@@ -76,15 +81,16 @@ Full DDL lives in `infra/supabase/migrations/`. Four core tables drive agent han
 
 | Table | Owner | Status flow |
 |---|---|---|
-| `trend_briefs` | Scout writes, Design reads | `pending` → `processing` → `done` \| `error` |
-| `design_packages` | Design writes, Listing reads | `pending` → `processing` → `done` \| `error` |
-| `listings` | Listing | `pending` → `needs_review` → `publishing` → `active` \| `error` |
-| `orders` | Fulfillment | `received` → `submitted` → `shipped` \| `error` |
+| `trend_briefs` | Scout writes, Builder/Design read | `needs_review` → `needs_description` → `approved` → `processing` → `done` \| `error` |
+| `design_packages` | Design writes, Listing reads | `needs_review` → `approved` → `processing` → `done` \| `error` |
+| `listings` | Listing | `pending` → `needs_review` → `pending_publish` → `publishing` → `active` \| `error` |
+| `orders` | Ledger | `logged` \| `error` (terminal — fulfillment lives outside this codebase) |
 
 Rules:
 - **Never skip a status step.** Enforce transitions in code.
-- `listings`: if `HUMAN_REVIEW_ENABLED=true`, pause at `needs_review`; otherwise straight to `publishing`.
+- **Every agent's output is human-gated. No bypass.** Scout writes `needs_review`; Scout-approve transitions to `needs_description`; Builder writes the image description and transitions to `approved`; Design claims `approved` and writes `needs_review` on completion; Listing claims `approved` design packages, builds the Printify product, then pauses at listings `needs_review` until the dashboard's Approve flips the row to `pending_publish`. No auto-approve runtime flags, no `HUMAN_REVIEW_ENABLED` env override — those were removed in migration 030.
 - `orders.margin_usd` is a generated column: `sale_price − print_cost − etsy_fees`.
+- `orders` has no Printify/tracking columns — those were dropped in migration 016 when fulfillment moved to Etsy's native Printify integration.
 - `design_packages.mockups_from_actual_design BOOLEAN NOT NULL` — provenance flag (compliance rule 4).
 - Every table has `created_at`, `updated_at` (auto via trigger), `error_message`, `retry_count`.
 
@@ -100,6 +106,8 @@ Nightly cron (`0 2 * * *`). Produces 3–5 `trend_briefs/run`.
 3. Extract titles, tags, prices, review counts.
 4. Claude Sonnet → structured `TrendBrief` JSON (`niche`, `style_keywords`, `top_tags`, `price_target_usd`, `color_palette`). System prompt forbids shop/artist/IP names.
 5. Dedupe vs last 7 days. Insert with `status='pending'`.
+
+Set `SCOUT_VISION_ENABLED=true` to also send Etsy listing thumbnails to Claude (vision-aware analyzer). Off by default — adds ~3-5× per-run token cost.
 
 ### Agent 2 — Design (`packages/design/`)
 Polls every 15 min for `trend_briefs.status='pending'`.
@@ -121,25 +129,22 @@ Polls every 15 min for `design_packages.status='done'`.
 4. Claude Sonnet → `{title, description, tags}` JSON. System prompt in `copywriter.ts` enforces the 4 seller-policy rules — keep prompt and validators in sync.
 5. `validateCopyCompliance`: AI disclosure verbatim, no forbidden terms, no external URLs/handles/off-platform phrasing.
 6. Create Printify product (`is_visible=false`) using `image_url` + blueprint/variant IDs. Read returned mockup URLs → write to `design_packages.mockup_urls` AND set `mockups_from_actual_design=true` in the same write.
-7. If `HUMAN_REVIEW_ENABLED=true`: pause at `needs_review`. Owner approves → status `pending_publish`.
+7. Always pause at `needs_review`. Owner approves on the dashboard → status flips to `pending_publish`; the next listing run picks the row up and drives the Etsy publish via `resumePublish` / `executeEtsyPublish`. No auto-publish path.
 8. On publish (`executeEtsyPublish`): re-run full compliance gate (defense-in-depth). Create Etsy draft with `production_partner_ids: [ETSY_PRODUCTION_PARTNER_ID]`, `who_made:"i_did"`, `when_made:"made_to_order"`, `is_supply:false`.
 9. Upload Printify mockups to Etsy listing. PATCH to `active`. Flip Printify `is_visible=true`. Write `etsy_listing_id`, `is_active=true`.
 
 Etsy API notes: OAuth 2.0 (1-hour token expiry — refresh helper required); `taxonomy_id` lookup table per niche; one reusable `shipping_profile_id`.
 
-### Agent 4 — Fulfillment (`packages/fulfillment/`)
-Always-on Express server on `$PORT`.
+### Agent 4 — Ledger (`packages/ledger/`)
+Two crons: receipt polling (every 30 min) and a daily digest. **Metrics-only — never calls Printify.** Order fulfillment is handled by Etsy's native Printify integration outside this codebase.
 
-1. `POST /webhook/etsy-order`: verify HMAC-SHA256 with `ETSY_API_SECRET`.
-2. Idempotency: lookup `orders` by `etsy_order_id`; skip if exists.
-3. Resolve `listings` → `design_packages` → blueprint/variant IDs.
-4. Insert `orders` row (`status='received'`).
-5. POST to Printify with `external_id: etsyReceiptId` (Printify-side idempotency) + `label: etsy-${id}`. Status → `submitted`.
-6. `POST /webhook/printify-order`: verify HMAC-SHA256 (base64) with `PRINTIFY_WEBHOOK_SECRET`. Handles `order:updated`, `order:shipment:created`. On boot, `registerPrintifyWebhooks()` ensures subscriptions exist.
-7. On shipped: update `tracking_*`, PATCH Etsy receipt with tracking.
-8. On error: status `error`, log to `error_message`, Slack alert.
+1. Receipt poller: `GET /receipts?was_paid=true` (limit 100). Idempotency comes from the UNIQUE constraint on `orders.etsy_order_id` — re-scanning the same window every tick is safe.
+2. For each receipt: compute `sale_price` (buyer currency) + `sale_price_usd` (normalized), `etsy_fees_usd` (formula in `economics.ts`), and best-effort `print_cost_usd` from `listings → design_packages → BLUEPRINT_PRINT_COST_USD`. Missing listing → log row with `print_cost_usd = NULL`; missing currency → Slack warn + NULL economics.
+3. INSERT into `orders` with `status='logged'`. `margin_usd` is a generated column.
+4. Per-order alert: if computed margin drops below `MARGIN_WARNING_THRESHOLD_USD`, fire Slack warning.
+5. Daily digest cron: sum the previous UTC day's revenue, fees, print cost, margin, and errored count. Post to Slack and email via Resend.
 
-**Etsy uses "receipts" not "orders"** — always use `/receipts` endpoints. Etsy webhooks are unreliable; `tracking-poller.ts` cron polls `GET /receipts?was_paid=true&was_shipped=false` as safety net (interval can be relaxed to 4h once webhooks verified).
+**Etsy uses "receipts" not "orders"** — always use `/receipts` endpoints.
 
 ---
 
@@ -161,8 +166,8 @@ Always-on Express server on `$PORT`.
 2. **AI disclosure on every listing.** Exact `AI_DISCLOSURE_TEXT` constant (see compliance section).
 3. **Pricing floor:** `price ≥ print_cost × 2.5`. Factor Etsy fees ($0.20 listing + 6.5% txn + 3% + $0.25 processing).
 4. **Etsy rate limits:** 10 req/sec, 10k/day. Shared limiter (`bottleneck` TS, `asyncio.Semaphore` Python).
-5. **Idempotency:** double-fired webhook must detect existing `printify_order_id` and skip.
-6. **Row locking** on all polling queries.
+5. **Idempotency:** Ledger relies on the UNIQUE constraint on `orders.etsy_order_id`; re-polling the same receipt is a no-op.
+6. **Row locking** on all polling queries (Scout, Design, Listing). Ledger uses unique-constraint dedup instead of row locks.
 
 ---
 
@@ -206,14 +211,12 @@ Reference: Gildan 64000 tee (base $8.50, shipping $4.50 US). Etsy fees: $0.20 li
 
 ## Printify API Compliance
 
-Implemented in Steps 1–5 of `PLAN_PRINTIFY_API_COMPLIANCE.md`. Must not regress:
+The Listing Agent still calls Printify (product create + publish flip). Order creation, webhook ingestion, and tracking sync no longer exist — Etsy's native Printify integration handles those. Rules below apply to the Listing call path:
 
 - **Single shared client:** `packages/shared/src/printify-http.ts`. No new `fetch()` calls to Printify outside this module.
 - **Headers:** `Content-Type: application/json;charset=utf-8`, `User-Agent: presswork/<version>`, `Authorization: Bearer ${PRINTIFY_API_TOKEN}`.
 - **Rate limits:** Global 600/min (`maxConcurrent: 4, minTime: 110`). Publishing 200/30min (`reservoir: 180/30min`, tag `{ rateClass: "publishing" }`). Parse `Retry-After` on 429, retry ≤ 3.
-- **Idempotency:** `createOrder()` sends `external_id: etsyReceiptId` + `orders.etsy_order_id UNIQUE` constraint.
-- **Webhooks primary, polling backup.** Handler in `packages/fulfillment/src/printify-webhook.ts`. Re-delivered events for unchanged status are no-ops (200 + `skipped`).
-- **Error-rate guard:** ring buffer of last 200 requests. `GET /healthz/printify` returns `{ ok, error_rate_4xx_pct, error_rate_5xx_pct, sample_size }`. `ok=false` at ≥4% combined (one under Printify's 5% threshold).
+- **Error-rate guard:** ring buffer of last 200 requests. `GET /healthz/printify` returns `{ ok, error_rate_4xx_pct, error_rate_5xx_pct, sample_size }`. `ok=false` at ≥4% combined (one under Printify's 5% threshold). Surfaced via the Listing service's health endpoint, not Ledger.
 
 ---
 
@@ -221,20 +224,20 @@ Implemented in Steps 1–5 of `PLAN_PRINTIFY_API_COMPLIANCE.md`. Must not regres
 
 | Language | Framework | HTTP mocking |
 |---|---|---|
-| TS | Vitest (+ `supertest` for fulfillment) | MSW |
+| TS | Vitest | MSW |
 | Python | pytest + `pytest-asyncio` (+ `pytest-mock`) | respx |
 | Integration (DB) | local Supabase via `supabase start` | — |
 
 **Mock at HTTP layer** (Etsy, fal.ai, Printify, Anthropic) — never the SDK call. Validate Claude/fal.ai **response shapes** with Zod/pydantic, not content. Hit a real local Supabase for integration tests — schema + triggers + `FOR UPDATE SKIP LOCKED` are the contract.
 
 Required coverage (do not ship without):
-1. Status transition enforcement (no skipping steps)
-2. Webhook idempotency (same payload twice → exactly one row + one Printify call)
+1. Status transition enforcement (no skipping steps) for Scout/Design/Listing
+2. Ledger idempotency (same receipt scanned twice → exactly one `orders` row)
 3. Pricing floor at exactly `2.5×`
-4. HMAC verification: invalid/missing sig → 401; replay rejected
-5. Row locking under concurrent pollers
-6. Retry budget — after 3 fails, stays `error`, alert fires
-7. AI disclosure missing → rejected before Etsy call
+4. Row locking under concurrent pollers
+5. Retry budget — after 3 fails, stays `error`, alert fires
+6. AI disclosure missing → rejected before Etsy call
+7. Ledger currency normalization: non-USD receipts persist both `sale_price` (buyer currency) and `sale_price_usd`
 
 Co-locate tests: `foo.ts` + `foo.test.ts`. Integration tests in `tests/integration/`, gated by `INTEGRATION=1`.
 
@@ -251,7 +254,7 @@ supabase start && INTEGRATION=1 npm test --workspaces
 ```bash
 npm install
 cd packages/listing && npx ts-node src/index.ts
-cd packages/fulfillment && npx ts-node src/index.ts
+npm run poll-receipts --workspace=packages/ledger
 cd packages/scout && python main.py
 cd packages/design && python main.py
 npx supabase db push
@@ -283,9 +286,10 @@ Use `paths:` filters per job (TS-only / Python-only / both for shared + migratio
 | `scout` | Cron | `0 2 * * *` |
 | `design` | Cron | `*/15 * * * *` |
 | `listing` | Cron | `*/15 * * * *` |
-| `fulfillment` | Web | always-on, `$PORT` |
+| `ledger-cron-receipts` | Cron | `*/30 * * * *` |
+| `ledger-cron-daily-digest` | Cron | `0 13 * * *` |
 
-Shared env var group across all four. Services communicate only through Supabase.
+Shared env var group across all services. Services communicate only through Supabase.
 
 ---
 

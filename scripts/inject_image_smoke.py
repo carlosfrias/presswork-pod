@@ -1,17 +1,21 @@
 """Inject a local image into the Printify mockup pipeline (no Supabase, no Etsy).
 
-    your image  → process_for_print (default: full_color; --mode screen_print for single-ink)
+    your image  → process_for_print (resize + pad to 4500×5400 @300dpi)
                 → Printify upload
                 → Printify hidden product (Gildan 64000)
                 → download mockups
 
+Input is expected to already have a transparent background — the production
+pipeline runs fal.ai birefnet/bria upstream of process_for_print, so this
+smoke skips that step and trusts the input alpha.
+
 Usage:
     source .venv/bin/activate
-    python -m scripts.inject_image_smoke path/to/image.png [--title "..."] [--mode screen_print]
+    python -m scripts.inject_image_smoke path/to/image.png [--title "..."]
 
 Outputs in .tmp/smoke/<slug>/:
     source.png            the input bytes (copied for reference)
-    print.png             after rembg + whitespace strip + 4500×5400 pad
+    print.png             resized + padded to 4500×5400 @300dpi
     mockup-NN.jpg         Printify-generated lifestyle mockups
     summary.json          IDs, file sizes, mockup URLs
 """
@@ -37,13 +41,18 @@ from packages.design.constants import (
 )
 from packages.design.image_processor import process_for_print
 
-# Smoke-only: lets you preview the same design on a dark shirt. The production
-# design agent writes the white-tee IDs from constants.py to every row, so we
-# don't override the constant — we just remap when --shirt-color black is set.
-GILDAN_64000_BLACK_VARIANT_IDS: list[int] = [38164, 38178, 38192, 38206, 38220]
-SHIRT_COLOR_VARIANTS = {
-    "white": GILDAN_64000_VARIANT_IDS,
-    "black": GILDAN_64000_BLACK_VARIANT_IDS,
+# Smoke-only color previews. Production writes the white-tee IDs (provider 3 /
+# Marco Fine Arts) to every row — we don't override the production constants,
+# we just pick a (variant_ids, print_provider_id) pair for whichever color the
+# caller wants to see. Marco Fine Arts only stocks white and black for blueprint
+# 145, so Forest Green routes through SwiftPOD (39), which stocks all three.
+# Variant IDs themselves are globally consistent across providers for this
+# blueprint — the print_provider_id is what determines fulfillment.
+SWIFTPOD_PRINT_PROVIDER_ID: int = 39
+SHIRT_COLOR_VARIANTS: dict[str, tuple[list[int], int]] = {
+    "white": (GILDAN_64000_VARIANT_IDS, GILDAN_64000_PRINT_PROVIDER_ID),
+    "black": ([38164, 38178, 38192, 38206, 38220], GILDAN_64000_PRINT_PROVIDER_ID),
+    "forest_green": ([38165, 38179, 38193, 38207, 38221], SWIFTPOD_PRINT_PROVIDER_ID),
 }
 
 OUT_ROOT = Path(__file__).resolve().parents[1] / ".tmp" / "smoke"
@@ -83,12 +92,13 @@ def _printify_create_product(
     description: str,
     upload_id: str,
     variant_ids: list[int],
+    print_provider_id: int,
 ) -> dict[str, Any]:
     body = {
         "title": title,
         "description": description,
         "blueprint_id": GILDAN_64000_BLUEPRINT_ID,
-        "print_provider_id": GILDAN_64000_PRINT_PROVIDER_ID,
+        "print_provider_id": print_provider_id,
         "variants": [{"id": vid, "price": 2499, "is_enabled": True} for vid in variant_ids],
         "print_areas": [
             {
@@ -142,12 +152,6 @@ def main() -> int:
         help="Printify product title (default: derived from filename)",
     )
     parser.add_argument(
-        "--mode",
-        choices=("full_color", "screen_print"),
-        default="full_color",
-        help="Image processing mode (default: full_color; use screen_print for single-ink art)",
-    )
-    parser.add_argument(
         "--shirt-color",
         choices=tuple(SHIRT_COLOR_VARIANTS.keys()),
         default="white",
@@ -172,15 +176,15 @@ def main() -> int:
     # Tag color into the output dir so back-to-back white/black runs don't trample each other.
     out_dir = OUT_ROOT / f"{slug}-{args.shirt_color}"
     out_dir.mkdir(parents=True, exist_ok=True)
-    variant_ids = SHIRT_COLOR_VARIANTS[args.shirt_color]
+    variant_ids, print_provider_id = SHIRT_COLOR_VARIANTS[args.shirt_color]
 
     source_bytes = args.image.read_bytes()
     source_ext = args.image.suffix.lower() or ".bin"
     (out_dir / f"source{source_ext}").write_bytes(source_bytes)
-    print(f"[smoke] {args.image} ({len(source_bytes) // 1024}KB) → {out_dir}  mode={args.mode}")
+    print(f"[smoke] {args.image} ({len(source_bytes) // 1024}KB) → {out_dir}")
 
     t0 = time.monotonic()
-    print_bytes = process_for_print(source_bytes, mode=args.mode)
+    print_bytes = process_for_print(source_bytes)
     (out_dir / "print.png").write_bytes(print_bytes)
     t_proc_ms = round((time.monotonic() - t0) * 1000)
     print(f"[smoke]   processed ({len(print_bytes) // 1024}KB) in {t_proc_ms}ms")
@@ -198,6 +202,7 @@ def main() -> int:
         description="Smoke-test product. Hidden, not for sale.",
         upload_id=upload_id,
         variant_ids=variant_ids,
+        print_provider_id=print_provider_id,
     )
     product_id = product.get("id")
     images = product.get("images") or []
@@ -216,6 +221,7 @@ def main() -> int:
         "mode": args.mode,
         "shirt_color": args.shirt_color,
         "variant_ids": variant_ids,
+        "print_provider_id": print_provider_id,
         "title": title,
         "durations_ms": {"process": t_proc_ms, "printify": t_pf_ms},
         "file_sizes_kb": {

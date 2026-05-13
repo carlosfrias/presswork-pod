@@ -23,7 +23,6 @@ const validEnv = {
   SLACK_WEBHOOK_URL: "https://hooks.slack.com/test",
   NODE_ENV: "test",
   LOG_LEVEL: "info",
-  HUMAN_REVIEW_ENABLED: "false",
 };
 
 const COMPLIANT_DESCRIPTION = `A great cat tee for cat lovers everywhere. Soft, comfy, and ready to ship. ${AI_DISCLOSURE_TEXT}`;
@@ -183,7 +182,6 @@ describe("publishOne", () => {
         activateListing: vi.fn().mockResolvedValue(undefined),
         getTaxonomyId: vi.fn().mockResolvedValue(68887043),
         getSettings: vi.fn().mockReturnValue({
-          HUMAN_REVIEW_ENABLED: false,
           ETSY_SHIPPING_PROFILE_ID: 99,
           ETSY_READINESS_STATE_ID: 42,
           ETSY_PRODUCTION_PARTNER_ID:
@@ -227,7 +225,7 @@ describe("publishOne", () => {
     expect(dpUpdates[0]?.data["mockups_from_actual_design"]).toBe(true);
   });
 
-  it("forwards readiness_state_id and dynamic taxonomy_id to createDraftListing", async () => {
+  it("publishOne pauses at needs_review without calling Etsy (every agent waits for review)", async () => {
     vi.doMock("./copywriter.js", () => ({
       writeCopy: vi.fn().mockResolvedValue({
         title: COMPLIANT_TITLE,
@@ -238,17 +236,25 @@ describe("publishOne", () => {
     mockPrintify();
     const { createDraftListing } = mockSharedAndEtsy();
 
-    const db = makeDb([]);
+    const updates: CaptureEntry[] = [];
+    const db = makeDb(updates);
     const { publishOne } = await import("./publisher.js");
     await publishOne(db, design, brief);
 
-    expect(createDraftListing).toHaveBeenCalledTimes(1);
-    const arg = createDraftListing.mock.calls[0]?.[1] as { readiness_state_id?: number; taxonomy_id?: number };
-    expect(arg.readiness_state_id).toBe(42);
-    expect(arg.taxonomy_id).toBe(68887043); // from getTaxonomyId mock
+    // Etsy is NEVER contacted from publishOne. The Etsy publish happens later
+    // in resumePublish, after the dashboard flips status to pending_publish.
+    expect(createDraftListing).not.toHaveBeenCalled();
+
+    const listingStatusWrites = updates
+      .filter((u) => u.table === "listings" && "status" in u.data)
+      .map((u) => u.data.status);
+    expect(listingStatusWrites).toContain("needs_review");
+    expect(listingStatusWrites).not.toContain("pending_publish");
+    expect(listingStatusWrites).not.toContain("publishing");
+    expect(listingStatusWrites).not.toContain("active");
   });
 
-  it("forwards production_partner_ids to createDraftListing (compliance rule 1)", async () => {
+  it("resumePublish forwards readiness_state_id, taxonomy_id, and production_partner_ids to createDraftListing", async () => {
     vi.doMock("./copywriter.js", () => ({
       writeCopy: vi.fn().mockResolvedValue({
         title: COMPLIANT_TITLE,
@@ -259,13 +265,31 @@ describe("publishOne", () => {
     mockPrintify();
     const { createDraftListing } = mockSharedAndEtsy();
 
-    const db = makeDb([]);
-    const { publishOne } = await import("./publisher.js");
-    await publishOne(db, design, brief);
+    const db = makeDb([], {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending_publish",
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+        price_usd: 24.99,
+        printify_product_id: PRODUCT_ID,
+        is_active: false,
+        retry_count: 0,
+      },
+    });
+    const { resumePublish } = await import("./publisher.js");
+    await resumePublish(db, LISTING_ID);
 
     expect(createDraftListing).toHaveBeenCalledTimes(1);
-    const arg = createDraftListing.mock.calls[0]?.[1] as { production_partner_ids?: number[] };
-    expect(arg.production_partner_ids).toEqual([PARTNER_ID]);
+    const arg = createDraftListing.mock.calls[0]?.[1] as {
+      readiness_state_id?: number;
+      taxonomy_id?: number;
+      production_partner_ids?: number[];
+    };
+    expect(arg.readiness_state_id).toBe(42);
+    expect(arg.taxonomy_id).toBe(68887043); // from getTaxonomyId mock
+    expect(arg.production_partner_ids).toEqual([PARTNER_ID]); // compliance rule 1
   });
 
   it("rejects publish when copy contains a forbidden term (compliance rule 3)", async () => {
@@ -386,7 +410,7 @@ describe("publishOne", () => {
     await expect(publishOne(db, design, brief)).rejects.toThrow(ComplianceError);
   });
 
-  it("writes status='publishing' before Etsy publish (bug #4 checkpoint)", async () => {
+  it("resumePublish writes status='publishing' before Etsy publish (bug #4 checkpoint)", async () => {
     vi.doMock("./copywriter.js", () => ({
       writeCopy: vi.fn().mockResolvedValue({
         title: COMPLIANT_TITLE,
@@ -398,21 +422,42 @@ describe("publishOne", () => {
     mockSharedAndEtsy();
 
     const updates: CaptureEntry[] = [];
-    const db = makeDb(updates);
-    const { publishOne } = await import("./publisher.js");
-    await publishOne(db, design, brief);
+    const db = makeDb(updates, {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending_publish",
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+        price_usd: 24.99,
+        printify_product_id: PRODUCT_ID,
+        is_active: false,
+        retry_count: 0,
+      },
+    });
+    const { resumePublish } = await import("./publisher.js");
+    await resumePublish(db, LISTING_ID);
 
     const listingStatusWrites = updates
       .filter((u) => u.table === "listings" && "status" in u.data)
       .map((u) => u.data.status);
-    expect(listingStatusWrites).toContain("pending_publish");
     expect(listingStatusWrites).toContain("publishing");
     expect(listingStatusWrites).toContain("active");
-    // 'publishing' must precede 'active' in the write order
+    // 'publishing' must precede 'active' in the write order.
     const publishingIdx = listingStatusWrites.indexOf("publishing");
     const activeIdx = listingStatusWrites.indexOf("active");
     expect(publishingIdx).toBeLessThan(activeIdx);
   });
+
+  // Retry/error-budget tests still target publishOne, but the failure source
+  // is Printify (the pre-pause path is the only thing that can still throw
+  // from publishOne — Etsy publish moved to resumePublish).
+  function mockPrintifyFailure() {
+    const createHiddenProduct = vi.fn().mockRejectedValueOnce(new Error("printify 500"));
+    const setProductVisible = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("./printify.js", () => ({ createHiddenProduct, setProductVisible }));
+    return { createHiddenProduct };
+  }
 
   it("resets design_packages to 'done' on retryable failure (bug #1)", async () => {
     vi.doMock("./copywriter.js", () => ({
@@ -422,9 +467,8 @@ describe("publishOne", () => {
         tags: COMPLIANT_TAGS,
       }),
     }));
-    mockPrintify();
-    const { createDraftListing } = mockSharedAndEtsy();
-    createDraftListing.mockRejectedValueOnce(new Error("etsy 500"));
+    mockPrintifyFailure();
+    mockSharedAndEtsy();
 
     const updates: CaptureEntry[] = [];
     const db = makeDb(updates, { retryCount: 0 });
@@ -447,9 +491,8 @@ describe("publishOne", () => {
         tags: COMPLIANT_TAGS,
       }),
     }));
-    mockPrintify();
-    const { createDraftListing } = mockSharedAndEtsy();
-    createDraftListing.mockRejectedValueOnce(new Error("etsy 500"));
+    mockPrintifyFailure();
+    mockSharedAndEtsy();
 
     const updates: CaptureEntry[] = [];
     const db = makeDb(updates, { retryCount: 2 }); // current retry_count=2; +1 = 3 → terminal
@@ -476,9 +519,8 @@ describe("publishOne", () => {
         tags: COMPLIANT_TAGS,
       }),
     }));
-    mockPrintify();
-    const { createDraftListing } = mockSharedAndEtsy();
-    createDraftListing.mockRejectedValueOnce(new Error("etsy 500"));
+    mockPrintifyFailure();
+    mockSharedAndEtsy();
 
     const updates: CaptureEntry[] = [];
     const db = makeDb(updates, { retryCountReadError: "db connection lost" });
@@ -539,7 +581,7 @@ describe("publishOne", () => {
     expect(createHiddenProduct).not.toHaveBeenCalled();
   });
 
-  it("persists etsy_listing_id immediately after createDraftListing returns (bug #3)", async () => {
+  it("resumePublish persists etsy_listing_id immediately after createDraftListing returns (bug #3)", async () => {
     vi.doMock("./copywriter.js", () => ({
       writeCopy: vi.fn().mockResolvedValue({
         title: COMPLIANT_TITLE,
@@ -551,9 +593,21 @@ describe("publishOne", () => {
     mockSharedAndEtsy();
 
     const updates: CaptureEntry[] = [];
-    const db = makeDb(updates);
-    const { publishOne } = await import("./publisher.js");
-    await publishOne(db, design, brief);
+    const db = makeDb(updates, {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending_publish",
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+        price_usd: 24.99,
+        printify_product_id: PRODUCT_ID,
+        is_active: false,
+        retry_count: 0,
+      },
+    });
+    const { resumePublish } = await import("./publisher.js");
+    await resumePublish(db, LISTING_ID);
 
     const etsyIdWrites = updates.filter(
       (u) => u.table === "listings" && "etsy_listing_id" in u.data
@@ -570,7 +624,7 @@ describe("publishOne", () => {
     expect("etsy_listing_id" in (activeWrite!.data)).toBe(false);
   });
 
-  it("skips createDraftListing on retry when etsy_listing_id is already persisted (bug #3)", async () => {
+  it("resumePublish skips createDraftListing when etsy_listing_id is already persisted (bug #3)", async () => {
     vi.doMock("./copywriter.js", () => ({
       writeCopy: vi.fn().mockResolvedValue({
         title: COMPLIANT_TITLE,
@@ -585,7 +639,7 @@ describe("publishOne", () => {
     const db = makeDb(updates, {
       existingListing: {
         id: LISTING_ID,
-        status: "pending",
+        status: "pending_publish",
         title: COMPLIANT_TITLE,
         description: COMPLIANT_DESCRIPTION,
         tags: COMPLIANT_TAGS,
@@ -597,8 +651,8 @@ describe("publishOne", () => {
       existingEtsyListingId: 5555,
     });
 
-    const { publishOne } = await import("./publisher.js");
-    await publishOne(db, design, brief);
+    const { resumePublish } = await import("./publisher.js");
+    await resumePublish(db, LISTING_ID);
 
     expect(createDraftListing).not.toHaveBeenCalled();
   });
@@ -633,7 +687,6 @@ describe("publishOne", () => {
         activateListing: vi.fn().mockResolvedValue(undefined),
         getTaxonomyId: vi.fn().mockResolvedValue(68887043),
         getSettings: vi.fn(() => ({
-          HUMAN_REVIEW_ENABLED: false,
           ETSY_SHIPPING_PROFILE_ID: 99,
           ETSY_READINESS_STATE_ID: 42,
           ETSY_PRODUCTION_PARTNER_ID: partnerId,

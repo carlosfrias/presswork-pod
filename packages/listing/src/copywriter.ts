@@ -5,6 +5,8 @@ import {
   type ListingCopy,
   ListingCopySchema,
   getSettings,
+  estimateAnthropicCostUsd,
+  recordUsage,
 } from "@presswork/shared";
 import { AI_DISCLOSURE_TEXT } from "@presswork/shared";
 
@@ -83,6 +85,33 @@ export async function writeCopy(
     messages: [{ role: "user", content: userMessage }],
     betas: ["prompt-caching-2024-07-31"],
   });
+
+  // Best-effort consumption log for the dashboard. recordUsage is fire-and-forget.
+  const usage = response.usage as
+    | {
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_read_input_tokens?: number;
+        cache_creation_input_tokens?: number;
+      }
+    | undefined;
+  if (usage) {
+    void recordUsage({
+      agent: "listing",
+      provider: "anthropic",
+      operation: "copywriter",
+      cost_usd: estimateAnthropicCostUsd(
+        "claude-sonnet-4-20250514",
+        usage.input_tokens ?? 0,
+        usage.output_tokens ?? 0,
+        usage.cache_read_input_tokens ?? 0,
+        usage.cache_creation_input_tokens ?? 0,
+      ),
+      input_tokens: usage.input_tokens ?? null,
+      output_tokens: usage.output_tokens ?? null,
+      metadata: { model: "claude-sonnet-4-20250514", niche: brief.niche },
+    });
+  }
 
   const firstBlock = response.content[0];
   if (!firstBlock || firstBlock.type !== "text") {

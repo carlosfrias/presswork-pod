@@ -9,10 +9,10 @@ Expected response: acknowledgement within 7 days. Severity and fix timeline depe
 ## Scope
 
 In scope:
-- This repo's agent code (`packages/scout`, `packages/design`, `packages/listing`, `packages/fulfillment`) and shared libraries (`packages/shared`, `packages/shared_py`).
+- This repo's agent code (`packages/scout`, `packages/design`, `packages/listing`, `packages/ledger`) and shared libraries (`packages/shared`, `packages/shared_py`).
 - Database migrations under `infra/supabase/migrations/`.
 - CI workflows under `.github/workflows/`.
-- Secret handling, HMAC verification, OAuth refresh, and rate-limit guards.
+- Secret handling, OAuth refresh, and rate-limit guards.
 
 Out of scope (report directly to the vendor):
 - Vulnerabilities in Etsy, Printify, fal.ai, Anthropic, Supabase, Resend, or Railway.

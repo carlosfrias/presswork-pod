@@ -169,9 +169,11 @@ describeIf("listing publisher integration", () => {
     vi.resetModules();
   });
 
-  it("happy path (HUMAN_REVIEW=false): listing reaches active with all fields set", async () => {
+  it("happy path: publishOne pauses at needs_review, resumePublish takes it to active", async () => {
+    // Every listing pauses at needs_review for owner review before publishing.
+    // No HUMAN_REVIEW_ENABLED bypass — the dashboard's Approve action flips
+    // the row to pending_publish, then resumePublish drives the Etsy publish.
     server.use(...baseHandlers(false));
-    Object.assign(process.env, { HUMAN_REVIEW_ENABLED: "false" });
 
     const design = await supabase
       .from("design_packages")
@@ -184,7 +186,7 @@ describeIf("listing publisher integration", () => {
       .eq("id", trendBriefId)
       .single();
 
-    const { publishOne } = await import("../../src/publisher.js");
+    const { publishOne, resumePublish } = await import("../../src/publisher.js");
 
     const { listingId } = await publishOne(
       supabase,
@@ -193,18 +195,16 @@ describeIf("listing publisher integration", () => {
     );
     insertedListingIds.push(listingId);
 
-    const { data: listing } = await supabase
+    const { data: paused } = await supabase
       .from("listings")
-      .select("*")
+      .select("status, printify_product_id")
       .eq("id", listingId)
       .single();
+    const pausedRow = paused as Record<string, unknown>;
+    expect(pausedRow?.["status"]).toBe("needs_review");
+    expect(pausedRow?.["printify_product_id"]).toBe(PRODUCT_ID);
 
-    const row = listing as Record<string, unknown>;
-    expect(row?.["status"]).toBe("active");
-    expect(row?.["is_active"]).toBe(true);
-    expect(row?.["etsy_listing_id"]).toBe(ETSY_LISTING_ID);
-    expect(row?.["printify_product_id"]).toBe(PRODUCT_ID);
-
+    // Compliance rule 4: provenance flag flipped true during Printify create.
     const { data: dp } = await supabase
       .from("design_packages")
       .select("mockup_urls, mockups_from_actual_design")
@@ -212,13 +212,27 @@ describeIf("listing publisher integration", () => {
       .single();
     const dpRow = dp as { mockup_urls: string[]; mockups_from_actual_design: boolean };
     expect(dpRow.mockup_urls).toHaveLength(2);
-    // Compliance rule 4: provenance flag must be flipped true when mockups are written
     expect(dpRow.mockups_from_actual_design).toBe(true);
+
+    // Operator approves: flip to pending_publish and resumePublish drives Etsy.
+    await supabase.from("listings").update({ status: "pending_publish" }).eq("id", listingId);
+    await resumePublish(supabase, listingId);
+
+    const { data: activeListing } = await supabase
+      .from("listings")
+      .select("status, is_active, etsy_listing_id")
+      .eq("id", listingId)
+      .single();
+    const active = activeListing as Record<string, unknown>;
+    expect(active?.["status"]).toBe("active");
+    expect(active?.["is_active"]).toBe(true);
+    expect(active?.["etsy_listing_id"]).toBe(ETSY_LISTING_ID);
   });
 
-  it("human review path: pauses at needs_review, then resumePublish completes", async () => {
+  it("retryable failure: resumePublish fails first time, succeeds on retry", async () => {
+    // publishOne never calls Etsy directly — Etsy publish lives entirely in
+    // resumePublish now — so retry scenarios exercise resumePublish.
     server.use(...baseHandlers(false));
-    Object.assign(process.env, { HUMAN_REVIEW_ENABLED: "true" });
 
     const design = await supabase
       .from("design_packages")
@@ -240,77 +254,16 @@ describeIf("listing publisher integration", () => {
     );
     insertedListingIds.push(listingId);
 
-    const { data: pausedListing } = await supabase
-      .from("listings")
-      .select("status")
-      .eq("id", listingId)
-      .single();
-    expect((pausedListing as { status: string }).status).toBe("needs_review");
-
-    // Simulate manual approval: flip to pending_publish
-    await supabase.from("listings").update({ status: "pending_publish" }).eq("id", listingId);
-
-    Object.assign(process.env, { HUMAN_REVIEW_ENABLED: "false" });
-    await resumePublish(supabase, listingId);
-
-    const { data: activeListing } = await supabase
-      .from("listings")
-      .select("status, is_active, etsy_listing_id")
-      .eq("id", listingId)
-      .single();
-    const active = activeListing as Record<string, unknown>;
-    expect(active?.["status"]).toBe("active");
-    expect(active?.["is_active"]).toBe(true);
-    expect(active?.["etsy_listing_id"]).toBe(ETSY_LISTING_ID);
-  });
-
-  it("retryable failure: first publishOne throws, retry via resumePublish succeeds", async () => {
-    // activateListing fails the first time
+    // First resume: activateListing fails.
+    server.resetHandlers();
     server.use(...baseHandlers(true));
-    Object.assign(process.env, { HUMAN_REVIEW_ENABLED: "false" });
-
-    const design = await supabase
-      .from("design_packages")
-      .select("*")
-      .eq("id", designPackageId)
-      .single();
-    const brief = await supabase
-      .from("trend_briefs")
-      .select("*")
-      .eq("id", trendBriefId)
-      .single();
-
-    const { publishOne, resumePublish } = await import("../../src/publisher.js");
-
-    let listingId: string;
-    await expect(
-      publishOne(
-        supabase,
-        design.data as never,
-        { ...(brief.data as object), price_target_usd: 24.99, retry_count: 0 } as never
-      ).then((r) => { listingId = r.listingId; })
-    ).rejects.toThrow();
-
-    // Get the listing that was created before the failure
-    const { data: listings } = await supabase
-      .from("listings")
-      .select("id, status, retry_count")
-      .eq("design_package_id", designPackageId)
-      .order("created_at", { ascending: false })
-      .limit(1);
-    const failedListing = (listings as Array<Record<string, unknown>>)[0];
-    listingId = failedListing?.["id"] as string;
-    insertedListingIds.push(listingId);
-
-    expect(failedListing?.["retry_count"]).toBe(1);
-    expect(failedListing?.["status"]).toBe("pending");
-
-    // Flip to pending_publish for resumePublish
     await supabase.from("listings").update({ status: "pending_publish" }).eq("id", listingId);
+    await expect(resumePublish(supabase, listingId)).rejects.toThrow();
 
-    // Now retry with activateListing succeeding
+    // Retry: activateListing succeeds.
     server.resetHandlers();
     server.use(...baseHandlers(false));
+    await supabase.from("listings").update({ status: "pending_publish" }).eq("id", listingId);
     await resumePublish(supabase, listingId);
 
     const { data: recovered } = await supabase
@@ -321,9 +274,8 @@ describeIf("listing publisher integration", () => {
     expect((recovered as { status: string }).status).toBe("active");
   });
 
-  it("exhausted retries: after 3 failures listing reaches error status", async () => {
-    server.use(...baseHandlers(true));
-    Object.assign(process.env, { HUMAN_REVIEW_ENABLED: "false" });
+  it("exhausted retries: 3 resumePublish failures land the listing in error", async () => {
+    server.use(...baseHandlers(false));
 
     const design = await supabase
       .from("design_packages")
@@ -338,31 +290,20 @@ describeIf("listing publisher integration", () => {
 
     const { publishOne, resumePublish } = await import("../../src/publisher.js");
 
-    // First attempt via publishOne
-    let listingId: string;
-    await expect(
-      publishOne(
-        supabase,
-        design.data as never,
-        { ...(brief.data as object), price_target_usd: 24.99, retry_count: 0 } as never
-      ).then((r) => { listingId = r.listingId; })
-    ).rejects.toThrow();
-
-    const { data: listings } = await supabase
-      .from("listings")
-      .select("id")
-      .eq("design_package_id", designPackageId)
-      .order("created_at", { ascending: false })
-      .limit(1);
-    listingId = ((listings as Array<Record<string, unknown>>)[0]?.["id"]) as string;
+    const { listingId } = await publishOne(
+      supabase,
+      design.data as never,
+      { ...(brief.data as object), price_target_usd: 24.99, retry_count: 0 } as never
+    );
     insertedListingIds.push(listingId);
 
-    // Two more failures via resumePublish
-    await supabase.from("listings").update({ status: "pending_publish" }).eq("id", listingId);
-    await expect(resumePublish(supabase, listingId)).rejects.toThrow();
-
-    await supabase.from("listings").update({ status: "pending_publish" }).eq("id", listingId);
-    await expect(resumePublish(supabase, listingId)).rejects.toThrow();
+    // Three resume attempts, all fail.
+    server.resetHandlers();
+    server.use(...baseHandlers(true));
+    for (let i = 0; i < 3; i++) {
+      await supabase.from("listings").update({ status: "pending_publish" }).eq("id", listingId);
+      await expect(resumePublish(supabase, listingId)).rejects.toThrow();
+    }
 
     const { data: final } = await supabase
       .from("listings")

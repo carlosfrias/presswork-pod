@@ -1,15 +1,15 @@
 # Presswork
 
-An autonomous print-on-demand pipeline for Etsy. Four AI agents — Scout, Design, Listing, and Fulfillment — hand off to each other through a shared Supabase database to discover trends, generate original artwork, publish listings, and fulfill orders with minimal human involvement.
+An autonomous print-on-demand pipeline for Etsy. Four AI agents — Scout, Design, Listing, and Ledger — hand off to each other through a shared Supabase database to discover trends, generate original artwork, publish listings, and track the financials. Order fulfillment is handled by Etsy's native Printify integration outside this codebase.
 
 ---
 
 ## How it works
 
 ```
-Etsy trends → Scout → Design → Listing → Fulfillment → Etsy orders
-                  ↓          ↓         ↓             ↓
-              trend_briefs  design_   listings     orders
+Etsy trends → Scout → Design → Listing → (Etsy ↔ Printify fulfillment) → Ledger
+                  ↓          ↓         ↓                                    ↓
+              trend_briefs  design_   listings                            orders
                            packages
 ```
 
@@ -19,7 +19,7 @@ Etsy trends → Scout → Design → Listing → Fulfillment → Etsy orders
 
 **Listing** polls every 15 minutes. It creates a hidden Printify product to generate mockup images, writes SEO-optimized listing copy via Claude, then publishes to Etsy (draft → images → activate). If `HUMAN_REVIEW_ENABLED=true`, listings pause at `needs_review` for manual approval before going live.
 
-**Fulfillment** is an always-on Express server. It receives Etsy order webhooks, verifies the HMAC signature, creates a Printify production order, polls for shipment, and posts tracking back to Etsy. A fallback receipt-poller runs every 5 minutes to catch any missed webhooks.
+**Ledger** polls Etsy receipts every 30 minutes for paid orders. Each receipt is logged once (idempotent via a unique constraint on `etsy_order_id`) with sale price in buyer currency, USD-normalized total, computed Etsy fees, looked-up print cost, derived margin, and buyer country. A low-margin Slack warning fires per-order; a separate daily cron emits a revenue/margin digest via Slack and email.
 
 ---
 
@@ -28,13 +28,13 @@ Etsy trends → Scout → Design → Listing → Fulfillment → Etsy orders
 | Layer | Tool |
 |---|---|
 | Scout + Design | Python 3.12, httpx, pydantic, structlog |
-| Listing + Fulfillment | TypeScript / Node.js 20, Zod, Bottleneck |
+| Listing + Ledger | TypeScript / Node.js 20, Zod, Bottleneck |
 | AI reasoning | Claude Sonnet 4 (`claude-sonnet-4-20250514`) |
 | Image generation | fal.ai — FLUX Pro 1.1 |
 | Database + Storage | Supabase (Postgres) |
-| Print fulfillment | Printify |
+| Print fulfillment | Etsy's native Printify integration (out of band) |
 | Hosting + cron | Railway |
-| Alerts | Slack incoming webhooks |
+| Alerts | Slack incoming webhooks + Resend email |
 
 ---
 
@@ -48,7 +48,7 @@ presswork/
 │   ├── scout/           # Agent 1 (Python) — Etsy trend scraper
 │   ├── design/          # Agent 2 (Python) — fal.ai image generation
 │   ├── listing/         # Agent 3 (TypeScript) — Etsy listing publisher
-│   └── fulfillment/     # Agent 4 (TypeScript) — order webhook server
+│   └── ledger/          # Agent 4 (TypeScript) — receipt polling + economics digest
 ├── infra/
 │   ├── railway.toml
 │   └── supabase/migrations/
@@ -118,8 +118,11 @@ python -m packages.design.main
 # Listing — publish designs to Etsy
 npx tsx packages/listing/src/index.ts
 
-# Fulfillment — start the webhook server
-npx tsx packages/fulfillment/src/server-entry.ts
+# Ledger — poll Etsy receipts and log economics
+npm run poll-receipts --workspace=packages/ledger
+
+# Ledger — emit yesterday's revenue digest
+npm run daily-digest --workspace=packages/ledger
 ```
 
 ---
@@ -137,7 +140,6 @@ pytest packages/scout packages/design packages/shared_py \
 
 # Integration tests (requires supabase start)
 INTEGRATION=1 npm test --workspace=packages/listing
-INTEGRATION=1 npm test --workspace=packages/fulfillment
 
 # E2E smoke test (requires supabase start)
 INTEGRATION=1 npm run test:e2e
@@ -151,7 +153,7 @@ All external APIs (Etsy, Printify, fal.ai, Anthropic) are mocked at the HTTP lay
 
 GitHub Actions runs on every push to `main` and every PR:
 
-- **TS job** — ESLint, `tsc --noEmit`, Vitest (shared, listing, fulfillment)
+- **TS job** — ESLint, `tsc --noEmit`, Vitest (shared, listing, ledger)
 - **Python job** — ruff, pyright, pytest (scout, design, shared_py)
 
 Integration tests and the E2E smoke test are not run in CI — they require a live Supabase instance and are run locally before merging significant changes.
@@ -166,8 +168,8 @@ Five tables — agents communicate exclusively through Supabase, never by callin
 |---|---|---|
 | `trend_briefs` | Scout | Design |
 | `design_packages` | Design | Listing |
-| `listings` | Listing | Fulfillment |
-| `orders` | Fulfillment | — |
+| `listings` | Listing | Ledger (for print-cost lookup) |
+| `orders` | Ledger | — |
 
 Status columns enforce strict one-way transitions (`pending → processing → done / error`). Row-level locking (`SELECT ... FOR UPDATE SKIP LOCKED`) prevents two agent instances from claiming the same row simultaneously.
 
@@ -182,7 +184,8 @@ Each agent runs as a separate Railway service. Railway auto-deploys from `main` 
 | `scout` | Cron | Nightly at 2am |
 | `design` | Cron | Every 15 min |
 | `listing` | Cron | Every 15 min |
-| `fulfillment` | Web server | Always-on |
+| `ledger-cron-receipts` | Cron | Every 30 min |
+| `ledger-cron-daily-digest` | Cron | Daily at 13:00 UTC |
 
 > **Note:** Etsy API access requires a separate storefront application. The pipeline runs fully against mocks until live credentials are available. Flip `HUMAN_REVIEW_ENABLED=false` only after manually verifying a listing end-to-end in a sandbox shop.
 

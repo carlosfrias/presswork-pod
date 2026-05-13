@@ -20,7 +20,6 @@ const validEnv = {
   SLACK_WEBHOOK_URL: "https://hooks.slack.com/test",
   NODE_ENV: "test",
   LOG_LEVEL: "info",
-  HUMAN_REVIEW_ENABLED: "true",
 };
 
 describe("getSettings", () => {
@@ -47,12 +46,6 @@ describe("getSettings", () => {
     Object.assign(process.env, { ...validEnv, ETSY_SHIPPING_PROFILE_ID: "42" });
     const { getSettings } = await import("../src/config.js");
     expect(getSettings().ETSY_SHIPPING_PROFILE_ID).toBe(42);
-  });
-
-  it('coerces HUMAN_REVIEW_ENABLED="false" to boolean false', async () => {
-    Object.assign(process.env, { ...validEnv, HUMAN_REVIEW_ENABLED: "false" });
-    const { getSettings } = await import("../src/config.js");
-    expect(getSettings().HUMAN_REVIEW_ENABLED).toBe(false);
   });
 
   it("throws when a required var is missing", async () => {

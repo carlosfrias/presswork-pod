@@ -1,19 +1,17 @@
 /**
  * E2E smoke test: seeds trend_brief + design_package (representing Scout + Design output),
- * then drives Listing and Fulfillment with MSW-mocked external HTTP.
+ * then drives Listing publish and Ledger receipt-poll with MSW-mocked external HTTP.
  *
  * Requires: INTEGRATION=1, local Supabase running (supabase start).
  *
  * Note: Scout and Design Python agents are tested via packages/scout and
  * packages/design integration tests. This e2e test validates the TS-side
- * handoff chain: Listing publish → Fulfillment webhook.
+ * handoff chain: Listing publish → Ledger ingestion.
  */
 
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
-import request from "supertest";
-import { createHmac } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 import { AI_DISCLOSURE_TEXT } from "@presswork/shared";
 
@@ -24,7 +22,6 @@ const SHOP_ID = process.env["ETSY_SHOP_ID"] ?? "99";
 const PRODUCT_ID = "e2e-printify-product-1";
 const ETSY_LISTING_ID = 777001;
 const RECEIPT_ID = "e2e-receipt-001";
-const SECRET = process.env["ETSY_API_SECRET"] ?? "test-secret";
 
 // Required for compliance rule 1; tests inject a fake numeric ID.
 process.env["ETSY_PRODUCTION_PARTNER_ID"] =
@@ -222,33 +219,36 @@ describeIf("E2E: full pipeline smoke test", () => {
     expect((dpUpdated as { mockup_urls: string[] }).mockup_urls).toHaveLength(2);
   });
 
-  it("Step 4: Fulfillment processes Etsy webhook → order reaches submitted", async () => {
+  it("Step 4: Ledger polls Etsy receipts → order logged with full economics", async () => {
     server.use(
       http.get(
-        `https://openapi.etsy.com/v3/application/shops/${SHOP_ID}/receipts/${RECEIPT_ID}`,
+        new RegExp(
+          `^https://openapi\\.etsy\\.com/v3/application/shops/${SHOP_ID}/receipts(\\?|$)`
+        ),
         () =>
           HttpResponse.json({
-            receipt_id: 1,
-            buyer_user_id: 1,
-            buyer_email: "e2e-buyer@example.com",
-            name: "E2E Buyer",
-            first_line: "1 Test Ave",
-            city: "Portland",
-            state: "OR",
-            zip: "97201",
-            country_iso: "US",
-            grandtotal: { amount: 2499, divisor: 100, currency_code: "USD" },
-            transactions: [
+            results: [
               {
-                listing_id: ETSY_LISTING_ID,
-                quantity: 1,
-                price: { amount: 2499, divisor: 100, currency_code: "USD" },
+                receipt_id: RECEIPT_ID,
+                buyer_user_id: 1,
+                buyer_email: "e2e-buyer@example.com",
+                name: "E2E Buyer",
+                first_line: "1 Test Ave",
+                city: "Portland",
+                state: "OR",
+                zip: "97201",
+                country_iso: "US",
+                grandtotal: { amount: 2499, divisor: 100, currency_code: "USD" },
+                transactions: [
+                  {
+                    listing_id: ETSY_LISTING_ID,
+                    quantity: 1,
+                    price: { amount: 2499, divisor: 100, currency_code: "USD" },
+                  },
+                ],
               },
             ],
           })
-      ),
-      http.post("https://api.printify.com/v1/shops/*/orders.json", () =>
-        HttpResponse.json({ id: "e2e-pf-order-001" })
       ),
       http.post("https://api.etsy.com/v3/public/oauth/token", () =>
         HttpResponse.json({
@@ -259,22 +259,17 @@ describeIf("E2E: full pipeline smoke test", () => {
       )
     );
 
-    const { createApp } = await import("../../packages/fulfillment/src/server.js");
-    const { processOrder } = await import("../../packages/fulfillment/src/order-processor.js");
-    const app = createApp({ db: supabase, processOrder });
+    // Seed a design_package with blueprint 6 (Gildan 64000 → $8.50 print cost)
+    // so the ledger can resolve listing → design → print cost.
+    await supabase
+      .from("design_packages")
+      .update({ printify_blueprint_id: 6 })
+      .eq("id", designPackageId);
 
-    const payload = Buffer.from(JSON.stringify({ receipt_id: RECEIPT_ID }));
-    const sig = createHmac("sha256", SECRET).update(payload).digest("hex");
-    const ts = String(Math.floor(Date.now() / 1000));
+    const { pollReceipts } = await import("../../packages/ledger/src/receipt-poller.js");
+    const result = await pollReceipts(supabase);
 
-    const res = await request(app)
-      .post("/webhook/etsy-order")
-      .set("content-type", "application/octet-stream")
-      .set("x-etsy-signature", sig)
-      .set("x-etsy-request-timestamp", ts)
-      .send(payload);
-
-    expect(res.status).toBe(200);
+    expect(result.logged).toBe(1);
 
     const { data: order } = await supabase
       .from("orders")
@@ -285,7 +280,11 @@ describeIf("E2E: full pipeline smoke test", () => {
     expect(order).toBeDefined();
     const o = order as Record<string, unknown>;
     orderId = o?.["id"] as string;
-    expect(o?.["status"]).toBe("submitted");
-    expect(o?.["printify_order_id"]).toBe("e2e-pf-order-001");
+    expect(o?.["status"]).toBe("logged");
+    expect(o?.["sale_price_usd"]).not.toBeNull();
+    expect(Number(o?.["sale_price_usd"])).toBeCloseTo(24.99, 2);
+    expect(Number(o?.["print_cost_usd"])).toBe(8.5);
+    expect(o?.["buyer_country"]).toBe("US");
+    expect(Number(o?.["margin_usd"])).toBeGreaterThan(0);
   });
 });

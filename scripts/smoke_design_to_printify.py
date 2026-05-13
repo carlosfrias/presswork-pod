@@ -1,9 +1,12 @@
 """End-to-end synthetic smoke: Design agent → Printify production mockup.
 
 Skips Scout (no real Etsy data) and skips Supabase (no DB writes / Storage uploads).
-Builds a TrendBrief in memory, runs the real prompt builder + fal.ai + rembg +
-image processor pipeline, then uploads the print PNG to Printify and creates a
-hidden product so we get back the same mockups Etsy listings would use.
+Builds a TrendBrief in memory, runs the real prompt builder + fal.ai image
+generation, then resizes/pads to the print canvas and uploads the result to
+Printify so we get back the same mockups Etsy listings would use. Skips the
+fal-side background removal (birefnet/bria) — this is a fast smoke that
+exercises prompt building + image gen + Printify, not the full URL-threaded
+production pipeline.
 
 Usage:
     source .venv/bin/activate
@@ -36,10 +39,11 @@ from packages.design.constants import (
     GILDAN_64000_PRINT_PROVIDER_ID,
     GILDAN_64000_VARIANT_IDS,
 )
-from packages.design.fal_client import generate_image
+from packages.design.fal_client import generate_image_url
 from packages.design.image_processor import process_for_print
 from packages.design.prompt_builder import build_flux_prompt
 from packages.shared_py.config import get_settings
+from packages.shared_py.fal_http import download_image
 from packages.shared_py.models import TrendBrief
 
 # Print provider that owns the Gildan 64000 variant IDs in design/constants.py.
@@ -200,15 +204,18 @@ async def main() -> int:
     )
     print(f"[smoke] prompt built in {round((time.monotonic() - t0) * 1000)}ms")
 
-    # 2) fal.ai FLUX Pro 1.1 → raw PNG
+    # 2) fal.ai FLUX Pro 1.1 → fal URL → download the bytes for this smoke
     t1 = time.monotonic()
-    raw_png = await generate_image(flux)
+    raw_url = await generate_image_url(flux)
+    raw_png = await download_image(raw_url)
     (out_dir / "raw.png").write_bytes(raw_png)
     print(
         f"[smoke] fal.ai image generated ({len(raw_png) // 1024}KB) in {round((time.monotonic() - t1) * 1000)}ms"
     )
 
-    # 3) rembg + 4500x5400 @300dpi
+    # 3) Resize + pad to 4500×5400 @300dpi. The raw fal output is used as-is
+    # here — full pipeline (birefnet/bria background removal) is exercised by
+    # the production Design agent, not this fast smoke.
     t2 = time.monotonic()
     print_png = process_for_print(raw_png)
     (out_dir / "print.png").write_bytes(print_png)

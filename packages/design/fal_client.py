@@ -1,52 +1,43 @@
-import fal_client
-import httpx
-from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
-
-from packages.design.constants import FLUX_IMAGE_SIZE, FLUX_MODEL
-from packages.shared_py.config import get_settings
+from packages.design.constants import FLUX_IMAGE_DIMENSIONS, FLUX_MODEL
+from packages.shared_py.fal_http import (
+    extract_output_url,
+    fal_client_singleton,
+    run_with_timeout,
+)
+from packages.shared_py.llm_usage import fal_cost_usd, record_usage
 from packages.shared_py.models import FluxPrompt
 
 
-def _is_retryable(exc: BaseException) -> bool:
-    # 5xx is the obvious retry case. Connection resets / DNS hiccups / timeouts
-    # are equally transient — without them, a flaky 60s image download fails
-    # the whole pipeline on a single network blip.
-    if isinstance(exc, httpx.HTTPStatusError):
-        return exc.response.status_code >= 500
-    return isinstance(exc, (httpx.ConnectError, httpx.ReadError, httpx.TimeoutException))
+async def generate_image_url(prompt: FluxPrompt) -> str:
+    """Run FLUX Pro 1.1 on fal and return the fal-hosted output URL.
 
+    Unlike the old `generate_image(...) → bytes`, the URL is returned
+    verbatim so downstream fal stages (aura-sr, birefnet) can consume it
+    directly without us downloading + re-uploading bytes between every model.
+    The orchestrator in `main.py` downloads once at the end of the chain,
+    when Pillow needs the actual pixels.
+    """
+    client = fal_client_singleton()
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=10),
-    retry=retry_if_exception(_is_retryable),
-    reraise=True,
-)
-async def _download_image(url: str) -> bytes:
-    async with httpx.AsyncClient(timeout=60) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        return resp.content
-
-
-async def generate_image(prompt: FluxPrompt) -> bytes:
-    settings = get_settings()
-    # Pass FAL_KEY explicitly to AsyncClient. Mutating os.environ on every call
-    # is not safe under concurrent coroutines and leaks the secret to any
-    # subprocess we spawn while a generation is in-flight.
-    client = fal_client.AsyncClient(key=settings.fal_key)
-
-    result = await client.run(
+    result = await run_with_timeout(
+        client,
         FLUX_MODEL,
         arguments={
             "prompt": prompt.prompt,
             "negative_prompt": prompt.negative_prompt,
-            "image_size": FLUX_IMAGE_SIZE,
+            "image_size": FLUX_IMAGE_DIMENSIONS,
             "num_images": 1,
             "output_format": "png",
             "safety_tolerance": "2",
         },
     )
 
-    image_url: str = result["images"][0]["url"]
-    return await _download_image(image_url)
+    record_usage(
+        agent="design",
+        provider="fal",
+        operation="flux_pro",
+        cost_usd=fal_cost_usd(FLUX_MODEL),
+        metadata={"model": FLUX_MODEL},
+    )
+
+    return extract_output_url(result)

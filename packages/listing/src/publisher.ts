@@ -47,7 +47,7 @@ export async function publishOne(
   brief: TrendBrief
 ): Promise<{ listingId: string }> {
   const log = getLogger("listing");
-  const { HUMAN_REVIEW_ENABLED, ETSY_PRODUCTION_PARTNER_ID } = getSettings();
+  const { ETSY_PRODUCTION_PARTNER_ID } = getSettings();
   const t0 = Date.now();
 
   // Pre-flight checks that don't depend on any DB state.
@@ -167,32 +167,18 @@ export async function publishOne(
         .eq("id", listingId);
     }
 
-    if (HUMAN_REVIEW_ENABLED) {
-      await db.from("listings").update({ status: "needs_review" }).eq("id", listingId);
-      log.info({
-        action: "paused_for_review",
-        record_id: listingId,
-        status: "needs_review",
-        duration_ms: Date.now() - t0,
-      });
-      return { listingId };
-    }
-
-    await db.from("listings").update({ status: "pending_publish" }).eq("id", listingId);
-
-    // The documented state machine requires a 'publishing' checkpoint between
-    // pending_publish and active so an interrupted publish is observable.
-    await db.from("listings").update({ status: "publishing" }).eq("id", listingId);
-
-    await executeEtsyPublish(db, listingId, productId, copy, priceUsd, mockupUrls, true);
-
+    // Every listing pauses at needs_review before publishing. The dashboard's
+    // Approve action flips the row to pending_publish, and the next listing
+    // run picks up the manual_mode / approved row and executes the Etsy
+    // publish. No auto-publish bypass — every agent in the pipeline pauses
+    // for human review of its output.
+    await db.from("listings").update({ status: "needs_review" }).eq("id", listingId);
     log.info({
-      action: "listing_published",
+      action: "paused_for_review",
       record_id: listingId,
-      status: "active",
+      status: "needs_review",
       duration_ms: Date.now() - t0,
     });
-
     return { listingId };
   } catch (err) {
     let message = err instanceof Error ? err.message : String(err);

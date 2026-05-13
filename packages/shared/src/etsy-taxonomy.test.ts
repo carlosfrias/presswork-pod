@@ -24,7 +24,6 @@ const validEnv = {
   SLACK_WEBHOOK_URL: "https://hooks.slack.com/test",
   NODE_ENV: "test",
   LOG_LEVEL: "info",
-  HUMAN_REVIEW_ENABLED: "true",
 };
 
 const TSHIRT_TREE = {

@@ -1,21 +1,15 @@
-# Railway service definitions for the presswork fulfillment agent.
-# Do NOT register these services until end-to-end manual verification (step 30) passes.
+# Railway service definitions for the presswork Ledger Agent.
+# Fulfillment is handled by Etsy's native Printify integration — this agent
+# only logs metrics and emits financial digests.
 
-[services.fulfillment-server]
-type = "web"
-source = "."
-command = "npm run start --workspace=packages/fulfillment"
-healthcheckPath = "/healthz"
-port = "$PORT"
-
-[services.fulfillment-cron-receipts]
-type = "cron"
-source = "."
-schedule = "*/5 * * * *"
-command = "npm run poll-receipts --workspace=packages/fulfillment"
-
-[services.fulfillment-cron-tracking]
+[services.ledger-cron-receipts]
 type = "cron"
 source = "."
 schedule = "*/30 * * * *"
-command = "npm run poll-tracking --workspace=packages/fulfillment"
+command = "npm run poll-receipts --workspace=packages/ledger"
+
+[services.ledger-cron-daily-digest]
+type = "cron"
+source = "."
+schedule = "0 13 * * *"
+command = "npm run daily-digest --workspace=packages/ledger"

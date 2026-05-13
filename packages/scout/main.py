@@ -12,6 +12,11 @@ from packages.shared_py.notifier import notify_slack
 
 _MAX_INSERTS = 5
 
+# Every brief lands in the review queue and waits for owner approval before
+# Builder/Design can advance it. No auto-approve bypass — every agent in the
+# pipeline pauses for human review of its output.
+_BRIEF_WRITE_STATUS = "needs_review"
+
 
 async def run() -> None:
     log = get_logger("scout")
@@ -46,7 +51,11 @@ async def run() -> None:
 
         t0 = time.monotonic()
         try:
-            listings = await etsy.fetch_top_listings(niche)
+            # Always fetch image URLs — cost on Etsy side is zero, and they're
+            # useful in raw_etsy_data for offline analysis even when vision is
+            # off. The analyzer decides whether to send them to Claude based on
+            # settings.scout_vision_enabled.
+            listings = await etsy.fetch_top_listings(niche, include_images=True)
             analysis = await analyze_niche(listings)
 
             row = {
@@ -54,7 +63,7 @@ async def run() -> None:
                 "niche": niche,  # seed niche is canonical for dedup — overrides analysis.niche
                 "raw_etsy_data": listings,
                 "claude_analysis": analysis.model_dump(),
-                "status": "pending",
+                "status": _BRIEF_WRITE_STATUS,
             }
 
             def _insert() -> Any:

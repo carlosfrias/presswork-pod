@@ -98,12 +98,18 @@ class EtsyClient:
             resp.raise_for_status()
         return resp
 
-    async def fetch_top_listings(self, niche: str, limit: int = 25) -> list[dict]:
+    async def fetch_top_listings(
+        self, niche: str, limit: int = 25, *, include_images: bool = False
+    ) -> list[dict]:
         params: dict[str, Any] = {
             "keywords": niche,
             "sort_on": "score",
             "limit": limit,
         }
+        if include_images:
+            # Etsy returns an `images` array per listing with multiple CDN size
+            # variants (url_75x75 … url_fullxfull). No rate-limit cost change.
+            params["includes"] = "Images"
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await self._fetch_with_retry(client, params)
             if resp.status_code == 401:

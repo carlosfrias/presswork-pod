@@ -5,13 +5,6 @@ import { AI_DISCLOSURE_TEXT, MAX_TAGS, MAX_TITLE_LEN, MAX_TAG_LEN } from "./cons
 
 export const TrendBriefStatusSchema = z.enum(["pending", "processing", "done", "error"]);
 
-// Classification driving the Design agent's prompt + image-processing pipeline.
-// 'screen_print' triggers an interior-whitespace alpha-strip after rembg so the
-// negative space inside single-ink designs becomes transparent. NULL is treated
-// as 'full_color' (legacy rows) at the consumer.
-export const PrintStyleSchema = z.enum(["full_color", "screen_print"]);
-export type PrintStyle = z.infer<typeof PrintStyleSchema>;
-
 export const TrendBriefSchema = z.object({
   id: z.string().uuid(),
   created_at: z.string(),
@@ -22,7 +15,6 @@ export const TrendBriefSchema = z.object({
   top_tags: z.array(z.string()).nullable().optional(),
   price_target_usd: z.number().nullable().optional(),
   color_palette: z.array(z.string()).nullable().optional(),
-  print_style: PrintStyleSchema.nullable().optional(),
   raw_etsy_data: z.unknown().nullable().optional(),
   claude_analysis: z.unknown().nullable().optional(),
   error_message: z.string().nullable().optional(),
