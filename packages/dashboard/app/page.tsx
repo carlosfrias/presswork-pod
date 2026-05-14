@@ -6,23 +6,28 @@ import { RecentErrors } from "@/components/overview/RecentErrors";
 import { FalBalanceTile } from "@/components/overview/FalBalanceTile";
 import { AnthropicSpendTile } from "@/components/overview/AnthropicSpendTile";
 import { FlagsRail } from "@/components/flags/FlagsRail";
+import { DefaultImageModelCard } from "@/components/models/DefaultImageModelCard";
+import { deriveDefaultImageModel } from "@/lib/models/image-models";
 import {
   getKpis,
   getDailySummary,
   getPipelineHealth,
   getRecentErrors,
+  getRuntimeFlags,
 } from "@/lib/queries/overview";
 import { formatNumber, formatUsd } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
 export default async function OverviewPage() {
-  const [kpis30, daily, health, errors] = await Promise.all([
+  const [kpis30, daily, health, errors, flags] = await Promise.all([
     getKpis(30),
     getDailySummary(30),
     getPipelineHealth(),
     getRecentErrors(10),
+    getRuntimeFlags(),
   ]);
+  const defaultImageModel = deriveDefaultImageModel(flags);
 
   return (
     <div className="flex flex-col gap-8">
@@ -104,8 +109,16 @@ export default async function OverviewPage() {
         </SurfaceCard>
       </section>
 
-      <section>
-        <FlagsRail title="Runtime flags" />
+      <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <SurfaceCard
+          title="Image model"
+          subtitle="Default backend for new briefs"
+        >
+          <DefaultImageModelCard initial={defaultImageModel} />
+        </SurfaceCard>
+        <div className="lg:col-span-2">
+          <FlagsRail title="Runtime flags" />
+        </div>
       </section>
     </div>
   );

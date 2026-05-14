@@ -1,9 +1,17 @@
 import { StatusBadge } from "@/components/status/StatusBadge";
-import { Button } from "@/components/ui/Button";
 import { ConfirmDelete } from "@/components/ui/ConfirmDelete";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { SubmitButton } from "@/components/ui/SubmitButton";
+import { DesignGridImage } from "@/components/design/DesignGridImage";
+import { ReplaceImageForm } from "@/components/design/ReplaceImageForm";
 import { formatRelative } from "@/lib/format";
-import { deleteDesign, regenerateDesign, retryDesign } from "@/lib/actions/design";
+import { withCacheBuster } from "@/lib/imageUrl";
+import {
+  deleteDesign,
+  regenerateDesign,
+  reopenDesign,
+  retryDesign,
+} from "@/lib/actions/design";
 import type { DesignPackageRow } from "@/lib/queries/types";
 
 export function DesignGrid({ designs }: { designs: DesignPackageRow[] }) {
@@ -17,26 +25,17 @@ export function DesignGrid({ designs }: { designs: DesignPackageRow[] }) {
           key={d.id}
           className="group overflow-hidden rounded-(--radius-lg) border border-(--surface-line) bg-(--surface-2)"
         >
-          <div className="relative aspect-square w-full bg-(--surface-1)">
-            {d.image_url ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={d.image_url}
-                alt="Design"
-                className="h-full w-full object-cover"
-                loading="lazy"
-              />
-            ) : (
-              <div className="flex h-full w-full items-center justify-center text-xs text-(--text-faint)">
-                no image
-              </div>
-            )}
+          <div className="relative aspect-square w-full overflow-hidden bg-(--surface-1)">
+            <DesignGridImage
+              src={withCacheBuster(d.image_url, d.updated_at)}
+              shortId={d.id.slice(0, 8)}
+            />
             {/* Only flag when mockups exist but the provenance bit wasn't flipped.
                 Default-false on fresh designs is normal — Listing flips it when it
                 creates the Printify product. */}
             {(d.mockup_urls?.length ?? 0) > 0 && !d.mockups_from_actual_design && (
               <span
-                className="absolute top-2 right-2 rounded-(--radius-sm) bg-(--accent-bad)/80 px-1.5 py-0.5 text-[10px] font-medium text-(--surface-0)"
+                className="pointer-events-none absolute top-2 right-2 rounded-(--radius-sm) bg-(--accent-bad)/80 px-1.5 py-0.5 text-[10px] font-medium text-(--surface-0)"
                 title="Mockups exist but mockups_from_actual_design is false — compliance rule #4 violation"
               >
                 provenance!
@@ -71,21 +70,84 @@ export function DesignGrid({ designs }: { designs: DesignPackageRow[] }) {
               </details>
             )}
             <div className="flex gap-2">
-              <form action={regenerateDesign} className="flex-1">
-                <input type="hidden" name="id" value={d.id} />
-                <Button type="submit" size="sm" variant="secondary" className="w-full">
-                  Regenerate
-                </Button>
-              </form>
+              {d.status === "approved" ? (
+                /* Approved designs get Reopen instead of Regenerate. Reopen
+                   flips the row back to needs_review with no agent spawn and
+                   no clearing — the operator re-enters the review surface
+                   with the full image stack intact, can browse versions and
+                   tweak settings, and only pays for a fresh agent run if
+                   they hit Regen there. Refuses on the server if a
+                   non-error listing references this design. */
+                <form action={reopenDesign} className="flex-1">
+                  <input type="hidden" name="id" value={d.id} />
+                  <SubmitButton
+                    size="sm"
+                    variant="secondary"
+                    className="w-full"
+                    idleLabel="Reopen"
+                    pendingLabel="Reopening…"
+                  />
+                </form>
+              ) : (
+                <form action={regenerateDesign} className="flex-1">
+                  <input type="hidden" name="id" value={d.id} />
+                  <SubmitButton
+                    size="sm"
+                    variant="secondary"
+                    className="w-full"
+                    idleLabel="Regenerate"
+                    pendingLabel="Regenerating…"
+                  />
+                </form>
+              )}
               {d.status === "error" && (
                 <form action={retryDesign} className="flex-1">
                   <input type="hidden" name="id" value={d.id} />
-                  <Button type="submit" size="sm" variant="ghost" className="w-full">
-                    Retry
-                  </Button>
+                  <SubmitButton
+                    size="sm"
+                    variant="ghost"
+                    className="w-full"
+                    idleLabel="Retry"
+                    pendingLabel="Retrying…"
+                  />
                 </form>
               )}
             </div>
+            {/* Hand-edit cycle: approved-only. Download buttons let the
+                operator pull masked + unmasked PNGs locally for editing,
+                then ReplaceImageForm re-injects the modified image back
+                into the row (versioned in metadata.image_versions) and
+                flips status to needs_review so the operator re-approves
+                before Listing publishes. */}
+            {d.status === "approved" && (
+              <div className="flex flex-col gap-2 border-t border-(--surface-line) pt-2">
+                <div className="flex flex-wrap gap-1.5 text-[11px]">
+                  {d.image_url && (
+                    <a
+                      href={d.image_url}
+                      download={`design-${d.id.slice(0, 8)}-masked.png`}
+                      target="_blank"
+                      rel="noopener"
+                      className="rounded-(--radius-sm) border border-(--surface-line) bg-(--surface-1) px-2 py-1 text-(--text-secondary) hover:border-(--accent-warm) hover:text-(--text-primary)"
+                    >
+                      Download masked
+                    </a>
+                  )}
+                  {d.image_url_unmasked && (
+                    <a
+                      href={d.image_url_unmasked}
+                      download={`design-${d.id.slice(0, 8)}-unmasked.png`}
+                      target="_blank"
+                      rel="noopener"
+                      className="rounded-(--radius-sm) border border-(--surface-line) bg-(--surface-1) px-2 py-1 text-(--text-secondary) hover:border-(--accent-warm) hover:text-(--text-primary)"
+                    >
+                      Download unmasked
+                    </a>
+                  )}
+                </div>
+                <ReplaceImageForm id={d.id} />
+              </div>
+            )}
             <ConfirmDelete
               action={deleteDesign}
               id={d.id}

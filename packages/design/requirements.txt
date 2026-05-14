@@ -1,4 +1,7 @@
 -r ../shared_py/requirements.txt
 fal-client>=0.5
 Pillow>=10.2
+# Local rembg path (BackgroundRemovalMode == "local"): CPU U²-Net via onnxruntime.
+# Downloads the ~170MB U²-Net weight to ~/.u2net/ on first run.
+rembg[cpu]>=2.0.50
 tenacity>=8.2

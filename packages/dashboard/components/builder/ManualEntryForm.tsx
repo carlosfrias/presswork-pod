@@ -2,11 +2,15 @@
 
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/Button";
+import { StylePicker } from "@/components/styles/StylePicker";
+import { ImageModelPicker } from "@/components/models/ImageModelPicker";
 import {
   buildPromptManual,
   createManualBrief,
   type BuildResult,
 } from "@/lib/actions/builder";
+import type { StyleId } from "@/lib/styles/catalog";
+import type { ImageModelId } from "@/lib/models/image-models";
 
 /** Manual Builder entry.
  *
@@ -14,10 +18,16 @@ import {
  * picks style + palette + scene cold. Operator picks the niche or leaves the
  * field blank to fall back to the "original design" default.
  */
-export function ManualEntryForm() {
+interface Props {
+  defaultImageModel: ImageModelId;
+}
+
+export function ManualEntryForm({ defaultImageModel }: Props) {
   const [niche, setNiche] = useState("");
   const [seed, setSeed] = useState("");
   const [referenceUrl, setReferenceUrl] = useState("");
+  const [style, setStyle] = useState<StyleId | null>(null);
+  const [imageModel, setImageModel] = useState<ImageModelId>(defaultImageModel);
   const [description, setDescription] = useState("");
   const [buildError, setBuildError] = useState<string | null>(null);
   const [isBuilding, startBuild] = useTransition();
@@ -26,7 +36,7 @@ export function ManualEntryForm() {
   function handleBuild() {
     setBuildError(null);
     startBuild(async () => {
-      const result: BuildResult = await buildPromptManual(seed, referenceUrl);
+      const result: BuildResult = await buildPromptManual(seed, referenceUrl, style);
       if (result.ok) {
         setDescription(result.description);
       } else {
@@ -38,6 +48,8 @@ export function ManualEntryForm() {
   function handleSend(formData: FormData) {
     formData.set("niche", niche);
     formData.set("description", description);
+    formData.set("style", style ?? "");
+    formData.set("image_model", imageModel);
     startSend(async () => {
       await createManualBrief(formData);
       // Reset on successful create so the operator can queue another one
@@ -46,6 +58,8 @@ export function ManualEntryForm() {
       setNiche("");
       setSeed("");
       setReferenceUrl("");
+      setStyle(null);
+      setImageModel(defaultImageModel);
       setDescription("");
     });
   }
@@ -100,9 +114,21 @@ export function ManualEntryForm() {
           disabled={isBuilding || isSending}
         />
         <span className="text-[11px] normal-case tracking-normal text-(--text-muted)">
-          Public URLs only. With 1 image, Builder treats it as composition + palette anchor. With 2-3, Builder splits roles by position: image 1 = composition, image 2 = style register, image 3 = palette/mood. Your seed can override any of those.
+          Direct image URLs only (.jpg / .png / .webp). On a webpage, right-click the image → &ldquo;Copy image address&rdquo;. Share links and Google/Pinterest page URLs return HTML, not image bytes, and will fail. With 1 image, Builder treats it as composition + palette anchor. With 2-3, Builder splits roles by position: image 1 = composition, image 2 = style register, image 3 = palette/mood. Your seed can override any of those.
         </span>
       </label>
+
+      <StylePicker
+        value={style}
+        onChange={setStyle}
+        disabled={isBuilding || isSending}
+      />
+
+      <ImageModelPicker
+        value={imageModel}
+        onChange={(next) => next && setImageModel(next)}
+        disabled={isBuilding || isSending}
+      />
 
       <div className="flex flex-wrap items-center gap-2">
         <Button

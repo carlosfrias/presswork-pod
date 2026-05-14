@@ -2,15 +2,22 @@
 
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/Button";
+import { StylePicker } from "@/components/styles/StylePicker";
+import { ImageModelPicker } from "@/components/models/ImageModelPicker";
 import {
   buildPromptForBrief,
   sendToDesign,
   type BuildResult,
 } from "@/lib/actions/builder";
+import type { StyleId } from "@/lib/styles/catalog";
+import type { ImageModelId } from "@/lib/models/image-models";
 import type { TrendBriefRow } from "@/lib/queries/types";
 
 interface Props {
   brief: TrendBriefRow;
+  // Global default image model from the Overview flag. Used as the initial
+  // picker value — operator can override per Send.
+  defaultImageModel: ImageModelId;
 }
 
 /** From-Scout Builder card.
@@ -24,9 +31,13 @@ interface Props {
  * first and then rebuild). Description state is local; nothing hits the DB
  * until Send to Design submits the sendToDesign action.
  */
-export function FromScoutCard({ brief }: Props) {
+export function FromScoutCard({ brief, defaultImageModel }: Props) {
   const [seed, setSeed] = useState("");
   const [referenceUrl, setReferenceUrl] = useState("");
+  const [style, setStyle] = useState<StyleId | null>(null);
+  // Image-model chip. Seeded with the global default; operator overrides per
+  // Send. Persisted on the spawned child brief via the form's hidden field.
+  const [imageModel, setImageModel] = useState<ImageModelId>(defaultImageModel);
   const [description, setDescription] = useState("");
   const [buildError, setBuildError] = useState<string | null>(null);
   // Count of designs spawned from this brief in the current session. The
@@ -34,6 +45,11 @@ export function FromScoutCard({ brief }: Props) {
   // into Design's queue. This counter is in-memory only; on page reload it
   // resets but the spawned children remain in the pipeline.
   const [sentCount, setSentCount] = useState(0);
+  // Snapshot of the description text at the moment of the last successful
+  // Send. The button compares against this to block accidental double-sends
+  // of the same description. Cleared by Rebuild or by any edit to the
+  // textarea (the strings simply diverge).
+  const [lastSentDescription, setLastSentDescription] = useState<string | null>(null);
   const [isBuilding, startBuild] = useTransition();
   const [isSending, startSend] = useTransition();
 
@@ -46,9 +62,13 @@ export function FromScoutCard({ brief }: Props) {
         brief.id,
         seed,
         referenceUrl,
+        style,
       );
       if (result.ok) {
         setDescription(result.description);
+        // Rebuild produces a fresh description; clear the dedupe guard so
+        // the new text is sendable even if it happens to match the prior.
+        setLastSentDescription(null);
       } else {
         setBuildError(result.error);
       }
@@ -56,13 +76,22 @@ export function FromScoutCard({ brief }: Props) {
   }
 
   function handleSend(formData: FormData) {
+    const snapshot = description;
     formData.set("id", brief.id);
-    formData.set("description", description);
+    formData.set("description", snapshot);
+    // Persist the chip choice on the child brief so Design review can
+    // surface it. Empty string when Auto — server collapses bad/empty
+    // values back to null via parseStyle.
+    formData.set("style", style ?? "");
+    formData.set("image_model", imageModel);
     startSend(async () => {
       await sendToDesign(formData);
       // Don't reset state — the operator commonly iterates: send → tweak seed
       // → rebuild → send again. The brief stays in the Builder queue (it's
       // never consumed), so we keep the card hot for the next variation.
+      // Remember the exact text we just sent so the Send button locks until
+      // the operator edits the description or rebuilds.
+      setLastSentDescription(snapshot);
       setSentCount((n) => n + 1);
     });
   }
@@ -70,13 +99,21 @@ export function FromScoutCard({ brief }: Props) {
   function handleReset() {
     setSeed("");
     setReferenceUrl("");
+    setStyle(null);
     setDescription("");
     setBuildError(null);
     setSentCount(0);
+    setLastSentDescription(null);
   }
 
   const canBuild = seed.trim().length >= 3 && !isBuilding && !isSending;
-  const canSend = description.trim().length >= 10 && !isBuilding && !isSending;
+  const isUnchangedSinceSend =
+    lastSentDescription !== null && description === lastSentDescription;
+  const canSend =
+    description.trim().length >= 10 &&
+    !isBuilding &&
+    !isSending &&
+    !isUnchangedSinceSend;
   const hasBuilt = description.length > 0;
 
   return (
@@ -159,9 +196,21 @@ export function FromScoutCard({ brief }: Props) {
           disabled={isBuilding || isSending}
         />
         <span className="text-[11px] normal-case tracking-normal text-(--text-muted)">
-          Public URLs only. With 1 image, Builder treats it as composition + palette anchor. With 2-3, Builder splits roles by position: image 1 = composition, image 2 = style register, image 3 = palette/mood. Your seed can override any of those.
+          Direct image URLs only (.jpg / .png / .webp). On a webpage, right-click the image → &ldquo;Copy image address&rdquo;. Share links and Google/Pinterest page URLs return HTML, not image bytes, and will fail. With 1 image, Builder treats it as composition + palette anchor. With 2-3, Builder splits roles by position: image 1 = composition, image 2 = style register, image 3 = palette/mood. Your seed can override any of those.
         </span>
       </label>
+
+      <StylePicker
+        value={style}
+        onChange={setStyle}
+        disabled={isBuilding || isSending}
+      />
+
+      <ImageModelPicker
+        value={imageModel}
+        onChange={(next) => next && setImageModel(next)}
+        disabled={isBuilding || isSending}
+      />
 
       <div className="flex flex-wrap items-center gap-2">
         <Button
@@ -201,9 +250,18 @@ export function FromScoutCard({ brief }: Props) {
               disabled={isSending}
             />
           </label>
-          <div className="flex justify-end">
+          <div className="flex items-center justify-end gap-2">
+            {isUnchangedSinceSend && (
+              <span className="text-[11px] text-(--text-muted)">
+                Edit the description or rebuild to send another variant.
+              </span>
+            )}
             <Button type="submit" variant="primary" disabled={!canSend}>
-              {isSending ? "Sending…" : "Send to Design"}
+              {isSending
+                ? "Sending…"
+                : isUnchangedSinceSend
+                  ? "Sent ✓"
+                  : "Send to Design"}
             </Button>
           </div>
         </form>

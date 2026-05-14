@@ -153,7 +153,11 @@ Two crons: receipt polling (every 30 min) and a daily digest. **Metrics-only —
 - **All secrets via env vars.** No hardcoded values.
 - **Idempotent writes.** Prefer upsert over insert where practical.
 - **Row locking.** Poll with `SELECT ... FOR UPDATE SKIP LOCKED` so concurrent agent instances don't double-process.
-- **Errors:** set `status='error'`, write `error_message`, increment `retry_count`. If `retry_count < 3` → back to `pending`. If `≥ 3` → stay in `error`, alert.
+- **Errors:** set `status='error'`, write `error_message`, increment `retry_count`, alert. Recovery model is **per-agent** and depends on whether the work is upstream or downstream of a human gate:
+  - **Listing** (downstream of human design approval): auto-requeues — if `retry_count < 3` → back to `pending`; if `≥ 3` → stay in `error`. See `packages/listing/src/publisher.ts`.
+  - **Design** (downstream of human brief approval): **does NOT auto-requeue**. A failure parks the brief at `error` and the operator must re-approve in the dashboard. Auto-retry would conflict with the human-gate pattern that runs through every agent's output. See `packages/design/main.py`.
+  - **Scout** (pre-approval): writes one error row with `retry_count=1` and relies on the 7-day duplicate-niche suppression as natural backoff — the next cron tick picks the niche back up if and only if no recent error row exists.
+  - **Ledger:** receipt-poller failures retry the next tick (every 30 min); per-row writes are idempotent via the `orders.etsy_order_id` UNIQUE constraint.
 - **TS:** strict mode; zod for all external data; no `any` (use `unknown` + guards); named exports only (except entry points); `bottleneck` for Etsy rate limits.
 - **Python:** type hints everywhere; `httpx` not `requests`; `pydantic` models; `structlog`; never bare `except:`.
 - **Logging:** `{ agent, action, record_id, status, duration_ms, error? }` on every action.

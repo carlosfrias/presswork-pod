@@ -17,20 +17,12 @@ prompt enforces print-readiness and IP/compliance only; it does not impose a
 default house style on top of what the brief asked for.
 
 Rules (non-negotiable):
-- The prompt MUST include ALL of these exact phrases:
-  "print on demand design", "vector-style"
-  (FLUX Pro 1.1 incantation phrases — they reliably yield clean, separable
-  subjects with this backend. Not a license to override the brief's stated
-  rendering register — translate style_keywords into the visual language the
-  brief asked for.)
-- The prompt MUST also specify a solid background — use EXACTLY one of:
-  "white background" OR "black background". Pick whichever contrasts best with
-  the design's dominant tones (dark/saturated subjects → "white background";
-  light/pastel subjects → "black background"). Do NOT ask for transparent,
-  alpha, gradient, or photo backgrounds — downstream tooling removes the
-  solid color and produces the final transparent PNG.
 - Do NOT include "high resolution", "4K", "8K", or any resolution/quality
   modifier — a dedicated upscaling pass runs after FLUX.
+- Print-readiness (solid background, framing, singular centered subject) is
+  enforced downstream by Design's preprocessing step. You don't need to bake
+  in incantation phrases for those — focus on getting the subject and style
+  right. The downstream pipeline will append the print constraints.
 - NEVER include: brand names, registered trademarks (e.g. Stratocaster, Coca-Cola, Nike), copyrighted characters (e.g. Disney/Marvel characters), or named living celebrities (politicians, musicians, actors currently alive)
 - People ARE allowed: name historical figures (e.g. Abraham Lincoln, Einstein, Washington), depict generic/anonymous people of any era, and use public-domain characters. Generate the likeness directly when the subject is a historical figure
 - Avoid attribution to specific living artists for style — use descriptive art-movement language instead (e.g. "art-deco style" not "Mucha-style")
@@ -53,9 +45,10 @@ Rules (non-negotiable):
       the RENDERING. Neither is permission to add cathedrals, ruins, candles, fog, etc.
 - Subject dominance. The focal subject must fill roughly 60–80% of the frame, centered, with
   no wide establishing shot, no environmental context, and no atmospheric backdrop. The
-  background is exactly the solid color (white or black) you chose — empty space, not a scene.
-  If the brief seems to demand a scene, you are interpreting it wrong: distill it to a single
-  subject and render that subject large and centered.
+  background is a plain solid color — default to black unless the brief explicitly asks for
+  a different solid color. Empty space, not a scene. If the brief seems to demand a scene,
+  you are interpreting it wrong: distill it to a single subject and render that subject
+  large and centered.
 - Translate style keywords into purely descriptive, FLUX-safe language. The brief's
   `style_keywords` carry the rendering register — render whatever they describe (flat
   screen print, painterly chiaroscuro, watercolor wash, papercut layers, etc.). Do NOT
@@ -284,16 +277,6 @@ def _palette_already_in_prompt(custom: str, palette: list[str] | None) -> bool:
     return False
 
 
-# Sentinel for the operator-instruction suffix we inline from prompt_constraint.
-# Without dedup the constraint clause stacks every time the operator regens
-# from an already-built prompt.
-CONSTRAINT_CLAUSE_MARKER = "operator instruction (must follow):"
-
-
-def _constraint_already_in_prompt(custom: str) -> bool:
-    return CONSTRAINT_CLAUSE_MARKER in custom.lower()
-
-
 # Border-safe framing clause appended to every dashboard-injected prompt
 # (FLUX + gpt-image-2 paths) unless the operator already addressed framing
 # inline. gpt-image-2 defaults to filling the canvas edge-to-edge — the
@@ -330,22 +313,103 @@ def _framing_already_in_prompt(custom: str) -> bool:
     return any(hint in lowered for hint in FRAMING_HINTS)
 
 
-def _constraint_clause(constraint: str | None) -> str | None:
-    """Build a 'follow this operator instruction' clause from a brief's
-    prompt_constraint. Returns None when the constraint is empty/whitespace.
+# Print-readiness clause: force a plain solid BLACK background by default.
+# Anything other than a flat solid color photographs as a square sticker
+# after rembg/bria cuts the silhouette — the model often invents textured
+# or gradient backgrounds when the prompt doesn't explicitly forbid them.
+# Black is the default per operator preference (2026-05-14): most apparel
+# in our catalog is dark, and a black plate gives the background remover
+# the cleanest silhouette to cut against most subjects. The operator can
+# override by writing "white background" / "plain blue background" / etc.
+# inline — _background_already_in_prompt will then skip this auto-append.
+BACKGROUND_CLAUSE = (
+    " The background must be plain solid black — no scene, no environment, "
+    "no texture, no gradient. Use pure black as the flat backdrop unless "
+    "the subject's silhouette requires a different solid color for contrast."
+)
 
-    Appended verbatim to custom prompts so the operator's instinct survives
-    even when they bypass Claude. The leading newline keeps it visually
-    distinct from the prompt body in fal.ai logs and helps gpt-image-2 read
-    it as a separate directive rather than merging it into the subject
-    description.
-    """
-    if not constraint:
-        return None
-    text = constraint.strip()
-    if not text:
-        return None
-    return f"\n\nOperator instruction (must follow): {text}"
+# Operator-language signals that they've already addressed the background.
+# Case-insensitive substring match — any hit skips the auto-append to avoid
+# stacking conflicting background directives on regen.
+BACKGROUND_HINTS = (
+    "white background",
+    "black background",
+    "plain background",
+    "solid background",
+    "blank background",
+    "no background",
+    "transparent background",
+    # Self-clause marker so a regen of an already-stamped prompt skips the
+    # second append. Distinctive enough not to collide with the FRAMING_CLAUSE
+    # wording (which mentions "plain empty background" but never "must be").
+    "background must be plain solid",
+)
+
+
+def _background_already_in_prompt(custom: str) -> bool:
+    lowered = custom.lower()
+    return any(hint in lowered for hint in BACKGROUND_HINTS)
+
+
+# Print-readiness clause: one subject, centered. Image models default to busy
+# multi-subject compositions when the prompt is silent on count, which makes
+# the resulting print read as cluttered after background removal.
+SUBJECT_CLAUSE = (
+    " Render exactly ONE singular subject centered in the frame — no second "
+    "character, no duplicates, no companion objects competing for focus. "
+    "Supporting motifs may appear as small accents but the composition must "
+    "read as a single subject."
+)
+
+# Operator-language signals they've already addressed subject count/position.
+# Includes opt-outs ("two subjects", "multiple") so the operator can override
+# the singular-subject default without us re-stacking it.
+SUBJECT_HINTS = (
+    "single subject",
+    "singular subject",
+    "one subject",
+    "two subjects",
+    "multiple subjects",
+    "centered",
+    "in the center",
+    "central composition",
+)
+
+
+def _subject_already_in_prompt(custom: str) -> bool:
+    lowered = custom.lower()
+    return any(hint in lowered for hint in SUBJECT_HINTS)
+
+
+# Print-readiness clause: enforce a strong silhouette that survives at print
+# size. The image models default to compositions optimized for screen viewing
+# (fine details, low-contrast accents) which lose legibility on apparel.
+# Pattern lifted from the winning approved designs (2026-05-14 audit) — every
+# strong winner either had this language inline or implicitly satisfied it
+# via thick outlines + bold shapes. Making it an explicit auto-append surfaces
+# the constraint to the model when the operator didn't think to.
+READABILITY_CLAUSE = (
+    " Strong silhouette that reads at six inches across — shapes large enough "
+    "and contrast high enough that the design is legible at chest-pocket scale."
+)
+
+# Operator-language signals that they've already addressed print-size
+# readability. Skip the auto-append when any of these substrings appears.
+# "strong silhouette" alone is a common style cue in screen-print briefs;
+# trusting the operator's wording is safer than double-stamping.
+READABILITY_HINTS = (
+    "reads at six inches",
+    "reads at chest",
+    "legible at",
+    "six inches across",
+    "strong silhouette",
+    "chest-pocket scale",
+)
+
+
+def _readability_already_in_prompt(custom: str) -> bool:
+    lowered = custom.lower()
+    return any(hint in lowered for hint in READABILITY_HINTS)
 
 
 # ---------------------------------------------------------------------------
@@ -358,17 +422,31 @@ _CLAUDE_MODEL = "claude-sonnet-4-20250514"
 def _preprocess_custom_prompt(
     custom: str,
     palette: list[str] | None,
-    constraint: str | None,
 ) -> str:
-    """Inject palette / framing / operator-constraint clauses into a
-    dashboard-injected custom prompt.
+    """Append print-readiness clauses to a dashboard-injected custom prompt.
 
-    Each clause is added only when it isn't already present in the
-    operator's text (idempotent on regen). The order matters: palette
-    first (style-neutral color list), then the framing reminder, then the
-    operator instruction at the very end so it can override anything that
-    came before. Shared by both FLUX and gpt-image-2 builders — keep
-    parity so the two backends behave identically on injected prompts.
+    Design's job at this stage is *not* to re-synthesize what the operator
+    wrote — that already happened in Builder (or in the operator's edit on
+    the Design review card). Here we only enforce print mechanics:
+
+      1. Palette — restrict to the brief's color list when present (and
+         only when the prompt doesn't already reference those colors).
+      2. Framing — leave a border so the silhouette doesn't photograph as
+         a square sticker after background removal.
+      3. Background — plain solid black or white. Anything else creates
+         halos and clutter after the cutout.
+      4. Subject count — one centered subject. Image models default to
+         busy multi-subject compositions when the prompt is silent.
+      5. Readability — strong silhouette that reads at six-inch print
+         scale. Without this the model tends to optimize for screen-resolution
+         detail that disappears on apparel.
+
+    Every clause is idempotent (skipped when the operator already addressed
+    that dimension inline) so repeated regens don't stack. The prior
+    "Operator instruction (must follow):" tail-append from prompt_constraint
+    has been removed entirely — it caused the trailing override to fight
+    the operator's edits on regen-with-edit. Shared by both FLUX and
+    gpt-image-2 builders; keep parity so the two backends behave identically.
     """
     if not _palette_already_in_prompt(custom, palette):
         clause = _palette_clause(palette)
@@ -376,10 +454,12 @@ def _preprocess_custom_prompt(
             custom = custom + clause
     if not _framing_already_in_prompt(custom):
         custom = custom + FRAMING_CLAUSE
-    if not _constraint_already_in_prompt(custom):
-        constraint_clause = _constraint_clause(constraint)
-        if constraint_clause:
-            custom = custom + constraint_clause
+    if not _background_already_in_prompt(custom):
+        custom = custom + BACKGROUND_CLAUSE
+    if not _subject_already_in_prompt(custom):
+        custom = custom + SUBJECT_CLAUSE
+    if not _readability_already_in_prompt(custom):
+        custom = custom + READABILITY_CLAUSE
     return custom
 
 
@@ -485,13 +565,13 @@ async def _call_claude(
 
 
 async def build_flux_prompt(brief: TrendBrief) -> FluxPrompt:
-    # Dashboard-injected override path: caller pre-baked the prompt, skip
-    # Claude entirely. The FluxPrompt validator still enforces
-    # FLUX_REQUIRED_TERMS — prompts missing the required phrases will raise
-    # and the row will land in 'error' with a useful message.
-    custom = (brief.custom_flux_prompt or "").strip()
+    # Builder/operator-authored description path: use verbatim, skip Claude
+    # entirely. The historical FLUX_REQUIRED_TERMS validator was removed in
+    # the 2026-05-14 cleanup; FLUX Pro 1.1 produces good results without the
+    # incantation phrases per current operator observation.
+    custom = (brief.image_description or "").strip()
     if custom:
-        custom = _preprocess_custom_prompt(custom, brief.color_palette, brief.prompt_constraint)
+        custom = _preprocess_custom_prompt(custom, brief.color_palette)
         return FluxPrompt(prompt=custom, negative_prompt=None, style_descriptors=[])
 
     subject_centric = is_subject_centric_brief(brief)
@@ -609,6 +689,11 @@ PRIORITY 3 — PRINT READINESS (always — physical constraint)
   the subject and the image edges is plain empty background extending all the
   way to the corners. Include a literal framing clause in the prompt
   describing this.
+- Background defaults to plain solid BLACK. Use a different flat color only
+  when the brief or prompt_constraint explicitly asks for one (e.g.
+  "white background", "red background"). Never gradients, never scenes.
+  Most of our catalog is dark apparel and black plates cut cleanest through
+  the downstream background remover.
 - No wallpaper patterns, repeating motifs, all-over florals, abstract color
   fields, gradient washes, seamless/tileable backgrounds, or wide
   establishing shots.
@@ -644,10 +729,54 @@ and no prompt_constraint), pick a clean illustrative register that suits the
 subject — but do NOT force flat-color / screen-print / vector unless something
 in the brief actually pointed there.
 
-For animal-as-character subjects regardless of style: state the head is
-ANIMAL-shaped with no human expressiveness — "a very <animal>-like head, no
-human expressiveness, just a calm steady stare". This is a subject-clarity
-rule (animals shouldn't morph into anthropomorphic faces), not a style rule.
+For animal-as-character subjects regardless of style: render the head as
+FULLY <animal>-shaped with no humanized features. Specify every dimension
+the model would otherwise default-anthropomorphize:
+  • Eyes: bulging / wide / small / black-dot — name a specific shape.
+  • Mouth: broad / closed / small / curved — name a shape; never "smiling".
+  • Expression: "no human expressiveness, just an alert forward stare" or
+    "just a calm steady gaze" or "just a serene downward stare". Pattern is
+    "no human expressiveness, just a <descriptor> <direction> stare/gaze".
+  • Posture: name natural <animal> posture / proportions (e.g. "natural frog
+    posture", "feline body proportions", "raccoon hand stance").
+The animal-as-character should read as an *animal* doing a thing, not a
+human-with-animal-head. This is a subject-clarity rule (animals shouldn't
+morph into anthropomorphic faces), not a style rule — applies whether the
+render is cartoon, realistic, ukiyo-e, screen print, or anything else.
+
+══════════════════════════════════════════════════════════════════════════
+PROMPT CRAFT — opener shape and pose specificity
+══════════════════════════════════════════════════════════════════════════
+Patterns from approved winning designs (2026-05-14 audit). Apply these to
+every prompt you generate.
+
+MEDIUM-FIRST OPENER. Open with the medium, then the subject, then a named
+action. The medium primes the model's rendering choices for the rest of
+the prompt — switching the order makes the medium feel optional.
+  • Right: "A hand-pulled screen print of a frog knight in mid-charge…"
+  • Wrong: "A frog knight in mid-charge, screen-printed style…"
+  • Right: "A Japanese ukiyo-e woodblock print of a frog samurai in…"
+  • Right: "A 16-bit pixel art wizard in the Hadouken pose…"
+The opener carries the technique. After the opener you're describing what
+to render *in* that technique, not adding the technique as a modifier.
+
+POSE / ACTION SPECIFICITY. When the brief names a subject doing something,
+render the pose with explicit body-part placement. Don't write "a frog
+samurai"; write "a frog samurai in mid-battle stance, katana raised
+overhead with both front legs, wearing traditional lamellar armor." Always
+name:
+  • Stance / posture (crouched / standing / mid-leap / seated).
+  • Where the hands / paws / wings / legs are positioned.
+  • What they're holding and how it's gripped.
+  • Direction of gaze (forward / downward / over-the-shoulder).
+The specificity is the difference between "the model interprets" and "the
+model executes." Generic poses produce generic results.
+
+ACTIVE NEGATION. When the chosen technique forbids something, say so
+out loud. "Flat colors, NO gradients" beats "flat colors". "Crisp pixel
+grid, NO anti-aliasing" beats "crisp pixel grid". The winning prompts
+actively forbid the failure modes of the chosen technique rather than
+hoping the model infers them.
 
 ══════════════════════════════════════════════════════════════════════════
 COLOR PALETTE
@@ -687,9 +816,9 @@ async def build_gpt_image_prompt(brief: TrendBrief) -> ImagePrompt:
     # Palette / framing / constraint clauses are auto-appended via the
     # shared helper so both backends behave identically on injected
     # prompts.
-    custom = (brief.custom_flux_prompt or "").strip()
+    custom = (brief.image_description or "").strip()
     if custom:
-        custom = _preprocess_custom_prompt(custom, brief.color_palette, brief.prompt_constraint)
+        custom = _preprocess_custom_prompt(custom, brief.color_palette)
         return ImagePrompt(prompt=custom, style_descriptors=[])
 
     raw_text, _response = await _call_claude(
@@ -707,8 +836,15 @@ async def build_gpt_image_prompt(brief: TrendBrief) -> ImagePrompt:
 
 
 async def build_image_prompt(brief: TrendBrief) -> FluxPrompt | ImagePrompt:
-    """Backend dispatcher. FLUX briefs go through the validated FLUX builder;
-    everything else through the natural-English builder for gpt-image-2."""
+    """Backend dispatcher.
+
+    FLUX briefs go through the validated FLUX builder (ritual-phrase enforced).
+    gpt-image-2 and nano-banana-2 both consume natural English and share the
+    same builder — both models reject tag-style prompts and "masterpiece /
+    best quality" boosters, both render literal English well. The per-model
+    differences (resolution semantics, safety tolerance, watermarking) live
+    in their respective clients, not in prompt construction.
+    """
     if brief.image_model == "fal_flux_pro":
         return await build_flux_prompt(brief)
     return await build_gpt_image_prompt(brief)

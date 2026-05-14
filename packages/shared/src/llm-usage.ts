@@ -55,26 +55,55 @@ export interface UsageRecord {
 }
 
 /**
+ * Best-effort fallback when even the pino logger can't be constructed —
+ * usually because `getSettings()` fails env validation for a var unrelated
+ * to the LLM-usage call (e.g., dashboard records Builder spend while the
+ * operator's local .env hasn't filled Etsy production-partner IDs yet).
+ * Surfaces the failure to dev consoles without ever throwing.
+ */
+function bareWarn(context: string, err: unknown): void {
+  console.warn(`[llm_usage] ${context}:`, err);
+}
+
+function safeLogWarn(context: string, err: unknown): void {
+  try {
+    log().warn({ err }, context);
+  } catch {
+    bareWarn(context, err);
+  }
+}
+
+/**
  * Fire-and-forget consumption log. Never throws — failure to record metrics
- * must not break the pipeline action that triggered the call.
+ * must not break the pipeline action that triggered the call. The outer
+ * try/catch is the contract enforcer: even if getDb() or getLogger() blows
+ * up during env validation, the failure is swallowed (with a bare
+ * console.warn fallback for dev visibility) so an unhandled rejection can
+ * never escape from the metrics path into a Next.js request handler.
  */
 export async function recordUsage(record: UsageRecord): Promise<void> {
   try {
-    const db = getDb();
-    const { error } = await db.from("llm_usage").insert({
-      agent: record.agent,
-      provider: record.provider,
-      operation: record.operation,
-      cost_usd: record.cost_usd ?? null,
-      input_tokens: record.input_tokens ?? null,
-      output_tokens: record.output_tokens ?? null,
-      metadata: record.metadata ?? null,
-      error: record.error ?? null,
-    });
-    if (error) {
-      log().warn({ err: error, record }, "llm_usage insert failed");
+    try {
+      const db = getDb();
+      const { error } = await db.from("llm_usage").insert({
+        agent: record.agent,
+        provider: record.provider,
+        operation: record.operation,
+        cost_usd: record.cost_usd ?? null,
+        input_tokens: record.input_tokens ?? null,
+        output_tokens: record.output_tokens ?? null,
+        metadata: record.metadata ?? null,
+        error: record.error ?? null,
+      });
+      if (error) {
+        safeLogWarn("llm_usage insert failed", error);
+      }
+    } catch (err) {
+      safeLogWarn("llm_usage insert threw", err);
     }
   } catch (err) {
-    log().warn({ err }, "llm_usage insert threw");
+    // Last-resort: even safeLogWarn shouldn't be able to throw, but the
+    // outer net guarantees the contract regardless.
+    bareWarn("recordUsage outer catch", err);
   }
 }

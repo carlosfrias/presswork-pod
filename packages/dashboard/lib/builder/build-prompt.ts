@@ -1,6 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { estimateAnthropicCostUsd, recordUsage } from "@presswork/shared";
+import { getStyle, type StyleId } from "@/lib/styles/catalog";
 
 /**
  * Builder's job: take an operator seed (free-form English, may be anywhere from
@@ -81,6 +82,18 @@ Apply the seed as a TRANSFORMATION on top of the reference(s):
 If no reference images are present, skip this rule.
 
 ══════════════════════════════════════════════════════════════════════════
+RULE 2.5 — STYLE LOCK (when present, second only to the seed)
+══════════════════════════════════════════════════════════════════════════
+When the input contains a non-null \`style_lock\` field, that style is LOCKED.
+The directive describes medium, line, palette, and composition in concrete
+terms — fold every aspect of it into your description. Drop any conflicting
+style language from the seed, references, or Scout signals (the seed still
+wins on SUBJECT, but the style is now the chip's, not the seed's).
+
+If style_lock is null, this rule is skipped and Scout signals continue to
+fill any style gap the seed didn't name (Rule 3).
+
+══════════════════════════════════════════════════════════════════════════
 RULE 3 — SCOUT SIGNALS ARE PRIORS FOR THE GAPS, NEVER OVERRIDES
 ══════════════════════════════════════════════════════════════════════════
 When you have to FILL a gap and Scout provided relevant signals, lean on
@@ -159,6 +172,24 @@ export class BuildPromptError extends Error {
   }
 }
 
+/**
+ * Heuristic: was this Anthropic 400 caused by an unfetchable reference URL?
+ * The SDK surfaces these as APIError with status 400. The message body varies
+ * (mentions "image", "url", "could not fetch", "unsupported media type"),
+ * so match loosely on common substrings. False positives only matter when
+ * references were attached — we gate the rephrasing on that upstream.
+ */
+function isImageFetchError(err: unknown): boolean {
+  if (!(err instanceof Anthropic.APIError) || err.status !== 400) return false;
+  const message = (err.message ?? "").toLowerCase();
+  return (
+    message.includes("image") ||
+    message.includes("could not fetch") ||
+    message.includes("url") ||
+    message.includes("media type")
+  );
+}
+
 export interface ScoutSignals {
   niche: string;
   style_keywords?: string[] | null;
@@ -184,12 +215,13 @@ export interface ScoutSignals {
  *                            / palette). Not persisted; consumed at build
  *                            time only.
  * @returns                   The fleshed-out image description, ready to write
- *                            to trend_briefs.prompt_constraint.
+ *                            to trend_briefs.image_description.
  */
 export async function buildPromptDescription(
   seed: string,
   scout: ScoutSignals | null,
   referenceImageUrls: string[] | null = null,
+  styleId: StyleId | null = null,
 ): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -199,10 +231,28 @@ export async function buildPromptDescription(
   const client = new Anthropic({ apiKey });
 
   const hasReferences = Boolean(referenceImageUrls && referenceImageUrls.length > 0);
+  // When the operator picks a style chip we lift the directive out of the
+  // catalog and hand it to Claude as a dedicated `style_lock` field. The
+  // system prompt's Rule 1 ("operator's seed is authoritative") already
+  // covers "anything the operator named is locked" — surfacing the directive
+  // as a separate JSON field makes it impossible for Claude to read it as
+  // narrative seed text and dilute it.
+  const style = getStyle(styleId);
 
   const textPayload = JSON.stringify(
     {
       seed: seed.trim(),
+      style_lock: style
+        ? {
+            name: style.label,
+            directive: style.directive,
+            instructions:
+              "This style is LOCKED. Every line of the directive must be honored " +
+              "in your description. Any conflicting style language in the seed or " +
+              "Scout signals is dropped. The directive describes medium, line, " +
+              "palette, composition — translate all of it into your output.",
+          }
+        : null,
       scout_brief: scout
         ? {
             niche: scout.niche,
@@ -233,19 +283,36 @@ export async function buildPromptDescription(
       ] as Anthropic.MessageParam["content"])
     : textPayload;
 
-  const response = await client.beta.promptCaching.messages.create({
-    model: MODEL,
-    max_tokens: 1024,
-    system: [
-      {
-        type: "text",
-        text: SYSTEM_PROMPT,
-        cache_control: { type: "ephemeral" },
-      },
-    ],
-    messages: [{ role: "user", content: userContent }],
-    betas: ["prompt-caching-2024-07-31"],
-  });
+  let response;
+  try {
+    response = await client.beta.promptCaching.messages.create({
+      model: MODEL,
+      max_tokens: 1024,
+      system: [
+        {
+          type: "text",
+          text: SYSTEM_PROMPT,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+      messages: [{ role: "user", content: userContent }],
+      betas: ["prompt-caching-2024-07-31"],
+    });
+  } catch (err) {
+    // Anthropic returns 400 when a reference URL can't be fetched as an
+    // image (e.g., share.google links that 302 to HTML, Pinterest pages,
+    // Google Search results, anything behind login). Reword so the operator
+    // knows it's their URL, not the agent.
+    if (hasReferences && isImageFetchError(err)) {
+      throw new BuildPromptError(
+        "Reference URL did not resolve to an image. Use a direct image link " +
+          "(.jpg / .png / .webp). On a webpage, right-click the image and " +
+          "choose 'Copy image address' — share links and Google/Pinterest " +
+          "page URLs won't work because they return HTML, not image bytes.",
+      );
+    }
+    throw err;
+  }
 
   // Best-effort consumption log so Builder shows up in the LLM-spend dashboard
   // alongside Scout's analyzer and Listing's copywriter. Fire-and-forget.
@@ -276,6 +343,7 @@ export async function buildPromptDescription(
         niche: scout?.niche ?? null,
         manual: scout === null,
         reference_image_count: hasReferences ? referenceImageUrls!.length : 0,
+        style: style?.id ?? null,
       },
     });
   }

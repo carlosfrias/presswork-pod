@@ -32,6 +32,37 @@ export interface TrendBriefRow {
   retry_count: number;
 }
 
+/**
+ * Discriminated union of entries stored in `design_packages.metadata.image_versions`.
+ *
+ * - `kind: "ai_original" | "hand_edit"` is written by the dashboard's
+ *   replace-image flow (operator downloads the AI image, edits it locally,
+ *   re-uploads). See `replaceDesignImage` in lib/actions/design.ts.
+ * - `kind: "regen"` is appended by the Python Design agent on every successful
+ *   full run, and updated in place by the re-mask sweep. Each entry captures
+ *   the masked + unmasked pair plus a snapshot of the inputs that produced it
+ *   so the operator can step back through history with context.
+ */
+export type ImageVersion =
+  | {
+      kind: "ai_original" | "hand_edit";
+      url: string;
+      uploaded_at: string;
+      uploaded_by?: string;
+    }
+  | {
+      kind: "regen";
+      masked_url: string;
+      unmasked_url: string | null;
+      created_at: string;
+      prompt: string | null;
+      image_model: string | null;
+      image_quality: string | null;
+      bg_removal_mode: string | null;
+      backfilled?: boolean;
+      remasked_at?: string;
+    };
+
 export interface DesignPackageRow {
   id: string;
   created_at: string;

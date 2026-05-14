@@ -1,10 +1,10 @@
 import "server-only";
-import { Button } from "@/components/ui/Button";
 import { AgentRunStatus } from "@/components/triggers/AgentRunStatus";
+import { TriggerButton } from "@/components/triggers/TriggerButton";
 import {
   type Agent,
   getLastAgentRun,
-  triggerAgent,
+  getPendingWorkCount,
 } from "@/lib/actions/triggers";
 
 const CLI_COMMAND: Record<Agent, string> = {
@@ -23,17 +23,21 @@ const LABEL: Record<Agent, string> = {
 
 export async function AgentRunButton({ agent }: { agent: Agent }) {
   const enabled = process.env.DASHBOARD_LOCAL_TRIGGERS_ENABLED === "true";
-  const last = await getLastAgentRun(agent);
+  // Run last-run lookup and pending count in parallel — both hit Supabase,
+  // no reason to serialize them per page render.
+  const [last, pendingCount] = await Promise.all([
+    getLastAgentRun(agent),
+    getPendingWorkCount(agent),
+  ]);
 
   return (
     <div className="flex flex-col items-end gap-1">
       {enabled ? (
-        <form action={triggerAgent}>
-          <input type="hidden" name="agent" value={agent} />
-          <Button type="submit" variant="secondary" size="sm">
-            {LABEL[agent]}
-          </Button>
-        </form>
+        <TriggerButton
+          agent={agent}
+          label={LABEL[agent]}
+          pendingCount={pendingCount}
+        />
       ) : (
         <details className="text-xs">
           <summary className="cursor-pointer rounded-(--radius-sm) border border-(--surface-line) bg-(--surface-2) px-3 py-1.5 text-(--text-secondary) hover:bg-(--surface-3)">

@@ -54,6 +54,16 @@ GPT_IMAGE_COST_USD: dict[str, float] = {
     "high": 0.300,
 }
 
+# nano-banana-2 (Google Gemini-3 on fal). Base $0.08/image at 1K; resolution
+# tiers scale by published multipliers (0.75× at 0.5K, 1.5× at 2K, 2× at 4K).
+# We reuse the image_quality column (low|medium|high) and map at the call
+# site — see NANO_BANANA_RESOLUTIONS in packages/design/constants.py.
+NANO_BANANA_COST_USD: dict[str, float] = {
+    "low": 0.06,  # 0.5K
+    "medium": 0.08,  # 1K
+    "high": 0.12,  # 2K
+}
+
 
 def estimate_anthropic_cost_usd(
     model: str,
@@ -79,6 +89,10 @@ def fal_cost_usd(model: str) -> float | None:
 
 def gpt_image_cost_usd(quality: str) -> float | None:
     return GPT_IMAGE_COST_USD.get(quality)
+
+
+def nano_banana_cost_usd(quality: str) -> float | None:
+    return NANO_BANANA_COST_USD.get(quality)
 
 
 def record_usage(

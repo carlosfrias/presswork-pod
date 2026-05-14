@@ -33,6 +33,13 @@ export function AgentRunStatus({
   const finishedNotifiedRef = useRef<string | null>(
     initial?.finished_at != null ? initial.id : null,
   );
+  // formatRelative() reads Date.now(), so it diverges between SSR and client
+  // hydration. Gate the time suffix on a mounted flag so first paint matches
+  // the server-rendered HTML.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   // Server-rendered initial value can change when the parent revalidates
   // (e.g. after the trigger action). Sync it in if it's newer — never step
@@ -73,19 +80,33 @@ export function AgentRunStatus({
     };
 
     const supabase = browserClient();
-    const channel = supabase
-      .channel(`agent-runs-${agent}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "agent_runs",
-          filter: `agent=eq.${agent}`,
-        },
-        () => void refetch(),
-      )
-      .subscribe();
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
+    // Auth-first connect: see RealtimeRefresh.tsx for the full rationale.
+    // setAuth() must land before subscribe() or the channel joins as anon
+    // and server-side RLS drops every event from agent_runs_read_allowlist.
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      if (cancelled) return;
+      if (data.session?.access_token) {
+        await supabase.realtime.setAuth(data.session.access_token);
+      }
+      if (cancelled) return;
+
+      channel = supabase
+        .channel(`agent-runs-${agent}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "agent_runs",
+            filter: `agent=eq.${agent}`,
+          },
+          () => void refetch(),
+        )
+        .subscribe();
+    })();
 
     // Safety-net heartbeat for dropped WebSockets in long-lived tabs.
     const safetyTimer = setInterval(() => void refetch(), SAFETY_REFETCH_MS);
@@ -93,7 +114,7 @@ export function AgentRunStatus({
     return () => {
       cancelled = true;
       clearInterval(safetyTimer);
-      supabase.removeChannel(channel);
+      if (channel) supabase.removeChannel(channel);
     };
   }, [agent, router]);
 
@@ -104,11 +125,8 @@ export function AgentRunStatus({
   const exit = run.exit_code;
   const ok = exit === 0;
   const inFlight = run.finished_at == null;
-  const label = inFlight
-    ? "running…"
-    : ok
-      ? `exit 0 · ${formatRelative(run.finished_at)}`
-      : `exit ${exit} · ${formatRelative(run.finished_at)}`;
+  const timeSuffix = mounted ? ` · ${formatRelative(run.finished_at)}` : "";
+  const label = inFlight ? "running…" : `exit ${exit}${timeSuffix}`;
   const color = inFlight
     ? "text-(--accent-warm)"
     : ok

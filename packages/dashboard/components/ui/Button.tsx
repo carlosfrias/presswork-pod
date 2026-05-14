@@ -1,7 +1,7 @@
 import { cn } from "@/lib/cn";
 import type { ButtonHTMLAttributes } from "react";
 
-interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: "primary" | "secondary" | "ghost" | "danger" | "success";
   size?: "sm" | "md";
 }

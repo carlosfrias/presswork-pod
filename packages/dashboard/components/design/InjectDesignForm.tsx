@@ -8,9 +8,6 @@ import { ColorPaletteEditor } from "@/components/design/ColorPaletteEditor";
 type ImageModel = "fal_flux_pro" | "fal_gpt_image_2";
 type ImageQuality = "low" | "medium" | "high";
 
-const REQUIRED_TERMS = ["print on demand design", "vector-style"];
-const REQUIRED_BACKGROUND_TERMS = ["white background", "black background"];
-
 const SELECT_CLS =
   "h-9 rounded-(--radius-sm) border border-(--surface-line) bg-(--surface-1) px-3 text-sm text-(--text-primary)";
 
@@ -64,47 +61,21 @@ export function InjectDesignForm() {
       </div>
 
       <label className="flex flex-col gap-1.5 text-xs uppercase tracking-wider text-(--text-muted)">
-        Custom prompt
+        Image description
         <textarea
-          name="custom_flux_prompt"
+          name="image_description"
           required
           rows={5}
-          placeholder={
-            isFlux
-              ? "print on demand design, vector-style of a..., white background"
-              : "A single centered illustration of a... Plain background."
-          }
+          placeholder="A single centered illustration of a... Describe the subject and style; print mechanics are handled downstream."
           className="rounded-(--radius-sm) border border-(--surface-line) bg-(--surface-1) p-3 text-sm text-(--text-primary) font-mono"
         />
-        {isFlux ? (
-          <span className="text-[11px] normal-case tracking-normal text-(--text-muted)">
-            Skips Claude. Must contain:{" "}
-            {REQUIRED_TERMS.map((t, i) => (
-              <span key={t}>
-                <code className="rounded bg-(--surface-2) px-1 text-(--text-secondary)">
-                  {t}
-                </code>
-                {i < REQUIRED_TERMS.length - 1 ? ", " : ""}
-              </span>
-            ))}
-            , plus one of:{" "}
-            {REQUIRED_BACKGROUND_TERMS.map((t, i) => (
-              <span key={t}>
-                <code className="rounded bg-(--surface-2) px-1 text-(--text-secondary)">
-                  {t}
-                </code>
-                {i < REQUIRED_BACKGROUND_TERMS.length - 1 ? " or " : ""}
-              </span>
-            ))}
-            .
-          </span>
-        ) : (
-          <span className="text-[11px] normal-case tracking-normal text-(--text-muted)">
-            Skips Claude. Natural English — gpt-image-2 follows literal prompts.
-            Describe a single centered subject; do not invent scenery beyond what
-            you want rendered.
-          </span>
-        )}
+        <span className="text-[11px] normal-case tracking-normal text-(--text-muted)">
+          Used verbatim by all three image models. Skips Claude. Design appends
+          print-readiness (palette, framing, solid black background by default,
+          singular centered subject) automatically — describe the subject and
+          rendering style only. Mention a specific background inline to
+          override the black default.
+        </span>
       </label>
 
       <ColorPaletteEditor

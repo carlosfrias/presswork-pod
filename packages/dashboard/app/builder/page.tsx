@@ -2,15 +2,20 @@ import { SurfaceCard } from "@/components/ui/SurfaceCard";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { FromScoutCard } from "@/components/builder/FromScoutCard";
 import { ManualEntryForm } from "@/components/builder/ManualEntryForm";
+import { RealtimeRefresh } from "@/components/realtime/RealtimeRefresh";
 import { getBuilderQueue } from "@/lib/queries/builder";
+import { getRuntimeFlags } from "@/lib/queries/overview";
+import { deriveDefaultImageModel } from "@/lib/models/image-models";
 
 export const revalidate = 30;
 
 export default async function BuilderPage() {
-  const queue = await getBuilderQueue();
+  const [queue, flags] = await Promise.all([getBuilderQueue(), getRuntimeFlags()]);
+  const defaultImageModel = deriveDefaultImageModel(flags);
 
   return (
     <div className="flex flex-col gap-8">
+      <RealtimeRefresh table="trend_briefs" channelName="builder-page-refresh" />
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-display text-(length:--text-3xl) font-semibold">Builder</h1>
@@ -37,7 +42,11 @@ export default async function BuilderPage() {
         ) : (
           <div className="flex flex-col gap-4">
             {queue.map((b) => (
-              <FromScoutCard key={b.id} brief={b} />
+              <FromScoutCard
+                key={b.id}
+                brief={b}
+                defaultImageModel={defaultImageModel}
+              />
             ))}
           </div>
         )}
@@ -47,7 +56,7 @@ export default async function BuilderPage() {
         title="Manual entry"
         subtitle="No upstream brief — you pick the niche and seed the prompt"
       >
-        <ManualEntryForm />
+        <ManualEntryForm defaultImageModel={defaultImageModel} />
       </SurfaceCard>
     </div>
   );

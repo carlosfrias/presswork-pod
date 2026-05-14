@@ -109,6 +109,29 @@ export async function triggerAgent(formData: FormData): Promise<void> {
 }
 
 /**
+ * Spawn an agent in direct response to an operator-initiated action on
+ * THAT agent's surface — e.g. Design Regen / Re-mask, where the click
+ * IS the operator saying "do your job for this row, now". Distinct from
+ * `maybeAutoTrigger` (which gated UPSTREAM chains the operator disabled
+ * project-wide).
+ *
+ * Same DASHBOARD_LOCAL_TRIGGERS_ENABLED gate as the user-facing Run
+ * button, so cloud deploys (where the env var is unset) still leave the
+ * row queued for the next manual / cron-driven run rather than crashing
+ * the action.
+ *
+ * Fire-and-forget: returns the agent_runs id (or null) but callers
+ * typically ignore it — the row is already queued in the DB, so a spawn
+ * failure just means the operator can click the Run button to drain.
+ */
+export async function spawnAgentForOperatorAction(
+  agent: Agent,
+  triggeredBy: string,
+): Promise<string | null> {
+  return spawnAgent(agent, triggeredBy);
+}
+
+/**
  * Called from an approve action to chain into the next agent. Silently no-ops
  * when:
  *   - DASHBOARD_LOCAL_TRIGGERS_ENABLED is unset (e.g. cloud deploy)
@@ -176,4 +199,33 @@ export async function getLastAgentRun(agent: Agent): Promise<AgentRunSummary | n
     .limit(1)
     .maybeSingle();
   return (data as AgentRunSummary | null) ?? null;
+}
+
+/**
+ * Count of upstream rows waiting for `agent` to claim. Drives the Run
+ * button's gold glow — when > 0 there's something for the agent to do.
+ *
+ * Mapping mirrors each agent's claim contract:
+ *   - design  → trend_briefs at status='approved' (Design's claim RPC)
+ *   - listing → design_packages at status='approved' (Listing's claim path)
+ *   - scout   → 0 (Scout has no upstream queue; it scans Etsy on demand)
+ *   - ledger  → 0 (Ledger is a poller, not gated by approval state)
+ *
+ * Returns 0 on any DB error so the button silently falls back to its idle
+ * state — a missing badge is better than a broken Run page.
+ */
+export async function getPendingWorkCount(agent: Agent): Promise<number> {
+  if (agent !== "design" && agent !== "listing") return 0;
+
+  const email = await requireOwnerEmail();
+  if (!email) throw new Error("Unauthorized");
+
+  const db = serviceClient();
+  const table = agent === "design" ? "trend_briefs" : "design_packages";
+  const { count, error } = await db
+    .from(table)
+    .select("id", { count: "exact", head: true })
+    .eq("status", "approved");
+  if (error) return 0;
+  return count ?? 0;
 }

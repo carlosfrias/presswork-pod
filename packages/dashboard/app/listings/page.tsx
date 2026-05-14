@@ -1,8 +1,8 @@
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
 import { ReviewCard } from "@/components/listings/ReviewCard";
 import { ListingRow } from "@/components/listings/ListingRow";
-import { FlagsRail } from "@/components/flags/FlagsRail";
 import { AgentRunButton } from "@/components/triggers/AgentRunButton";
+import { RealtimeRefresh } from "@/components/realtime/RealtimeRefresh";
 import { EmptyState } from "@/components/ui/EmptyState";
 import {
   getNeedsReviewQueue,
@@ -19,6 +19,7 @@ export default async function ListingsPage() {
 
   return (
     <div className="flex flex-col gap-8">
+      <RealtimeRefresh table="listings" channelName="listings-page-refresh" />
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-display text-(length:--text-3xl) font-semibold">Listings</h1>
@@ -60,10 +61,6 @@ export default async function ListingsPage() {
             </div>
           )}
         </SurfaceCard>
-        <FlagsRail
-          keys={["listing_manual_mode_enabled"]}
-          title="Listing flags"
-        />
       </div>
     </div>
   );

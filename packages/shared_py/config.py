@@ -60,14 +60,13 @@ class Settings(BaseSettings):
     # On = call fal.ai aura-sr between FLUX and Pillow (real 4× SR, ~$0.01/image).
     # Off = skip the step, fall through to current LANCZOS-only path.
     upscaler_enabled: bool = True
-    # Background-removal backend for the Design agent. Both are fal.ai-hosted,
-    # interchangeable I/O (URL in, transparent RGBA PNG URL out).
-    #   "birefnet" → fal.ai BiRefNet v2 — matting-quality.
-    #   "bria"     → fal.ai Bria RMBG 2.0 — current default, commercially-
-    #                licensed training data, slightly cheaper.
+    # Background-removal backend for the Design agent.
+    #   "local"    → in-process rembg U²-Net. Free. Current default.
+    #   "birefnet" → fal.ai BiRefNet v2 — paid AI fallback for fine edges.
+    #   "bria"     → fal.ai Bria RMBG 2.0 — paid AI fallback for flat colors.
     # This is the env default; the runtime_flags row of the same name overrides
     # it per design run via `get_runtime_flag`.
-    background_removal_mode: Literal["birefnet", "bria"] = "bria"
+    background_removal_mode: Literal["birefnet", "bria", "local"] = "local"
     # When True, Scout includes Etsy listing thumbnails as image content blocks
     # in the analyzer call. Adds ~3-5× per-run token cost; off by default. Env
     # default; live-overridable via the runtime_flags row of the same name.

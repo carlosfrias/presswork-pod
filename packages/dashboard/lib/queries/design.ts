@@ -1,9 +1,90 @@
 import "server-only";
 import { serviceClient } from "@/lib/supabase/server";
-import type { DesignPackageRow, TrendBriefRow } from "./types";
+import { STYLE_IDS, type StyleId } from "@/lib/styles/catalog";
+import {
+  IMAGE_MODEL_IDS,
+  type ImageModelId,
+} from "@/lib/models/image-models";
+import {
+  BG_REMOVAL_IDS,
+  type BgRemovalModeId,
+} from "@/lib/models/bg-removal";
+import type {
+  DesignPackageRow,
+  ImageVersion,
+  TrendBriefRow,
+} from "./types";
 
 export interface DesignReviewItem extends DesignPackageRow {
-  trend_brief: Pick<TrendBriefRow, "id" | "niche" | "color_palette"> | null;
+  /**
+   * Newest-last array of `kind: "regen"` entries from
+   * `metadata.image_versions`. Filtered + narrowed server-side so the review
+   * card never has to reach into the unknown `metadata` JSON. Empty array
+   * for designs created before the stack feature shipped (the next regen
+   * backfills the prior pair as the first entry).
+   */
+  regen_stack: Extract<ImageVersion, { kind: "regen" }>[];
+  trend_brief:
+    | (Pick<TrendBriefRow, "id" | "niche" | "color_palette"> & {
+        // Pulled from trend_briefs.claude_analysis->>'style' so the
+        // DesignReviewCard's style picker can reflect the operator's
+        // original Builder choice instead of always defaulting to Auto.
+        // Null when the brief was created before this field existed, or
+        // when the operator explicitly chose Auto.
+        style: StyleId | null;
+        // Current image-generation backend for this brief — surfaced so the
+        // Design regen picker shows the same chip the brief was created with
+        // (or last regenerated under).
+        image_model: ImageModelId;
+        // Per-brief background-removal override; null = "use global flag".
+        background_removal_mode: BgRemovalModeId | null;
+      })
+    | null;
+}
+
+// Narrow the unknown JSONB shape down to a StyleId we trust. Guards against
+// legacy briefs storing arbitrary strings under .style and stale style ids
+// we removed from the catalog.
+function extractStyle(analysis: unknown): StyleId | null {
+  if (!analysis || typeof analysis !== "object") return null;
+  const raw = (analysis as Record<string, unknown>).style;
+  if (typeof raw !== "string") return null;
+  return (STYLE_IDS as readonly string[]).includes(raw)
+    ? (raw as StyleId)
+    : null;
+}
+
+function narrowImageModel(raw: unknown): ImageModelId {
+  if (typeof raw === "string" && (IMAGE_MODEL_IDS as readonly string[]).includes(raw)) {
+    return raw as ImageModelId;
+  }
+  return "fal_gpt_image_2";
+}
+
+function narrowBgRemoval(raw: unknown): BgRemovalModeId | null {
+  if (typeof raw !== "string") return null;
+  return (BG_REMOVAL_IDS as readonly string[]).includes(raw)
+    ? (raw as BgRemovalModeId)
+    : null;
+}
+
+type RegenVersion = Extract<ImageVersion, { kind: "regen" }>;
+
+function isRegenVersion(v: unknown): v is RegenVersion {
+  if (!v || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  return (
+    o.kind === "regen" &&
+    typeof o.masked_url === "string" &&
+    (o.unmasked_url === null || typeof o.unmasked_url === "string")
+  );
+}
+
+export function extractRegenStack(metadata: unknown): RegenVersion[] {
+  if (!metadata || typeof metadata !== "object") return [];
+  const versions = (metadata as Record<string, unknown>).image_versions;
+  if (!Array.isArray(versions)) return [];
+  return versions.filter(isRegenVersion);
 }
 
 export async function getDesignReviewQueue(): Promise<DesignReviewItem[]> {
@@ -12,7 +93,7 @@ export async function getDesignReviewQueue(): Promise<DesignReviewItem[]> {
     .from("design_packages")
     .select(
       `*,
-       trend_briefs:trend_briefs!design_packages_trend_brief_id_fkey(id, niche, color_palette)`,
+       trend_briefs:trend_briefs!design_packages_trend_brief_id_fkey(id, niche, color_palette, claude_analysis, image_model, background_removal_mode)`,
     )
     .eq("status", "needs_review")
     .order("created_at", { ascending: true });
@@ -21,11 +102,29 @@ export async function getDesignReviewQueue(): Promise<DesignReviewItem[]> {
     return [];
   }
   type Row = DesignPackageRow & {
-    trend_briefs: Pick<TrendBriefRow, "id" | "niche" | "color_palette"> | null;
+    trend_briefs:
+      | (Pick<TrendBriefRow, "id" | "niche" | "color_palette"> & {
+          claude_analysis: unknown;
+          image_model: unknown;
+          background_removal_mode: unknown;
+        })
+      | null;
   };
   return (data as Row[]).map((r) => ({
     ...r,
-    trend_brief: r.trend_briefs ?? null,
+    regen_stack: extractRegenStack(r.metadata),
+    trend_brief: r.trend_briefs
+      ? {
+          id: r.trend_briefs.id,
+          niche: r.trend_briefs.niche,
+          color_palette: r.trend_briefs.color_palette,
+          style: extractStyle(r.trend_briefs.claude_analysis),
+          image_model: narrowImageModel(r.trend_briefs.image_model),
+          background_removal_mode: narrowBgRemoval(
+            r.trend_briefs.background_removal_mode,
+          ),
+        }
+      : null,
   }));
 }
 

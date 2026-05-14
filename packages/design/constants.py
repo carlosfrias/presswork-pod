@@ -29,9 +29,42 @@ GPT_IMAGE_MODEL = "openai/gpt-image-2"
 # Pillow scale to 4500×5400 is only ~1.76× — no fal-side upscale needed.
 GPT_IMAGE_DIMENSIONS: dict[str, int] = {"width": 2560, "height": 3072}
 
-# Quality tier when the brief doesn't override. `medium` is rough cost parity
-# with FLUX Pro 1.1 (~$0.08 vs $0.05); `high` is ~4×.
-GPT_IMAGE_DEFAULT_QUALITY = "medium"
+# Quality tier when the brief doesn't override. `low` is the explore default
+# (~$0.012/image — 6.7× cheaper than medium at $0.08, ~25× cheaper than high
+# at $0.30). Operators bump to medium/high per-brief from the dashboard inject
+# form when a design needs more fidelity. Lowered from `medium` after the
+# bg-only re-mask path landed — fewer wasted full regens now, so cheaper
+# first-pass exploration pays off.
+GPT_IMAGE_DEFAULT_QUALITY = "low"
+
+
+# Google's Gemini-3-based image model served on fal.ai. Natural-English
+# prompts (1–3 sentences, no tag lists, no "masterpiece, best quality"
+# boosters). Outputs PNG/JPEG/WebP at 0.5K/1K/2K/4K — no native transparent
+# background, so the same birefnet/bria post-processing pipeline applies as
+# for FLUX. Carries an invisible SynthID watermark on every output.
+NANO_BANANA_MODEL = "fal-ai/nano-banana-2"
+
+# Resolution tier mapping for nano-banana-2 — we reuse the existing
+# image_quality column (low|medium|high) instead of inventing a new schema.
+# Costs at each tier (per fal's published pricing, base $0.08 × multiplier):
+#   low    → 0.5K  ($0.06)
+#   medium → 1K    ($0.08)  ← default, rough parity with gpt-image-2 medium
+#   high   → 2K    ($0.12)
+NANO_BANANA_RESOLUTIONS: dict[str, str] = {
+    "low": "0.5K",
+    "medium": "1K",
+    "high": "2K",
+}
+# Explore default — 0.5K @ $0.06/image. Bump per-brief from the inject form
+# when a design needs finer detail. Matches the gpt-image-2 default flip
+# made in the same pass for cost consistency across backends.
+NANO_BANANA_DEFAULT_QUALITY = "low"
+
+# Mid-permissive safety setting — matches the project's general "moderate"
+# stance. The fal scale is 1 (strictest) → 6 (most permissive); 2 is just
+# above strict. Bump only if a niche needs it; never go above 4 on this shop.
+NANO_BANANA_SAFETY_TOLERANCE = "2"
 
 
 # Near-5:6 portrait — closest FLUX-supported dimensions to the 4500×5400

@@ -4,6 +4,11 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { serviceClient } from "@/lib/supabase/server";
 import { requireOwnerEmail } from "@/lib/auth";
+import {
+  generateNicheBrief,
+  GenerateNicheError,
+  type GeneratedNicheBrief,
+} from "@/lib/scout/generate-niche";
 async function assertOwner() {
   const email = await requireOwnerEmail();
   if (!email) throw new Error("Unauthorized");
@@ -186,6 +191,38 @@ function parseList(input: string | null): string[] {
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+}
+
+// Used by the dashboard's "Generate niche" button. Discriminated return so
+// the client component can render the error inline — Claude hiccups and
+// schema mismatches are expected-fallible, not error-boundary-worthy.
+export type GenerateBriefResult =
+  | { ok: true; brief: GeneratedNicheBrief }
+  | { ok: false; error: string };
+
+const hintSchema = z
+  .string()
+  .trim()
+  .max(200, "Hint must be 200 characters or fewer");
+
+export async function generateBriefDraft(rawHint: string): Promise<GenerateBriefResult> {
+  await assertOwner();
+  const parsed = hintSchema.safeParse(rawHint ?? "");
+  if (!parsed.success) {
+    return { ok: false, error: parsed.error.issues[0]?.message ?? "Invalid hint" };
+  }
+  try {
+    const brief = await generateNicheBrief(parsed.data || null);
+    return { ok: true, brief };
+  } catch (err) {
+    const message =
+      err instanceof GenerateNicheError
+        ? err.message
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    return { ok: false, error: `Generate failed: ${message}` };
+  }
 }
 
 export async function injectBrief(formData: FormData) {

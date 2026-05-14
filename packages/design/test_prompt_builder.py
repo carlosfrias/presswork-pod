@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
 
 from packages.design.prompt_builder import (
     SUBJECT_CENTRIC_RULES,
@@ -95,13 +94,6 @@ async def test_banned_artist_name_passes_through_at_flux_level(mocker):
     bad = {**_VALID_PROMPT, "prompt": _VALID_PROMPT["prompt"] + " banksy style"}
     _mock_client(mocker, json.dumps(bad))
     await build_flux_prompt(_SAMPLE_BRIEF)
-
-
-async def test_missing_required_flux_term_raises_validation_error(mocker):
-    bad = {**_VALID_PROMPT, "prompt": "a mountain scene without the required boilerplate"}
-    _mock_client(mocker, json.dumps(bad))
-    with pytest.raises(ValidationError, match="required FLUX term"):
-        await build_flux_prompt(_SAMPLE_BRIEF)
 
 
 async def test_invalid_json_raises_value_error(mocker):
@@ -274,7 +266,7 @@ def _brief_with_custom(prompt: str, *, palette: list[str] | None, image_model: s
         status="processing",
         niche="manual",
         color_palette=palette,
-        custom_flux_prompt=prompt,
+        image_description=prompt,
         image_model=image_model,  # type: ignore[arg-type]
     )
 
@@ -471,50 +463,123 @@ async def test_regen_with_old_palette_clause_does_not_double_when_palette_change
     assert "111111" not in result.prompt.upper()
 
 
-async def test_regen_with_existing_constraint_clause_does_not_double():
-    """Operator's saved prompt already contains an 'Operator instruction
-    (must follow):' suffix from a prior regen. brief.prompt_constraint is set.
-    The clause must NOT be appended again."""
-    edited_with_existing_constraint = (
-        "A bold screen print of a frog knight, flat-color rendering. "
-        "Operator instruction (must follow): grumpy but cute, frog-shaped head."
-    )
-    brief = _brief_with_custom(
-        edited_with_existing_constraint,
-        palette=None,
-        image_model="fal_gpt_image_2",
-    )
-    brief = brief.model_copy(update={"prompt_constraint": "grumpy but cute, frog-shaped head"})
-    result = await build_gpt_image_prompt(brief)
-    count = result.prompt.lower().count("operator instruction (must follow):")
-    assert count == 1, f"expected exactly one constraint clause, got {count}"
-
-
 async def test_regen_full_round_trip_is_idempotent():
-    """Take a prompt the builder would output (palette + framing + constraint
-    all auto-appended on a fresh build), feed it back in as custom_flux_prompt
-    with the SAME palette and prompt_constraint, and the builder must NOT
+    """Take a prompt the builder would output (palette + framing + bg +
+    subject all auto-appended on a fresh build), feed it back in as
+    image_description with the SAME palette, and the builder must NOT
     duplicate any clause. This is what happens when the operator clicks
     Regenerate without editing the prompt at all."""
     palette = ["#37393A", "#77B6EA", "#D4A96A"]
-    constraint = "A bold screen print of a frog knight"
     initial = _brief_with_custom(
         "A frog knight in plate armor",
         palette=palette,
         image_model="fal_gpt_image_2",
     )
-    initial = initial.model_copy(update={"prompt_constraint": constraint})
     first = await build_gpt_image_prompt(initial)
 
-    # Now simulate the regen path: the brief's custom_flux_prompt becomes the
+    # Now simulate the regen path: the brief's image_description becomes the
     # output of the previous build (which is what the dashboard's edit form
     # would round-trip).
-    regen_brief = initial.model_copy(update={"custom_flux_prompt": first.prompt})
+    regen_brief = initial.model_copy(update={"image_description": first.prompt})
     second = await build_gpt_image_prompt(regen_brief)
 
-    assert second.prompt.lower().count("use only these colors:") == 1
-    assert second.prompt.lower().count("generous empty border") == 1
-    assert second.prompt.lower().count("operator instruction (must follow):") == 1
+    lowered = second.prompt.lower()
+    assert lowered.count("use only these colors:") == 1
+    assert lowered.count("generous empty border") == 1
+    # Background, subject, and readability clauses — distinctive substrings only.
+    assert lowered.count("background must be plain solid black") == 1
+    assert lowered.count("exactly one singular subject centered") == 1
+    assert lowered.count("reads at six inches across") == 1
+
+
+async def test_custom_prompt_appends_black_background_clause_by_default():
+    """Print-readiness: silent prompts get a plain-solid-BLACK background.
+    Per operator preference (2026-05-14) black is the default — most
+    apparel in the catalog is dark and black plates cut cleanest through
+    the downstream background remover."""
+    brief = _brief_with_custom(
+        "A frog knight in plate armor",
+        palette=None,
+        image_model="fal_gpt_image_2",
+    )
+    result = await build_gpt_image_prompt(brief)
+    assert "background must be plain solid black" in result.prompt
+    # Defensive: must NOT pick white when nothing else was asked for.
+    assert "plain solid white" not in result.prompt
+
+
+async def test_custom_prompt_skips_background_clause_when_operator_specified():
+    """If the operator already addressed the background inline (any of the
+    BACKGROUND_HINTS substrings), do NOT auto-append a fighting clause."""
+    brief = _brief_with_custom(
+        "A frog knight in plate armor on a transparent background",
+        palette=None,
+        image_model="fal_gpt_image_2",
+    )
+    result = await build_gpt_image_prompt(brief)
+    assert "background must be plain solid black" not in result.prompt
+
+
+async def test_custom_prompt_skips_background_clause_when_operator_picks_white():
+    """Operator override: writing 'white background' inline must win — no
+    black-default override stacked on top."""
+    brief = _brief_with_custom(
+        "A black silhouette of a frog knight on a white background",
+        palette=None,
+        image_model="fal_gpt_image_2",
+    )
+    result = await build_gpt_image_prompt(brief)
+    assert "background must be plain solid black" not in result.prompt
+
+
+async def test_custom_prompt_appends_subject_clause():
+    """Print-readiness: silent prompts get a singular-subject directive."""
+    brief = _brief_with_custom(
+        "A frog knight in plate armor",
+        palette=None,
+        image_model="fal_gpt_image_2",
+    )
+    result = await build_gpt_image_prompt(brief)
+    assert "exactly ONE singular subject centered" in result.prompt
+
+
+async def test_custom_prompt_appends_readability_clause():
+    """Print-readiness: silent prompts get a six-inch readability directive.
+    Pattern lifted from the 2026-05-14 winning-designs audit — strong
+    silhouettes that read at chest-pocket scale were the load-bearing
+    feature of approved designs."""
+    brief = _brief_with_custom(
+        "A frog knight in plate armor",
+        palette=None,
+        image_model="fal_gpt_image_2",
+    )
+    result = await build_gpt_image_prompt(brief)
+    assert "reads at six inches across" in result.prompt
+
+
+async def test_custom_prompt_skips_readability_clause_when_operator_specified():
+    """Operator already used the 'strong silhouette' shorthand: don't double-
+    stamp. This is a common screen-print style cue and trusting the operator's
+    wording beats stacking our auto-append on top of it."""
+    brief = _brief_with_custom(
+        "A frog knight in plate armor, bold black outlines, strong silhouette",
+        palette=None,
+        image_model="fal_gpt_image_2",
+    )
+    result = await build_gpt_image_prompt(brief)
+    assert "reads at six inches across" not in result.prompt
+
+
+async def test_custom_prompt_skips_subject_clause_when_operator_specified():
+    """An operator who explicitly wants multiple subjects must not get a
+    contradicting singular-subject append."""
+    brief = _brief_with_custom(
+        "A trio of frog knights — two subjects on the left, one on the right",
+        palette=None,
+        image_model="fal_gpt_image_2",
+    )
+    result = await build_gpt_image_prompt(brief)
+    assert "exactly ONE singular subject centered" not in result.prompt
 
 
 async def test_legacy_ink_colors_clause_is_also_detected():
@@ -540,7 +605,7 @@ async def test_legacy_ink_colors_clause_is_also_detected():
 
 # The Scout inject form writes `trend_briefs.prompt_constraint` — a free-text
 # operator hint that must influence Claude when Design picks up the brief AND
-# survive into custom-prompt regens. Distinct from custom_flux_prompt (which
+# survive into custom-prompt regens. Distinct from image_description (which
 # is a full override).
 
 
@@ -572,10 +637,13 @@ async def test_claude_system_prompt_documents_prompt_constraint(mocker):
     assert "prompt_constraint" in system_text
 
 
-async def test_custom_prompt_appends_prompt_constraint_clause():
-    """In the custom-prompt path (Scout inject + custom Design inject combined,
-    or any regen of a brief that has both fields set), the constraint MUST
-    survive to the final fal.ai prompt — not silently dropped."""
+async def test_custom_prompt_does_not_append_prompt_constraint_clause():
+    """Regression guard for the 2026-05-14 prompt-stacking fix: when
+    image_description is set, prompt_constraint must NOT be appended as an
+    'Operator instruction (must follow):' tail. That tail used to fight
+    operator edits on regen-with-edit (an old prompt_constraint kept
+    overriding the operator's latest edits because it landed at the end of
+    the prompt where image models bias most heavily)."""
     brief = _brief_with_custom(
         _CUSTOM_GPT_PROMPT,
         palette=None,
@@ -585,31 +653,15 @@ async def test_custom_prompt_appends_prompt_constraint_clause():
         update={"prompt_constraint": "make the head look grumpy but still cute"}
     )
     result = await build_gpt_image_prompt(brief)
-    assert (
-        "Operator instruction (must follow): make the head look grumpy but still cute"
-        in result.prompt
-    )
-
-
-async def test_custom_prompt_empty_constraint_is_a_no_op():
-    """Empty / whitespace-only constraint must NOT inject a hollow clause —
-    otherwise every brief without a constraint would pick up a meaningless
-    'Operator instruction:' suffix."""
-    brief = _brief_with_custom(
-        _CUSTOM_GPT_PROMPT,
-        palette=None,
-        image_model="fal_gpt_image_2",
-    )
-    brief = brief.model_copy(update={"prompt_constraint": "   "})
-    result = await build_gpt_image_prompt(brief)
     assert "Operator instruction" not in result.prompt
+    assert "make the head look grumpy" not in result.prompt
 
 
 # --- GPT_IMAGE_SYSTEM_PROMPT priority hierarchy -----------------------------
 
 # When `prompt_constraint` is set, it must be the highest-authority signal.
 # Design is content-neutral: style register comes from the brief
-# (`style_keywords` / `prompt_constraint` / `custom_flux_prompt`), never from
+# (`style_keywords` / `prompt_constraint` / `image_description`), never from
 # a baked-in house formula. The prompt enforces print-readiness and IP only.
 
 

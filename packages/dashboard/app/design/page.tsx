@@ -1,6 +1,7 @@
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
 import { DesignGrid } from "@/components/design/DesignGrid";
 import { DesignReviewCard } from "@/components/design/DesignReviewCard";
+import { RealtimeRefresh } from "@/components/realtime/RealtimeRefresh";
 import { SpendPanel } from "@/components/design/SpendPanel";
 import { InjectDesignForm } from "@/components/design/InjectDesignForm";
 import { FlagsRail } from "@/components/flags/FlagsRail";
@@ -23,6 +24,7 @@ export default async function DesignPage() {
 
   return (
     <div className="flex flex-col gap-8">
+      <RealtimeRefresh table="design_packages" channelName="design-page-refresh" />
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="font-display text-(length:--text-3xl) font-semibold">Design</h1>
@@ -67,11 +69,7 @@ export default async function DesignPage() {
             <InjectDesignForm />
           </SurfaceCard>
           <FlagsRail
-            keys={[
-              "design_manual_mode_enabled",
-              "upscaler_enabled",
-              "background_removal_mode",
-            ]}
+            keys={["upscaler_enabled", "background_removal_mode"]}
             title="Design flags"
           />
         </div>

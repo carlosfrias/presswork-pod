@@ -4,12 +4,36 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { serviceClient } from "@/lib/supabase/server";
 import { requireOwnerEmail } from "@/lib/auth";
-import { maybeAutoTrigger } from "@/lib/actions/triggers";
 import {
   buildPromptDescription,
   BuildPromptError,
   type ScoutSignals,
 } from "@/lib/builder/build-prompt";
+import { STYLE_IDS, type StyleId } from "@/lib/styles/catalog";
+import {
+  IMAGE_MODEL_IDS,
+  type ImageModelId,
+} from "@/lib/models/image-models";
+
+// Validates the style chip the operator picked. Empty / null / unknown all
+// collapse to `null` so the build proceeds in "Auto" mode rather than failing
+// on a malformed input that the operator can't see in the UI.
+function parseStyle(raw: unknown): StyleId | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  return (STYLE_IDS as readonly string[]).includes(raw)
+    ? (raw as StyleId)
+    : null;
+}
+
+// Image-model chip parser. Empty/missing/unknown → null = "use whatever the
+// parent brief already has, or the global default for fresh briefs". Lets
+// the Builder picker omit Auto without breaking older form posts.
+function parseImageModelChip(raw: unknown): ImageModelId | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  return (IMAGE_MODEL_IDS as readonly string[]).includes(raw)
+    ? (raw as ImageModelId)
+    : null;
+}
 
 /**
  * Server actions for the Builder step.
@@ -98,6 +122,7 @@ export async function buildPromptForBrief(
   briefId: string,
   rawSeed: string,
   rawReferenceUrls = "",
+  rawStyle: string | null = null,
 ): Promise<BuildResult> {
   await assertOwner();
   const parsedId = idSchema.safeParse(briefId);
@@ -140,7 +165,12 @@ export async function buildPromptForBrief(
   };
 
   try {
-    const description = await buildPromptDescription(parsedSeed.data, scout, parsedUrls.data);
+    const description = await buildPromptDescription(
+      parsedSeed.data,
+      scout,
+      parsedUrls.data,
+      parseStyle(rawStyle),
+    );
     return { ok: true, description };
   } catch (err) {
     const message =
@@ -156,6 +186,7 @@ export async function buildPromptForBrief(
 export async function buildPromptManual(
   rawSeed: string,
   rawReferenceUrls = "",
+  rawStyle: string | null = null,
 ): Promise<BuildResult> {
   await assertOwner();
   const parsedSeed = seedSchema.safeParse(rawSeed);
@@ -168,7 +199,12 @@ export async function buildPromptManual(
   }
 
   try {
-    const description = await buildPromptDescription(parsedSeed.data, null, parsedUrls.data);
+    const description = await buildPromptDescription(
+      parsedSeed.data,
+      null,
+      parsedUrls.data,
+      parseStyle(rawStyle),
+    );
     return { ok: true, description };
   } catch (err) {
     const message =
@@ -182,9 +218,17 @@ export async function buildPromptManual(
 }
 
 export async function sendToDesign(formData: FormData): Promise<void> {
-  const email = await assertOwner();
+  await assertOwner();
   const id = idSchema.parse(formData.get("id"));
   const description = descriptionSchema.parse(formData.get("description"));
+  // Style chip the operator had selected at Send time. Persisted on the
+  // child brief so the Design review picker can reflect the original choice
+  // instead of defaulting to Auto when the operator returns to review.
+  const style = parseStyle(formData.get("style"));
+  // Image-model chip. Null = "inherit the parent brief's model" — that's
+  // typically the Scout-research brief's default, which itself was seeded
+  // from the global default_image_model runtime flag.
+  const imageModel = parseImageModelChip(formData.get("image_model"));
 
   const db = serviceClient();
 
@@ -218,6 +262,8 @@ export async function sendToDesign(formData: FormData): Promise<void> {
     ...parentAnalysis,
     source: "builder_spawn",
     parent_brief_id: parent.id,
+    // Null when operator left the chip on Auto; lets queries .filter on style.
+    style,
   };
 
   const { error: insertErr } = await db.from("trend_briefs").insert({
@@ -228,16 +274,23 @@ export async function sendToDesign(formData: FormData): Promise<void> {
     price_target_usd: parent.price_target_usd,
     raw_etsy_data: parent.raw_etsy_data,
     claude_analysis: childAnalysis,
-    image_model: parent.image_model,
+    // Operator override > parent's model. Operator left chip on Auto →
+    // clone parent's model (which itself was seeded from the global default).
+    image_model: imageModel ?? parent.image_model,
     image_quality: parent.image_quality,
-    prompt_constraint: description.trim(),
+    // Builder's Claude pass (buildPromptDescription) already produced a
+    // complete style-aware description. Land it on the canonical
+    // image_description column so Design uses it verbatim and appends only
+    // print-readiness clauses — no second Claude synthesis, no stacking.
+    image_description: description.trim(),
     status: "approved",
   });
   if (insertErr) throw new Error(`Send to Design failed: ${insertErr.message}`);
 
-  // Chain into Design when local triggers are enabled + design manual mode is
-  // off. Silently no-ops otherwise — operator clicks Run Design themselves.
-  await maybeAutoTrigger("design", email);
+  // No agent auto-trigger: Design only runs when the operator clicks
+  // Run Design on the Design page. The new child brief sits at
+  // status='approved' waiting in the queue; the Run button's gold glow
+  // signals the work is ready.
 
   revalidatePath("/builder");
   revalidatePath("/design");
@@ -245,24 +298,32 @@ export async function sendToDesign(formData: FormData): Promise<void> {
 }
 
 export async function createManualBrief(formData: FormData): Promise<void> {
-  const email = await assertOwner();
+  await assertOwner();
   const description = descriptionSchema.parse(formData.get("description"));
   const rawNiche = formData.get("niche")?.toString().trim() ?? "";
   const niche = nicheSchema.parse(rawNiche || DEFAULT_MANUAL_NICHE);
+  const style = parseStyle(formData.get("style"));
+  const imageModel = parseImageModelChip(formData.get("image_model"));
 
   const db = serviceClient();
   // Manual briefs skip the Scout-research and Scout-approve gates — the
   // operator authored both the niche and the description themselves. Land
-  // them at status='approved' so Design claims on its next tick.
-  const { error } = await db.from("trend_briefs").insert({
+  // them at status='approved' so Design claims on its next manual run.
+  // Null model = let the DB default kick in (column default mirrors the
+  // global default_image_model flag's seed value).
+  const insertRow: Record<string, unknown> = {
     niche,
-    prompt_constraint: description.trim(),
+    // See sendToDesign: Builder owns the full image description; land it on
+    // image_description so Design uses it verbatim.
+    image_description: description.trim(),
     status: "approved",
-    claude_analysis: { source: "builder_manual" },
-  });
+    claude_analysis: { source: "builder_manual", style },
+  };
+  if (imageModel) insertRow.image_model = imageModel;
+  const { error } = await db.from("trend_briefs").insert(insertRow);
   if (error) throw new Error(`Create manual brief failed: ${error.message}`);
 
-  await maybeAutoTrigger("design", email);
+  // No auto-trigger — see sendToDesign for rationale.
 
   revalidatePath("/builder");
   revalidatePath("/design");
