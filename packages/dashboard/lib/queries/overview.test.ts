@@ -1,0 +1,154 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { makeSupabaseMock, type SupabaseMockOpts } from "@/tests/helpers/supabase-mock";
+
+async function loadModule(opts: SupabaseMockOpts) {
+  const { client, capture } = makeSupabaseMock(opts);
+  vi.doMock("@/lib/supabase/server", () => ({ serviceClient: () => client }));
+  vi.resetModules();
+  const mod = await import("./overview");
+  return { mod, capture };
+}
+
+beforeEach(() => {
+  vi.resetAllMocks();
+});
+
+describe("getDailySummary", () => {
+  it("returns rows from dashboard_daily_summary ordered by day", async () => {
+    const rows = [
+      { day: "2026-05-01", revenue_usd: 100, margin_usd: 40 },
+      { day: "2026-05-02", revenue_usd: 200, margin_usd: 80 },
+    ];
+    const { mod, capture } = await loadModule({ dashboard_daily_summary: { rows } });
+
+    const result = await mod.getDailySummary(7);
+
+    expect(result).toEqual(rows);
+    expect(capture.selects[0].table).toBe("dashboard_daily_summary");
+  });
+});
+
+describe("getKpis", () => {
+  it("aggregates the daily summary rows into a single totals object", async () => {
+    const rows = [
+      {
+        day: "2026-05-01",
+        revenue_usd: 100,
+        margin_usd: 40,
+        order_count: 4,
+        listings_published: 1,
+        designs: 2,
+        briefs: 3,
+        fal_spend_usd: 0.5,
+        anthropic_spend_usd: 1.25,
+        etsy_fees_usd: 7,
+      },
+      {
+        day: "2026-05-02",
+        revenue_usd: 200,
+        margin_usd: 80,
+        order_count: 8,
+        listings_published: 2,
+        designs: 3,
+        briefs: 4,
+        fal_spend_usd: 0.75,
+        anthropic_spend_usd: 1.25,
+        etsy_fees_usd: 14,
+      },
+    ];
+    const { mod } = await loadModule({ dashboard_daily_summary: { rows } });
+
+    const kpis = await mod.getKpis(7);
+
+    expect(kpis).toEqual({
+      windowDays: 7,
+      revenue_usd: 300,
+      margin_usd: 120,
+      order_count: 12,
+      listings_published: 3,
+      designs: 5,
+      briefs: 7,
+      fal_spend_usd: 1.25,
+      anthropic_spend_usd: 2.5,
+      etsy_fees_usd: 21,
+    });
+  });
+
+  it("returns zero KPIs when there are no rows", async () => {
+    const { mod } = await loadModule({ dashboard_daily_summary: { rows: [] } });
+
+    const kpis = await mod.getKpis(30);
+
+    expect(kpis.windowDays).toBe(30);
+    expect(kpis.revenue_usd).toBe(0);
+    expect(kpis.order_count).toBe(0);
+  });
+});
+
+describe("getPipelineHealth", () => {
+  it("returns one entry per agent and sums counts into total", async () => {
+    const { mod } = await loadModule({
+      trend_briefs: { count: 2 },
+      design_packages: { count: 3 },
+      listings: { count: 1 },
+      orders: { count: 5 },
+    });
+
+    const health = await mod.getPipelineHealth();
+
+    expect(health.map((h) => h.agent)).toEqual(["scout", "design", "listing", "ledger"]);
+    // 4 statuses × count=2 → total=8 for scout
+    expect(health.find((h) => h.agent === "scout")?.total).toBe(8);
+    // 5 statuses × count=1 → total=5 for listing
+    expect(health.find((h) => h.agent === "listing")?.total).toBe(5);
+    // ledger queries 2 statuses (logged, error) × count=5 → total=10
+    expect(health.find((h) => h.agent === "ledger")?.total).toBe(10);
+  });
+});
+
+describe("getRecentErrors", () => {
+  it("combines error rows from all 4 source tables and sorts by updated_at desc", async () => {
+    const { mod } = await loadModule({
+      trend_briefs: {
+        rows: [{ id: "b1", updated_at: "2026-05-10T00:00:00Z", error_message: "scout err" }],
+      },
+      design_packages: {
+        rows: [{ id: "d1", updated_at: "2026-05-12T00:00:00Z", error_message: "design err" }],
+      },
+      listings: {
+        rows: [{ id: "l1", updated_at: "2026-05-11T00:00:00Z", error_message: "listing err" }],
+      },
+      orders: {
+        rows: [{ id: "o1", updated_at: "2026-05-09T00:00:00Z", error_message: "ledger err" }],
+      },
+    });
+
+    const errs = await mod.getRecentErrors(10);
+
+    // sorted newest-first
+    expect(errs.map((e) => e.source)).toEqual([
+      "design_packages",
+      "listings",
+      "trend_briefs",
+      "orders",
+    ]);
+    // listing source uses /listings/<id> href, others use list pages
+    expect(errs.find((e) => e.source === "listings")?.href).toBe("/listings/l1");
+    expect(errs.find((e) => e.source === "trend_briefs")?.href).toBe("/scout");
+  });
+});
+
+describe("getRuntimeFlags", () => {
+  it("returns rows from runtime_flags ordered by key", async () => {
+    const flags = [
+      { key: "auto_publish", value: false },
+      { key: "vision_enabled", value: true },
+    ];
+    const { mod, capture } = await loadModule({ runtime_flags: { rows: flags } });
+
+    const result = await mod.getRuntimeFlags();
+
+    expect(result).toEqual(flags);
+    expect(capture.selects[0].table).toBe("runtime_flags");
+  });
+});
