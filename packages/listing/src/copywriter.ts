@@ -4,11 +4,12 @@ import {
   type DesignPackage,
   type ListingCopy,
   ListingCopySchema,
+  ensureAiDisclosure,
+  ensureValidTags,
   getSettings,
   estimateAnthropicCostUsd,
   recordUsage,
 } from "@presswork/shared";
-import { AI_DISCLOSURE_TEXT } from "@presswork/shared";
 
 export class CopywriterError extends Error {
   constructor(
@@ -30,25 +31,27 @@ Respond ONLY with valid JSON:
 }
 Do not use all-caps. Do not use excessive punctuation. Sound human.
 
+DO NOT mention AI, generative tools, machine learning, "AI-generated", or how the
+design was made. Etsy requires an AI disclosure in the description, but we append
+it server-side from a fixed verbatim string AFTER your response. If you mention AI,
+the description will end up with two competing disclosures (yours + ours) and look
+redundant. Just write the product copy.
+
 ETSY SELLER POLICY — these rules are non-negotiable. Listings that violate any of
 them will be rejected before publishing.
 
-1. AI disclosure (required). The description MUST end with this exact sentence,
-   verbatim, as the final sentence:
-   "${AI_DISCLOSURE_TEXT}"
-
-2. No manual-creation language. These are print-on-demand products produced by a
+1. No manual-creation language. These are print-on-demand products produced by a
    third-party fulfillment partner. NEVER use any of: "handmade", "hand made",
    "hand-made", "handcrafted", "hand-crafted", "hand-drawn", "hand-painted",
    "hand-sewn", "hand-stitched", or any variation that implies the product was
    created by hand.
 
-3. No false uniqueness or scarcity. NEVER use "unique", "one of a kind",
+2. No false uniqueness or scarcity. NEVER use "unique", "one of a kind",
    "one-of-a-kind", "OOAK", "limited edition", "limited availability",
    "limited quantity", "exclusive offer", "only a few left", or "while supplies
    last". POD inventory is not finite, and identical items can be reordered.
 
-4. No off-Etsy redirection. NEVER include URLs, social-media handles (e.g.
+3. No off-Etsy redirection. NEVER include URLs, social-media handles (e.g.
    @username), domain names (instagram.com, facebook.com, etc.), or phrasing
    that asks buyers to purchase, contact, or follow you anywhere outside Etsy.
    No "DM us", "follow us on", "visit our website", "buy direct", etc.
@@ -118,16 +121,67 @@ export async function writeCopy(
     throw new CopywriterError("Claude returned no text content", null);
   }
 
+  // Strip a leading ```json (or ```) fence and trailing ``` if Claude
+  // wrapped the JSON in markdown despite the system prompt asking for raw
+  // JSON. Common failure mode that's far cheaper to handle here than to
+  // retry the whole call. Falls through unchanged if there's no fence.
+  const stripped = firstBlock.text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+
   let parsed: unknown;
   try {
-    parsed = JSON.parse(firstBlock.text);
+    parsed = JSON.parse(stripped);
   } catch {
-    throw new CopywriterError("Claude response was not valid JSON", firstBlock.text);
+    // Include a head excerpt of the raw response in the message so the agent
+    // log captures what Claude actually said. The full text is also passed as
+    // `issues` for any caller that wants the complete payload.
+    const excerpt = firstBlock.text.slice(0, 400).replace(/\s+/g, " ");
+    throw new CopywriterError(
+      `Claude response was not valid JSON. Excerpt: ${excerpt}`,
+      firstBlock.text
+    );
+  }
+
+  // Auto-fix common Claude misses server-side, same defense-in-depth pattern
+  // as the dashboard save actions: the LLM can write whatever, we own the
+  // shape that actually reaches Etsy.
+  //   - description: ensure verbatim AI_DISCLOSURE_TEXT is present (Etsy
+  //     requires the disclosure; we own the wording).
+  //   - tags: trim each to ≤20 chars (word-boundary aware), cap to 13,
+  //     drop dups + empties. Etsy enforces both limits hard.
+  if (parsed && typeof parsed === "object") {
+    const obj = parsed as Record<string, unknown>;
+    if (typeof obj.description === "string") {
+      obj.description = ensureAiDisclosure(obj.description);
+    }
+    if (Array.isArray(obj.tags)) {
+      obj.tags = ensureValidTags(obj.tags as string[]);
+    }
   }
 
   const result = ListingCopySchema.safeParse(parsed);
   if (!result.success) {
-    throw new CopywriterError("Claude response failed validation", result.error.issues);
+    // Inline a compact summary of the Zod issues so the agent log + the
+    // listings.error_message column carry actionable detail. The full issue
+    // tree is still passed as `issues` for callers that want it. Common
+    // failures the operator sees here:
+    //   - missing AI_DISCLOSURE_TEXT in description
+    //   - title > 140 chars
+    //   - title is all-caps
+    //   - tags array > 13 entries or any tag > 20 chars
+    const summary = result.error.issues
+      .map((i) => {
+        const path = i.path.length > 0 ? i.path.join(".") : "(root)";
+        return `${path}: ${i.message}`;
+      })
+      .join("; ");
+    throw new CopywriterError(
+      `Claude response failed validation — ${summary}`,
+      result.error.issues
+    );
   }
 
   return result.data;

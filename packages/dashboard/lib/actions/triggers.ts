@@ -1,14 +1,14 @@
 "use server";
 
 import { spawn } from "node:child_process";
-import path from "node:path";
 import { z } from "zod";
 import { serviceClient } from "@/lib/supabase/server";
 import { requireOwnerEmail } from "@/lib/auth";
 import { revalidatePath } from "next/cache";
+import { AGENT_COMMANDS, REPO_ROOT, type Agent } from "./triggers.config";
 
 const AgentSchema = z.enum(["scout", "design", "listing", "ledger"]);
-export type Agent = z.infer<typeof AgentSchema>;
+export type { Agent };
 
 /**
  * Core spawn — fire-and-forget local subprocess + agent_runs trail.
@@ -161,20 +161,11 @@ export async function maybeAutoTrigger(
   await spawnAgent(agent, triggeredBy);
 }
 
-// Repo root is two levels up from `packages/dashboard` (where `cwd` resolves at runtime).
-const REPO_ROOT = path.resolve(process.cwd(), "..", "..");
-// Use the repo's venv interpreter so Python agents run with project deps,
-// not whatever `python` happens to resolve to on system PATH (often Python 2.7 on macOS).
-const VENV_PYTHON = path.join(REPO_ROOT, ".venv/bin/python");
-
-const COMMANDS: Record<Agent, { bin: string; args: string[] } | null> = {
-  scout: { bin: VENV_PYTHON, args: ["-m", "packages.scout.main"] },
-  design: { bin: VENV_PYTHON, args: ["-m", "packages.design.main"] },
-  // The listing agent's poller entry point. Adjust if the local dev script
-  // diverges from this one.
-  listing: { bin: "npm", args: ["run", "--workspace", "packages/listing", "dev"] },
-  ledger: { bin: "npm", args: ["run", "--workspace", "packages/ledger", "poll-receipts"] },
-};
+// Internal alias retained so the spawn path keeps its old name without a
+// rename diff. Either symbol points at the same object exported from
+// triggers.config.ts (which lives outside "use server" so it can hold
+// non-async exports — Next.js forbids object exports from "use server").
+const COMMANDS = AGENT_COMMANDS;
 
 export interface AgentRunSummary {
   id: string;
@@ -221,11 +212,52 @@ export async function getPendingWorkCount(agent: Agent): Promise<number> {
   if (!email) throw new Error("Unauthorized");
 
   const db = serviceClient();
-  const table = agent === "design" ? "trend_briefs" : "design_packages";
-  const { count, error } = await db
-    .from(table)
-    .select("id", { count: "exact", head: true })
-    .eq("status", "approved");
-  if (error) return 0;
-  return count ?? 0;
+
+  if (agent === "design") {
+    // Design's queue is still "approved trend_briefs waiting to be picked up".
+    const { count, error } = await db
+      .from("trend_briefs")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "approved");
+    if (error) return 0;
+    return count ?? 0;
+  }
+
+  // Listing's queue is two-part after migration 046:
+  //   1. Approved designs that don't yet have a listings row (Phase 3 in
+  //      packages/listing/src/index.ts — a fresh claim creates a listings
+  //      row).
+  //   2. Listings at status='pending' (Phase 2 — operator retries from error,
+  //      Recreate Printify product, transient publishOne failures, or fresh
+  //      claims from the previous run that haven't been processed yet).
+  //
+  // Counting just "approved designs" overstates wildly because designs now
+  // stay at 'approved' for their lifetime (they no longer transition to
+  // 'processing' / 'done' under the new pipeline contract). PostgREST has
+  // no cross-table NOT EXISTS, so we pull the two id sets and subtract:
+  // approved designs whose id is NOT in the set of design_package_ids
+  // referenced by any listings row.
+  const [approvedDesigns, linkedDesigns, pendingListings] = await Promise.all([
+    db.from("design_packages").select("id").eq("status", "approved"),
+    db
+      .from("listings")
+      .select("design_package_id")
+      .not("design_package_id", "is", null),
+    db
+      .from("listings")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "pending"),
+  ]);
+  if (approvedDesigns.error || linkedDesigns.error || pendingListings.error) {
+    return 0;
+  }
+  const linkedIds = new Set(
+    (linkedDesigns.data ?? []).map(
+      (r) => (r as { design_package_id: string }).design_package_id,
+    ),
+  );
+  const unclaimedApproved = (approvedDesigns.data ?? []).filter(
+    (d) => !linkedIds.has((d as { id: string }).id),
+  ).length;
+  return unclaimedApproved + (pendingListings.count ?? 0);
 }

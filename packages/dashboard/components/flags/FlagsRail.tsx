@@ -11,12 +11,7 @@ interface FlagsRailProps {
 }
 
 const NUMERIC = new Set(["margin_warning_threshold_usd"]);
-const ENUMS: Record<string, string[]> = {
-  // Two-way background-removal selector. Both are fal.ai-hosted, same I/O.
-  // "bria" is the current default (commercially-licensed training data,
-  // ~$0.018/call); "birefnet" is the matting-quality alternative.
-  background_removal_mode: ["bria", "birefnet"],
-};
+const ENUMS: Record<string, string[]> = {};
 
 export async function FlagsRail({ keys, title = "Flags", emptyHint }: FlagsRailProps) {
   const flags = await getRuntimeFlags();

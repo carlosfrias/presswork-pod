@@ -1,6 +1,6 @@
 {
   "name": "edge-ai-disclosure",
-  "description": "Capture omits the AI_DISCLOSURE_TEXT verbatim. ListingCopySchema rejects it before validateCopyCompliance even runs, so writeCopy throws CopywriterError.",
+  "description": "Capture omits the AI_DISCLOSURE_TEXT verbatim. As of the option-3 contract, writeCopy auto-appends the disclosure server-side instead of throwing. ListingCopySchema's verbatim refine then passes (it's a final invariant — kept as defense-in-depth, but auto-append guarantees it never fires for missing-disclosure).",
   "brief": {
     "id": "00000000-0000-0000-0000-000000000007",
     "created_at": "2026-01-01T00:00:00Z",
@@ -24,7 +24,7 @@
     "retry_count": 0
   },
   "expect": {
-    "writeCopySucceeds": false,
-    "writeCopyErrorName": "CopywriterError"
+    "writeCopySucceeds": true,
+    "compliancePasses": true
   }
 }

@@ -177,6 +177,47 @@ export async function approveDesign(formData: FormData) {
 }
 
 /**
+ * Flag a needs_review design for manual touch-up. Transitions to 'touch_up'
+ * so the design surfaces in the Touch-up section with download + re-upload
+ * controls. The operator downloads the masked PNG, edits locally, and
+ * re-uploads — which sends it back to needs_review for a final approve pass.
+ */
+export async function flagForTouchUp(formData: FormData) {
+  await assertOwner();
+  const id = idSchema.parse(formData.get("id"));
+  const db = serviceClient();
+
+  const { error } = await db
+    .from("design_packages")
+    .update({ status: "touch_up", error_message: null })
+    .eq("id", id)
+    .eq("status", "needs_review");
+  if (error) throw new Error(`Flag for touch-up failed: ${error.message}`);
+
+  revalidatePath("/design");
+}
+
+/**
+ * Cancel a touch-up and return the design to needs_review without uploading
+ * an edited image (e.g. the operator flagged it by mistake, or decided the
+ * AI output was fine after closer inspection).
+ */
+export async function cancelTouchUp(formData: FormData) {
+  await assertOwner();
+  const id = idSchema.parse(formData.get("id"));
+  const db = serviceClient();
+
+  const { error } = await db
+    .from("design_packages")
+    .update({ status: "needs_review", error_message: null })
+    .eq("id", id)
+    .eq("status", "touch_up");
+  if (error) throw new Error(`Cancel touch-up failed: ${error.message}`);
+
+  revalidatePath("/design");
+}
+
+/**
  * Reopen an approved design back into the review queue without regenerating.
  *
  * Use case: after approving, the operator wants to step through the version
@@ -279,10 +320,45 @@ export async function regenerateDesign(formData: FormData) {
   // to 'approved' so Design's claim RPC re-picks it up on the next run.
   const { data: design } = await db
     .from("design_packages")
-    .select("trend_brief_id")
+    .select("trend_brief_id, image_url, image_url_unmasked, fal_prompt, metadata")
     .eq("id", id)
     .maybeSingle();
   if (!design) throw new Error("Design not found");
+
+  // Snapshot the current image into metadata.image_versions BEFORE clearing
+  // image_url. The Python Design agent's _next_image_versions() backfills the
+  // previous image when it writes the new one — but only if image_url is
+  // non-null at read time. Since we're about to null it, we do the backfill
+  // here so the previous image is preserved in the stack.
+  const existingMeta =
+    design.metadata && typeof design.metadata === "object"
+      ? (design.metadata as Record<string, unknown>)
+      : {};
+  const existingVersions = Array.isArray(existingMeta.image_versions)
+    ? (existingMeta.image_versions as Record<string, unknown>[])
+    : [];
+  const hasRegenHistory = existingVersions.some((v) => v.kind === "regen");
+
+  const metadataUpdate =
+    !hasRegenHistory && design.image_url
+      ? {
+          ...existingMeta,
+          image_versions: [
+            ...existingVersions,
+            {
+              kind: "regen",
+              masked_url: design.image_url,
+              unmasked_url: design.image_url_unmasked ?? null,
+              created_at: new Date().toISOString(),
+              prompt: design.fal_prompt ?? null,
+              image_model: null,
+              image_quality: null,
+              bg_removal_mode: null,
+              backfilled: true,
+            },
+          ],
+        }
+      : existingMeta;
 
   const { error: dpErr } = await db
     .from("design_packages")
@@ -295,6 +371,7 @@ export async function regenerateDesign(formData: FormData) {
       fal_prompt_hash: null,
       error_message: null,
       retry_count: 0,
+      metadata: metadataUpdate,
     })
     .eq("id", id);
   if (dpErr) throw new Error(`Regenerate failed: ${dpErr.message}`);
@@ -465,29 +542,20 @@ export async function remaskDesign(formData: FormData) {
 }
 
 /**
- * Hand-edit cycle: operator downloads an approved design, edits it locally
- * (Photoshop / Procreate / whatever), and uploads the modified PNG back. The
- * row's image_url flips to the new uploaded URL, the AI-generated original is
- * preserved in metadata.image_versions, and status returns to needs_review so
- * the operator approves the hand-edited version through the standard gate
- * before Listing publishes.
+ * Hand-edit cycle: operator downloads a design, edits it locally, and uploads
+ * the modified PNG back. The row's image_url flips to the new URL and status
+ * returns to needs_review so the operator approves before Listing publishes.
  *
- * Versioning, not replacement: every upload appends a new entry to
- * metadata.image_versions. On the FIRST hand-edit the AI original is also
- * stashed there (kind:"ai_original") so a future revert is one DB write away.
+ * Uploads are stored as kind:"regen" entries in metadata.image_versions so
+ * they appear in the stack navigator (back/forward arrows) alongside
+ * AI-generated versions. image_model:"hand_edit" in the entry distinguishes
+ * them visually in the caption. The previous image is backfilled into the
+ * stack on the first upload, matching the same pattern as regenerateDesign.
  *
- * Refuses anything but status='approved' so an in-flight or errored design
- * can't be silently overwritten. Operator can resume by re-approving the
- * design through the existing review queue.
+ * Accepts status='approved' or 'needs_review' so the form is usable from
+ * both the grid (approved) and the review card (needs_review).
  */
 const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
-
-type ImageVersion = {
-  url: string;
-  kind: "ai_original" | "hand_edit";
-  uploaded_at: string;
-  uploaded_by?: string;
-};
 
 export async function replaceDesignImage(formData: FormData): Promise<void> {
   const email = await assertOwner();
@@ -514,24 +582,26 @@ export async function replaceDesignImage(formData: FormData): Promise<void> {
 
   const { data: design, error: readErr } = await db
     .from("design_packages")
-    .select("status, image_url, metadata, created_at")
+    .select("status, image_url, image_url_unmasked, fal_prompt, metadata, created_at")
     .eq("id", id)
     .maybeSingle();
   if (readErr) throw new Error(`Design read failed: ${readErr.message}`);
   if (!design) throw new Error("Design not found.");
-  if (design.status !== "approved") {
+  if (
+    design.status !== "approved" &&
+    design.status !== "needs_review" &&
+    design.status !== "touch_up"
+  ) {
     throw new Error(
       `Cannot replace image from status='${design.status}' ` +
-        "(expected 'approved'). Approve the design first.",
+        "(expected 'approved', 'needs_review', or 'touch_up').",
     );
   }
   if (!design.image_url) {
     throw new Error("Design has no current image_url to version off of.");
   }
 
-  // Versioned storage path: ISO timestamp + random suffix avoids collisions
-  // if two uploads land in the same second. Suffix mirrors the Python
-  // convention in packages/design/storage.py (which uses "-unmasked" etc.).
+  // Versioned storage path: ISO timestamp + random suffix avoids collisions.
   const now = new Date();
   const isoStamp = now.toISOString().replace(/[:.]/g, "-");
   const randSuffix = Math.random().toString(36).slice(2, 8);
@@ -549,35 +619,47 @@ export async function replaceDesignImage(formData: FormData): Promise<void> {
   const { data: publicUrlData } = db.storage.from("designs").getPublicUrl(path);
   const newUrl = publicUrlData.publicUrl;
 
-  // Read-modify-write on metadata. Single-operator system, no concurrent
-  // writers on the same row, so a stale-read race here is not a concern.
   const existingMeta =
     design.metadata && typeof design.metadata === "object"
       ? (design.metadata as Record<string, unknown>)
       : {};
   const existingVersions = Array.isArray(existingMeta.image_versions)
-    ? (existingMeta.image_versions as ImageVersion[])
+    ? (existingMeta.image_versions as Record<string, unknown>[])
     : [];
 
-  const newEdit: ImageVersion = {
-    url: newUrl,
-    kind: "hand_edit",
-    uploaded_at: now.toISOString(),
+  // Backfill the current image into the regen stack before overwriting it,
+  // same pattern as regenerateDesign. Skipped when regen history already
+  // exists (the previous image is already captured there).
+  const hasRegenHistory = existingVersions.some((v) => v.kind === "regen");
+  const newEntry = {
+    kind: "regen",
+    masked_url: newUrl,
+    unmasked_url: null,
+    created_at: now.toISOString(),
+    prompt: null,
+    image_model: "hand_edit",
+    image_quality: null,
+    bg_removal_mode: null,
     uploaded_by: email,
   };
-  const versions: ImageVersion[] =
-    existingVersions.length === 0
+  const versions =
+    !hasRegenHistory && design.image_url
       ? [
-          // First hand-edit: stash the AI original first so future reverts
-          // can find it without rebuilding from history.
+          ...existingVersions,
           {
-            url: design.image_url,
-            kind: "ai_original",
-            uploaded_at: design.created_at,
+            kind: "regen",
+            masked_url: design.image_url,
+            unmasked_url: (design as Record<string, unknown>).image_url_unmasked ?? null,
+            created_at: design.created_at,
+            prompt: (design as Record<string, unknown>).fal_prompt ?? null,
+            image_model: null,
+            image_quality: null,
+            bg_removal_mode: null,
+            backfilled: true,
           },
-          newEdit,
+          newEntry,
         ]
-      : [...existingVersions, newEdit];
+      : [...existingVersions, newEntry];
 
   const { error: updateErr } = await db
     .from("design_packages")
@@ -590,9 +672,6 @@ export async function replaceDesignImage(formData: FormData): Promise<void> {
     .eq("id", id);
   if (updateErr) throw new Error(`Design update failed: ${updateErr.message}`);
 
-  // No agent spawn — there's no Design subprocess to run. The hand-edited
-  // image just sits in the review queue waiting for the operator's next
-  // approval click, which is the existing gate before Listing claims it.
   revalidatePath("/design");
 }
 

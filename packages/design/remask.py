@@ -31,6 +31,7 @@ from packages.design.local_bg_removal import remove_background_local
 from packages.design.storage import upload_design
 from packages.shared_py.config import get_settings
 from packages.shared_py.fal_http import download_image
+from packages.shared_py.llm_usage import FAL_COST_USD
 from packages.shared_py.logger import get_logger
 from packages.shared_py.runtime_flags import get_runtime_flag
 from supabase import Client
@@ -196,6 +197,15 @@ def _claim_next_remask(db: Client) -> dict[str, Any] | None:
     }
 
 
+def _remask_cost(bg_mode: str) -> float:
+    """Estimate the fal.ai cost for a re-mask (bg removal only, no image gen)."""
+    if bg_mode == "birefnet":
+        return FAL_COST_USD.get("fal-ai/birefnet/v2", 0.02)
+    if bg_mode == "bria":
+        return FAL_COST_USD.get("fal-ai/bria/background/remove", 0.018)
+    return 0.0  # local: free
+
+
 def _mark_done(
     db: Client,
     design_id: str,
@@ -217,12 +227,15 @@ def _mark_done(
     # matching by URL identifies the right entry to rewrite.
     pre_resp = (
         db.table("design_packages")
-        .select("image_url,image_url_unmasked,fal_prompt,metadata")
+        .select("image_url,image_url_unmasked,fal_prompt,metadata,generation_cost_usd")
         .eq("id", design_id)
         .execute()
     )
     pre = pre_resp.data[0] if pre_resp.data else {}
     next_meta = _next_metadata_for_remask(pre, image_url, bg_mode)
+
+    prior_cost = float(pre.get("generation_cost_usd") or 0)
+    remask_cost = _remask_cost(bg_mode)
 
     db.table("design_packages").update(
         {
@@ -231,6 +244,7 @@ def _mark_done(
             "image_url": image_url,
             "metadata": next_meta,
             "error_message": None,
+            "generation_cost_usd": round(prior_cost + remask_cost, 4),
         }
     ).eq("id", design_id).execute()
 

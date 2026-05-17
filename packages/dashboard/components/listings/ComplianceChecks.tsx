@@ -7,7 +7,7 @@ import {
 } from "@presswork/shared";
 import { cn } from "@/lib/cn";
 
-interface ComplianceChecksProps {
+export interface ComplianceChecksProps {
   title: string | null;
   description: string | null;
   tags: string[] | null;
@@ -22,7 +22,7 @@ interface Check {
   detail?: string;
 }
 
-function runChecks(props: ComplianceChecksProps): Check[] {
+export function runChecks(props: ComplianceChecksProps): Check[] {
   const text = `${props.title ?? ""} ${props.description ?? ""} ${(props.tags ?? []).join(" ")}`;
   // Strip the AI disclosure sentence before forbidden-term checks so legitimate
   // disclosure text doesn't trip on substrings like "hand-selected".

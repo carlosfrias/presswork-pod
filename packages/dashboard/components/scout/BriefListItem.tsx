@@ -37,7 +37,7 @@ export function BriefListItem({ brief }: { brief: TrendBriefRow }) {
             {brief.niche}
           </h3>
           <p className="mt-0.5 text-xs text-(--text-muted)">
-            {formatRelative(brief.created_at)}
+            <span suppressHydrationWarning>{formatRelative(brief.created_at)}</span>
             {brief.price_target_usd != null && ` · ${formatUsd(brief.price_target_usd)} target`}
           </p>
         </div>

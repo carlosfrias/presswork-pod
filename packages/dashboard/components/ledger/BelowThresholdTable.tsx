@@ -50,7 +50,7 @@ export function BelowThresholdTable({
               <td className="py-2.5 pr-4 text-right tabular text-(--accent-bad)">
                 {formatUsd(r.margin_usd)}
               </td>
-              <td className="py-2.5 text-right text-xs text-(--text-muted)">
+              <td className="py-2.5 text-right text-xs text-(--text-muted)" suppressHydrationWarning>
                 {formatRelative(r.created_at)}
               </td>
             </tr>

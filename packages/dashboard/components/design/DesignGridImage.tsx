@@ -13,10 +13,11 @@ import { Lightbox } from "@/components/ui/Lightbox";
  */
 interface Props {
   src: string | null;
+  thumbSrc?: string | null;
   shortId: string;
 }
 
-export function DesignGridImage({ src, shortId }: Props) {
+export function DesignGridImage({ src, thumbSrc, shortId }: Props) {
   const [zoomOpen, setZoomOpen] = useState(false);
 
   if (!src) {
@@ -38,9 +39,9 @@ export function DesignGridImage({ src, shortId }: Props) {
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={src}
+          src={thumbSrc ?? src}
           alt="Design"
-          className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+          className="h-full w-full object-contain transition-transform duration-300 group-hover:scale-[1.03]"
           loading="lazy"
         />
       </button>

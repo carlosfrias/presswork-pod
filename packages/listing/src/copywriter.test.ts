@@ -93,14 +93,25 @@ describe("writeCopy", () => {
     expect(result.description).toContain(AI_DISCLOSURE_TEXT);
   });
 
-  it("throws CopywriterError when AI disclosure is missing", async () => {
-    const noCopy = {
+  it("auto-appends the AI disclosure when Claude omits it (option-3 contract)", async () => {
+    // Etsy requires the disclosure verbatim in the description; we own the
+    // wording server-side. Even if Claude obeys the system prompt's "don't
+    // mention AI" rule, writeCopy must still return copy whose description
+    // contains AI_DISCLOSURE_TEXT. No throw.
+    const { AI_DISCLOSURE_TEXT } = await import("@presswork/shared");
+    const noDisclosure = {
       ...validCopy,
-      description: "A great shirt for cat lovers. No disclosure here.",
+      description: "A great shirt for cat lovers. Crafted from premium cotton.",
     };
-    vi.doMock("@anthropic-ai/sdk", () => makeAnthropicMock(JSON.stringify(noCopy)));
-    const { writeCopy, CopywriterError } = await import("./copywriter.js");
-    await expect(writeCopy(brief, design)).rejects.toThrow(CopywriterError);
+    vi.doMock("@anthropic-ai/sdk", () =>
+      makeAnthropicMock(JSON.stringify(noDisclosure)),
+    );
+    const { writeCopy } = await import("./copywriter.js");
+    const result = await writeCopy(brief, design);
+    expect(result.description).toContain(AI_DISCLOSURE_TEXT);
+    // The non-disclosure prefix Claude wrote is preserved.
+    expect(result.description.startsWith("A great shirt for cat lovers."))
+      .toBe(true);
   });
 
   it("throws CopywriterError when title exceeds 140 chars", async () => {
@@ -118,11 +129,29 @@ describe("writeCopy", () => {
     expect(result.tags).toHaveLength(12);
   });
 
-  it("throws CopywriterError when tag count exceeds 13", async () => {
+  it("auto-trims tag count to 13 when Claude returns more (option-3 contract)", async () => {
+    // Same defense-in-depth as the AI disclosure: ensureValidTags caps the
+    // array at 13 server-side instead of failing the whole publish call.
     const tooManyTags = { ...validCopy, tags: [...validCopy.tags, "extra tag"] };
     vi.doMock("@anthropic-ai/sdk", () => makeAnthropicMock(JSON.stringify(tooManyTags)));
-    const { writeCopy, CopywriterError } = await import("./copywriter.js");
-    await expect(writeCopy(brief, design)).rejects.toThrow(CopywriterError);
+    const { writeCopy } = await import("./copywriter.js");
+    const result = await writeCopy(brief, design);
+    expect(result.tags).toHaveLength(13);
+    expect(result.tags).not.toContain("extra tag");
+  });
+
+  it("auto-trims long tags to 20 chars (option-3 contract)", async () => {
+    // ensureValidTags trims at the last word boundary ≤20 chars (or hard
+    // truncates if no boundary), so "houseplant lover gift" (21) → "houseplant lover" (16).
+    const longTag = {
+      ...validCopy,
+      tags: ["houseplant lover gift", ...validCopy.tags.slice(1)],
+    };
+    vi.doMock("@anthropic-ai/sdk", () => makeAnthropicMock(JSON.stringify(longTag)));
+    const { writeCopy } = await import("./copywriter.js");
+    const result = await writeCopy(brief, design);
+    expect(result.tags[0]).toBe("houseplant lover");
+    expect(result.tags.every((t) => t.length <= 20)).toBe(true);
   });
 
   it("throws CopywriterError when title is all-caps", async () => {

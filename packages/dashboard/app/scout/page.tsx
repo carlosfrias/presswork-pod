@@ -9,7 +9,7 @@ import { AgentRunButton } from "@/components/triggers/AgentRunButton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton } from "@/components/ui/Skeleton";
 import {
-  getRecentBriefs,
+  getAllBriefs,
   getNichePerformance,
   getBriefReviewQueue,
 } from "@/lib/queries/scout";
@@ -24,8 +24,8 @@ async function NichePerformancePanel() {
 export default async function ScoutPage() {
   // NicheTable is the heaviest query (500-brief join). Stream it via
   // Suspense so the review queue and recent briefs paint first.
-  const [recent, reviewQueue] = await Promise.all([
-    getRecentBriefs(8),
+  const [allBriefs, reviewQueue] = await Promise.all([
+    getAllBriefs(500),
     getBriefReviewQueue(),
   ]);
 
@@ -77,10 +77,10 @@ export default async function ScoutPage() {
       </div>
 
       <SurfaceCard
-        title="Recent briefs"
-        subtitle="Last 8 — full lifecycle (any status). Acts as both recent activity + total history once older rows are deleted."
+        title={`All briefs — ${allBriefs.length}`}
+        subtitle="Full history, newest first. Capped at 500 — pagination lands once we routinely exceed that."
       >
-        <BriefList briefs={recent} />
+        <BriefList briefs={allBriefs} />
       </SurfaceCard>
     </div>
   );

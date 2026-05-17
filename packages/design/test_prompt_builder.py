@@ -489,7 +489,7 @@ async def test_regen_full_round_trip_is_idempotent():
     # Background, subject, and readability clauses — distinctive substrings only.
     assert lowered.count("background must be plain solid black") == 1
     assert lowered.count("exactly one singular subject centered") == 1
-    assert lowered.count("reads at six inches across") == 1
+    assert lowered.count("ten to twelve inches across") == 1
 
 
 async def test_custom_prompt_appends_black_background_clause_by_default():
@@ -544,17 +544,17 @@ async def test_custom_prompt_appends_subject_clause():
 
 
 async def test_custom_prompt_appends_readability_clause():
-    """Print-readiness: silent prompts get a six-inch readability directive.
-    Pattern lifted from the 2026-05-14 winning-designs audit — strong
-    silhouettes that read at chest-pocket scale were the load-bearing
-    feature of approved designs."""
+    """Print-readiness: prompts without readability language get a full-chest
+    scale directive auto-appended. Pattern lifted from the 2026-05-14
+    winning-designs audit — strong silhouettes with bold shapes were the
+    load-bearing feature of approved designs."""
     brief = _brief_with_custom(
         "A frog knight in plate armor",
         palette=None,
         image_model="fal_gpt_image_2",
     )
     result = await build_gpt_image_prompt(brief)
-    assert "reads at six inches across" in result.prompt
+    assert "ten to twelve inches across" in result.prompt
 
 
 async def test_custom_prompt_skips_readability_clause_when_operator_specified():
@@ -567,7 +567,7 @@ async def test_custom_prompt_skips_readability_clause_when_operator_specified():
         image_model="fal_gpt_image_2",
     )
     result = await build_gpt_image_prompt(brief)
-    assert "reads at six inches across" not in result.prompt
+    assert "ten to twelve inches across" not in result.prompt
 
 
 async def test_custom_prompt_skips_subject_clause_when_operator_specified():

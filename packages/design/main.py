@@ -29,7 +29,12 @@ from packages.design.upscaler import upscale_url
 from packages.shared_py.config import get_settings
 from packages.shared_py.db import get_db
 from packages.shared_py.fal_http import download_image
-from packages.shared_py.llm_usage import record_usage
+from packages.shared_py.llm_usage import (
+    FAL_COST_USD,
+    GPT_IMAGE_COST_USD,
+    NANO_BANANA_COST_USD,
+    record_usage,
+)
 from packages.shared_py.logger import get_logger
 from packages.shared_py.notifier import notify_slack
 from packages.shared_py.runtime_flags import get_runtime_flag
@@ -99,6 +104,35 @@ def _next_image_versions(
         next_versions = next_versions[-_IMAGE_VERSIONS_CAP:]
 
     return next_versions
+
+
+def _estimate_run_cost(
+    image_model: str,
+    image_quality: str | None,
+    upscaler_ran: bool,
+    bg_mode: str,
+) -> float:
+    """Estimate the fal.ai USD cost for one Design agent run.
+
+    Uses the same price table as record_usage so the per-design tally stays
+    consistent with the aggregate SpendPanel. Costs are estimates off fal's
+    published pricing — the authoritative number is the fal balance delta.
+    """
+    cost = 0.0
+    if image_model == "fal_flux_pro":
+        cost += FAL_COST_USD.get("fal-ai/flux-pro/v1.1", 0.05)
+    elif image_model == "fal_gpt_image_2":
+        cost += GPT_IMAGE_COST_USD.get(image_quality or "low", 0.012)
+    elif image_model == "fal_nano_banana_2":
+        cost += NANO_BANANA_COST_USD.get(image_quality or "low", 0.06)
+    if upscaler_ran:
+        cost += FAL_COST_USD.get("fal-ai/aura-sr", 0.01)
+    if bg_mode == "birefnet":
+        cost += FAL_COST_USD.get("fal-ai/birefnet/v2", 0.02)
+    elif bg_mode == "bria":
+        cost += FAL_COST_USD.get("fal-ai/bria/background/remove", 0.018)
+    # local bg removal: $0
+    return round(cost, 4)
 
 
 async def run() -> None:
@@ -343,10 +377,12 @@ async def run() -> None:
             # Soft-fail to the un-upscaled URL so a flaky fal endpoint doesn't
             # consume the 3-retry budget. runtime_flags can flip the env default
             # off without a redeploy.
+            upscaler_ran = False
             upscaler_on = get_runtime_flag("upscaler_enabled", get_settings().upscaler_enabled)
             if brief.image_model == "fal_flux_pro" and upscaler_on:
                 try:
                     work_url = await upscale_url(work_url)
+                    upscaler_ran = True
                 except Exception as upscale_err:
                     log.warning(
                         "upscaler_failed_fallback",
@@ -423,6 +459,13 @@ async def run() -> None:
                 ),
             )
 
+            run_cost = _estimate_run_cost(
+                image_model=brief.image_model,
+                image_quality=brief.image_quality,
+                upscaler_ran=upscaler_ran,
+                bg_mode=bg_mode,
+            )
+
             new_entry = {
                 "kind": "regen",
                 "masked_url": image_url,
@@ -432,16 +475,18 @@ async def run() -> None:
                 "image_model": brief.image_model,
                 "image_quality": brief.image_quality,
                 "bg_removal_mode": bg_mode,
+                "cost_usd": run_cost,
             }
 
             def _write_done() -> None:
                 # Read current row state to compute the next image_versions
-                # array. Read-modify-write is safe here: a single design row
-                # is owned by exactly one Design run at a time (claim RPC
-                # prevents concurrent claimers on the same brief).
+                # array and add this run's cost to the running total.
+                # Read-modify-write is safe here: a single design row is owned
+                # by exactly one Design run at a time (claim RPC prevents
+                # concurrent claimers on the same brief).
                 pre_resp = (
                     db.table("design_packages")
-                    .select("image_url,image_url_unmasked,fal_prompt,metadata")
+                    .select("image_url,image_url_unmasked,fal_prompt,metadata,generation_cost_usd")
                     .eq("id", str(design_id))
                     .execute()
                 )
@@ -451,11 +496,14 @@ async def run() -> None:
                 meta_in = pre.get("metadata") if isinstance(pre.get("metadata"), dict) else {}
                 next_meta = {**(meta_in or {}), "image_versions": versions}
 
+                prior_cost = float(pre.get("generation_cost_usd") or 0)
+
                 db.table("design_packages").update(
                     {
                         "image_url": image_url,
                         "image_url_unmasked": image_url_unmasked,
                         "metadata": next_meta,
+                        "generation_cost_usd": round(prior_cost + run_cost, 4),
                         "status": _DESIGN_OUTPUT_STATUS,
                     }
                 ).eq("id", str(design_id)).execute()

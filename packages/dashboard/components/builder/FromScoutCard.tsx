@@ -52,6 +52,12 @@ export function FromScoutCard({ brief, defaultImageModel }: Props) {
   const [lastSentDescription, setLastSentDescription] = useState<string | null>(null);
   const [isBuilding, startBuild] = useTransition();
   const [isSending, startSend] = useTransition();
+  // Collapsible state. Cards default collapsed for a scannable queue. The
+  // operator clicks the header to expand and start building. Nothing here is
+  // persisted — the prompt only reaches the DB when Send to Design fires
+  // (sendToDesign writes image_description on the spawned child brief). On
+  // page reload, every card returns to collapsed.
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const created = new Date(brief.created_at).toISOString().slice(0, 10);
 
@@ -118,9 +124,17 @@ export function FromScoutCard({ brief, defaultImageModel }: Props) {
 
   return (
     <div className="flex flex-col gap-3 rounded-(--radius-md) border border-(--surface-line) bg-(--surface-1) p-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-3">
+      <button
+        type="button"
+        onClick={() => setIsExpanded((v) => !v)}
+        className="flex w-full flex-wrap items-baseline justify-between gap-3 text-left"
+        aria-expanded={isExpanded}
+      >
         <div className="flex flex-col gap-0.5">
           <div className="flex items-center gap-2">
+            <span aria-hidden className="text-(--text-muted) tabular">
+              {isExpanded ? "▾" : "▸"}
+            </span>
             <span className="text-sm font-medium text-(--text-primary)">{brief.niche}</span>
             {sentCount > 0 && (
               <span
@@ -130,6 +144,18 @@ export function FromScoutCard({ brief, defaultImageModel }: Props) {
                 Sent {sentCount} ✓
               </span>
             )}
+            {!isExpanded && brief.color_palette && brief.color_palette.length > 0 && (
+              <span className="ml-1 flex gap-0.5">
+                {brief.color_palette.slice(0, 5).map((c) => (
+                  <span
+                    key={c}
+                    title={c}
+                    className="inline-block h-3 w-3 rounded-(--radius-sm) border border-(--surface-line)"
+                    style={{ background: c }}
+                  />
+                ))}
+              </span>
+            )}
           </div>
           <span className="font-mono text-[11px] text-(--text-muted)">
             {brief.id.slice(0, 8)} · {created}
@@ -137,18 +163,22 @@ export function FromScoutCard({ brief, defaultImageModel }: Props) {
         </div>
         {brief.style_keywords && brief.style_keywords.length > 0 && (
           <div className="flex flex-wrap gap-1">
-            {brief.style_keywords.slice(0, 6).map((kw) => (
-              <span
-                key={kw}
-                className="rounded-(--radius-sm) bg-(--surface-2) px-2 py-0.5 text-[11px] text-(--text-secondary)"
-              >
-                {kw}
-              </span>
-            ))}
+            {brief.style_keywords
+              .slice(0, isExpanded ? 6 : 3)
+              .map((kw) => (
+                <span
+                  key={kw}
+                  className="rounded-(--radius-sm) bg-(--surface-2) px-2 py-0.5 text-[11px] text-(--text-secondary)"
+                >
+                  {kw}
+                </span>
+              ))}
           </div>
         )}
-      </div>
+      </button>
 
+      {!isExpanded ? null : (
+        <>
       {brief.color_palette && brief.color_palette.length > 0 && (
         <div className="flex items-center gap-2">
           <span className="text-[11px] uppercase tracking-wider text-(--text-muted)">
@@ -265,6 +295,8 @@ export function FromScoutCard({ brief, defaultImageModel }: Props) {
             </Button>
           </div>
         </form>
+      )}
+        </>
       )}
     </div>
   );

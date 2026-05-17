@@ -42,7 +42,7 @@ export function BriefReviewCard({ brief: b }: BriefReviewCardProps) {
             {b.niche}
           </h3>
           <p className="mt-1 text-xs text-(--text-muted)">
-            {formatRelative(b.created_at)}
+            <span suppressHydrationWarning>{formatRelative(b.created_at)}</span>
             {b.price_target_usd != null && ` · ${formatUsd(b.price_target_usd)} target`}
           </p>
         </div>

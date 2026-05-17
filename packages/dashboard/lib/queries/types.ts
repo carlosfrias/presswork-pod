@@ -61,6 +61,7 @@ export type ImageVersion =
       bg_removal_mode: string | null;
       backfilled?: boolean;
       remasked_at?: string;
+      cost_usd?: number;
     };
 
 export interface DesignPackageRow {
@@ -68,7 +69,7 @@ export interface DesignPackageRow {
   created_at: string;
   updated_at: string;
   trend_brief_id: string | null;
-  status: "needs_review" | "approved" | "processing" | "done" | "error" | "pending";
+  status: "needs_review" | "touch_up" | "approved" | "processing" | "done" | "error" | "pending";
   image_url: string | null;
   // Pre-mask preview — same canvas as image_url but without fal.ai
   // background removal applied. NULL for designs created before migration 026.
@@ -84,6 +85,8 @@ export interface DesignPackageRow {
   metadata: unknown;
   error_message: string | null;
   retry_count: number;
+  /** Running total of fal.ai costs across all regens + re-masks for this design. */
+  generation_cost_usd: number;
 }
 
 export interface ListingRow {
@@ -107,6 +110,20 @@ export interface ListingRow {
   is_active: boolean;
   error_message: string | null;
   retry_count: number;
+  /**
+   * When the operator last pushed local copy edits to Etsy via PATCH.
+   * NULL until the first push. Compared to updated_at to know whether
+   * there are unpushed changes (migration 047).
+   */
+  last_pushed_at: string | null;
+  /**
+   * When the listing's Printify hidden product was last (re)created
+   * against the design's image_url. NULL on legacy rows pre-migration 049.
+   * Compared to design_packages.updated_at to detect stale artwork on
+   * active listings (only). For non-active listings, the migration 049
+   * trigger auto-rebuilds — so this column only matters for active rows.
+   */
+  design_synced_at: string | null;
 }
 
 export interface OrderRow {

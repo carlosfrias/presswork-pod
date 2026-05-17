@@ -1,6 +1,7 @@
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
 import { DesignGrid } from "@/components/design/DesignGrid";
 import { DesignReviewCard } from "@/components/design/DesignReviewCard";
+import { TouchUpCard } from "@/components/design/TouchUpCard";
 import { RealtimeRefresh } from "@/components/realtime/RealtimeRefresh";
 import { SpendPanel } from "@/components/design/SpendPanel";
 import { InjectDesignForm } from "@/components/design/InjectDesignForm";
@@ -8,18 +9,20 @@ import { FlagsRail } from "@/components/flags/FlagsRail";
 import { AgentRunButton } from "@/components/triggers/AgentRunButton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import {
-  getRecentDesigns,
+  getAllDesigns,
   getDesignSpend,
   getDesignReviewQueue,
+  getTouchUpQueue,
 } from "@/lib/queries/design";
 
 export const revalidate = 30;
 
 export default async function DesignPage() {
-  const [recent, spend, reviewQueue] = await Promise.all([
-    getRecentDesigns(24),
+  const [allDesigns, spend, reviewQueue, touchUpQueue] = await Promise.all([
+    getAllDesigns(500),
     getDesignSpend(30),
     getDesignReviewQueue(),
+    getTouchUpQueue(),
   ]);
 
   return (
@@ -34,6 +37,19 @@ export default async function DesignPage() {
         </div>
         <AgentRunButton agent="design" />
       </header>
+
+      {touchUpQueue.length > 0 && (
+        <SurfaceCard
+          title={`Touch-up — ${touchUpQueue.length}`}
+          subtitle="Download, edit locally, re-upload — returns to review queue for final approve"
+        >
+          <div className="flex flex-col gap-4">
+            {touchUpQueue.map((d) => (
+              <TouchUpCard key={d.id} design={d} />
+            ))}
+          </div>
+        </SurfaceCard>
+      )}
 
       <SurfaceCard
         id="review-queue"
@@ -55,8 +71,12 @@ export default async function DesignPage() {
       </SurfaceCard>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <SurfaceCard className="lg:col-span-2" title="Recent designs" subtitle="Last 24">
-          <DesignGrid designs={recent} />
+        <SurfaceCard
+          className="lg:col-span-2"
+          title={`All designs — ${allDesigns.length}`}
+          subtitle="Full history, newest first. Capped at 500 — pagination lands once we routinely exceed that."
+        >
+          <DesignGrid designs={allDesigns} />
         </SurfaceCard>
         <div className="flex flex-col gap-6">
           <SurfaceCard title="fal.ai spend" subtitle="Last 30 days">
@@ -69,7 +89,7 @@ export default async function DesignPage() {
             <InjectDesignForm />
           </SurfaceCard>
           <FlagsRail
-            keys={["upscaler_enabled", "background_removal_mode"]}
+            keys={["upscaler_enabled"]}
             title="Design flags"
           />
         </div>

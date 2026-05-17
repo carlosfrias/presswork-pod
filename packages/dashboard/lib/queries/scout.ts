@@ -29,6 +29,14 @@ export async function getBriefReviewQueue(): Promise<TrendBriefRow[]> {
   return (data ?? []) as TrendBriefRow[];
 }
 
+/**
+ * Full brief history. Capped at 500 for now — once we routinely exceed that,
+ * swap the page over to a paginated cursor query (created_at < last_seen).
+ */
+export async function getAllBriefs(limit = 500): Promise<TrendBriefRow[]> {
+  return getRecentBriefs(limit);
+}
+
 export async function getRecentBriefs(limit = 20): Promise<TrendBriefRow[]> {
   const db = serviceClient();
   // Over-fetch so the post-filter still returns `limit` rows even when a

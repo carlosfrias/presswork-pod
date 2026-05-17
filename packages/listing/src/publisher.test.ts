@@ -102,8 +102,23 @@ function makeDb(updates: CaptureEntry[], opts: DbMockOpts = {}) {
   builder.limit.mockImplementation(() => builder);
 
   builder.maybeSingle.mockImplementation(async () => {
-    // Checkpoint lookup of an existing listings row by design_package_id.
-    return { data: opts.existingListing ?? null, error: null };
+    // loadListingState() loads the row whose id was passed into publishOne.
+    // Default to the just-claimed shape (pending, no copy, no printify_product_id)
+    // so the happy-path tests don't have to spell it out. Tests that exercise
+    // resume paths (existing copy, existing printify product, prior errors)
+    // override via opts.existingListing.
+    const defaultRow = {
+      id: LISTING_ID,
+      status: "pending",
+      title: null,
+      description: null,
+      tags: null,
+      price_usd: 24.99,
+      printify_product_id: null,
+      is_active: false,
+      retry_count: 0,
+    };
+    return { data: opts.existingListing ?? defaultRow, error: null };
   });
 
   builder.single.mockImplementation(async () => {
@@ -121,7 +136,18 @@ function makeDb(updates: CaptureEntry[], opts: DbMockOpts = {}) {
     }
     if (currentSelectCols.includes("design_packages")) {
       return {
-        data: { design_packages: { mockup_urls: [], mockups_from_actual_design: true } },
+        data: {
+          design_packages: {
+            mockup_urls: [],
+            mockups_from_actual_design: true,
+            // resumePublish needs these to build the inventory PUT payload.
+            // Default to a real Gildan 64000 + one variant so happy-path
+            // tests don't need to think about it; specific tests can override
+            // by widening this stub if they need to.
+            printify_blueprint_id: 145,
+            printify_variants: [{ id: 38163, values: ["s", "black"] }],
+          },
+        },
         error: null,
       };
     }
@@ -180,6 +206,7 @@ describe("publishOne", () => {
         createDraftListing,
         uploadListingImage: vi.fn().mockResolvedValue(undefined),
         activateListing: vi.fn().mockResolvedValue(undefined),
+        updateListingInventory: vi.fn().mockResolvedValue(undefined),
         getTaxonomyId: vi.fn().mockResolvedValue(68887043),
         getSettings: vi.fn().mockReturnValue({
           ETSY_SHIPPING_PROFILE_ID: 99,
@@ -209,7 +236,7 @@ describe("publishOne", () => {
     const db = makeDb(updates);
 
     const { publishOne } = await import("./publisher.js");
-    await publishOne(db, design, brief);
+    await publishOne(db, design, brief, LISTING_ID);
 
     const listingUpdatesWithProductId = updates.filter(
       (u) => u.table === "listings" && "printify_product_id" in u.data
@@ -239,7 +266,7 @@ describe("publishOne", () => {
     const updates: CaptureEntry[] = [];
     const db = makeDb(updates);
     const { publishOne } = await import("./publisher.js");
-    await publishOne(db, design, brief);
+    await publishOne(db, design, brief, LISTING_ID);
 
     // Etsy is NEVER contacted from publishOne. The Etsy publish happens later
     // in resumePublish, after the dashboard flips status to pending_publish.
@@ -307,7 +334,7 @@ describe("publishOne", () => {
     const { publishOne } = await import("./publisher.js");
     const { ComplianceError } = await import("./compliance.js");
 
-    await expect(publishOne(db, design, brief)).rejects.toThrow(ComplianceError);
+    await expect(publishOne(db, design, brief, LISTING_ID)).rejects.toThrow(ComplianceError);
   });
 
   it("rejects publish when description is missing the AI disclosure (compliance rule 2)", async () => {
@@ -325,7 +352,7 @@ describe("publishOne", () => {
     const { publishOne } = await import("./publisher.js");
     const { ComplianceError } = await import("./compliance.js");
 
-    await expect(publishOne(db, design, brief)).rejects.toThrow(ComplianceError);
+    await expect(publishOne(db, design, brief, LISTING_ID)).rejects.toThrow(ComplianceError);
   });
 
   it("rejects publish when copy contains an external URL (compliance rule 6)", async () => {
@@ -343,7 +370,7 @@ describe("publishOne", () => {
     const { publishOne } = await import("./publisher.js");
     const { ComplianceError } = await import("./compliance.js");
 
-    await expect(publishOne(db, design, brief)).rejects.toThrow(ComplianceError);
+    await expect(publishOne(db, design, brief, LISTING_ID)).rejects.toThrow(ComplianceError);
   });
 
   it("forwards printify_print_provider_id from the design row to createHiddenProduct", async () => {
@@ -359,7 +386,7 @@ describe("publishOne", () => {
 
     const db = makeDb([]);
     const { publishOne } = await import("./publisher.js");
-    await publishOne(db, design, brief);
+    await publishOne(db, design, brief, LISTING_ID);
 
     expect(createHiddenProduct).toHaveBeenCalledTimes(1);
     const arg = createHiddenProduct.mock.calls[0]?.[0] as {
@@ -389,7 +416,7 @@ describe("publishOne", () => {
     };
     const db = makeDb([]);
     const { publishOne, PublisherError } = await import("./publisher.js");
-    await expect(publishOne(db, designWithoutProvider, brief)).rejects.toThrow(PublisherError);
+    await expect(publishOne(db, designWithoutProvider, brief, LISTING_ID)).rejects.toThrow(PublisherError);
   });
 
   it("rejects publish when ETSY_PRODUCTION_PARTNER_ID is missing (compliance rule 1)", async () => {
@@ -407,7 +434,7 @@ describe("publishOne", () => {
     const { publishOne } = await import("./publisher.js");
     const { ComplianceError } = await import("./compliance.js");
 
-    await expect(publishOne(db, design, brief)).rejects.toThrow(ComplianceError);
+    await expect(publishOne(db, design, brief, LISTING_ID)).rejects.toThrow(ComplianceError);
   });
 
   it("resumePublish writes status='publishing' before Etsy publish (bug #4 checkpoint)", async () => {
@@ -459,7 +486,7 @@ describe("publishOne", () => {
     return { createHiddenProduct };
   }
 
-  it("resets design_packages to 'done' on retryable failure (bug #1)", async () => {
+  it("on retryable failure: writes only to listings; never touches design.status (pipeline contract)", async () => {
     vi.doMock("./copywriter.js", () => ({
       writeCopy: vi.fn().mockResolvedValue({
         title: COMPLIANT_TITLE,
@@ -474,16 +501,31 @@ describe("publishOne", () => {
     const db = makeDb(updates, { retryCount: 0 });
 
     const { publishOne } = await import("./publisher.js");
-    await expect(publishOne(db, design, brief)).rejects.toThrow();
+    await expect(publishOne(db, design, brief, LISTING_ID)).rejects.toThrow();
 
-    const dpStatusWrites = updates
-      .filter((u) => u.table === "design_packages" && "status" in u.data)
-      .map((u) => u.data.status);
-    expect(dpStatusWrites).toContain("done");
-    expect(dpStatusWrites).not.toContain("processing");
+    // After migration 046, design.status is OWNED BY DESIGN. Listing must
+    // never write status / error_message — those columns belong to the
+    // upstream agent. Listing's failure stays on the listings row.
+    const dpStatusWrites = updates.filter(
+      (u) => u.table === "design_packages" && "status" in u.data
+    );
+    expect(dpStatusWrites).toEqual([]);
+
+    const dpErrorWrites = updates.filter(
+      (u) => u.table === "design_packages" && "error_message" in u.data
+    );
+    expect(dpErrorWrites).toEqual([]);
+
+    const listingRetryWrite = updates.find(
+      (u) =>
+        u.table === "listings" &&
+        u.data["status"] === "pending" &&
+        "retry_count" in u.data
+    );
+    expect(listingRetryWrite).toBeDefined();
   });
 
-  it("sets design_packages to 'error' on terminal failure (retry >= 3)", async () => {
+  it("on terminal failure: error lives on listings; design always lands at 'done' (pipeline contract)", async () => {
     vi.doMock("./copywriter.js", () => ({
       writeCopy: vi.fn().mockResolvedValue({
         title: COMPLIANT_TITLE,
@@ -498,16 +540,25 @@ describe("publishOne", () => {
     const db = makeDb(updates, { retryCount: 2 }); // current retry_count=2; +1 = 3 → terminal
 
     const { publishOne } = await import("./publisher.js");
-    await expect(publishOne(db, design, brief)).rejects.toThrow();
+    await expect(publishOne(db, design, brief, LISTING_ID)).rejects.toThrow();
 
-    const dpStatusWrites = updates
-      .filter((u) => u.table === "design_packages" && "status" in u.data)
-      .map((u) => u.data.status);
-    expect(dpStatusWrites).toContain("error");
+    // Pipeline contract: listing failures NEVER write to design.status
+    // or design.error_message — those columns are owned by Design only.
+    // Listing's terminal error lives entirely on the listings row.
+    const dpStatusWrites = updates.filter(
+      (u) => u.table === "design_packages" && "status" in u.data
+    );
+    expect(dpStatusWrites).toEqual([]);
 
+    const dpErrorMessageWrites = updates.filter(
+      (u) => u.table === "design_packages" && "error_message" in u.data
+    );
+    expect(dpErrorMessageWrites).toEqual([]);
+
+    // The listings row carries the terminal-failure state.
     const listingStatusWrites = updates
       .filter((u) => u.table === "listings" && "status" in u.data && "retry_count" in u.data)
-      .map((u) => u.data.status);
+      .map((u) => u.data["status"]);
     expect(listingStatusWrites).toContain("error");
   });
 
@@ -526,7 +577,7 @@ describe("publishOne", () => {
     const db = makeDb(updates, { retryCountReadError: "db connection lost" });
 
     const { publishOne } = await import("./publisher.js");
-    await expect(publishOne(db, design, brief)).rejects.toThrow();
+    await expect(publishOne(db, design, brief, LISTING_ID)).rejects.toThrow();
 
     const listingTerminalWrite = updates.find(
       (u) => u.table === "listings" && u.data.status === "error" && "retry_count" in u.data
@@ -538,10 +589,11 @@ describe("publishOne", () => {
       "retry_count read failed"
     );
 
-    const dpTerminalWrite = updates.find(
-      (u) => u.table === "design_packages" && u.data.status === "error"
-    );
-    expect(dpTerminalWrite).toBeDefined();
+    // Pipeline contract: even when the retry-count read fails and we force
+    // a terminal listing failure, design.status / .error_message must NOT
+    // be written. Design's columns are owned by Design only.
+    const dpWrites = updates.filter((u) => u.table === "design_packages" && "status" in u.data);
+    expect(dpWrites).toEqual([]);
   });
 
   it("resumes from an existing listings row and skips Printify product creation (bug #2)", async () => {
@@ -575,7 +627,7 @@ describe("publishOne", () => {
     };
 
     const { publishOne } = await import("./publisher.js");
-    await publishOne(db, designWithMockups, brief);
+    await publishOne(db, designWithMockups, brief, LISTING_ID);
 
     expect(writeCopy).not.toHaveBeenCalled();
     expect(createHiddenProduct).not.toHaveBeenCalled();
@@ -685,6 +737,7 @@ describe("publishOne", () => {
         createDraftListing,
         uploadListingImage: vi.fn().mockResolvedValue(undefined),
         activateListing: vi.fn().mockResolvedValue(undefined),
+        updateListingInventory: vi.fn().mockResolvedValue(undefined),
         getTaxonomyId: vi.fn().mockResolvedValue(68887043),
         getSettings: vi.fn(() => ({
           ETSY_SHIPPING_PROFILE_ID: 99,
@@ -740,6 +793,7 @@ describe("publishOne", () => {
         createDraftListing,
         uploadListingImage: vi.fn().mockResolvedValue(undefined),
         activateListing: vi.fn().mockResolvedValue(undefined),
+        updateListingInventory: vi.fn().mockResolvedValue(undefined),
         getTaxonomyId: vi.fn().mockResolvedValue(68887043),
         getSettings: vi.fn().mockReturnValue({
           ETSY_SHIPPING_PROFILE_ID: 99,
@@ -770,7 +824,7 @@ describe("publishOne", () => {
     const db = makeDb([], { retryCount: 2 });
 
     const { publishOne } = await import("./publisher.js");
-    await expect(publishOne(db, design, brief)).rejects.toThrow();
+    await expect(publishOne(db, design, brief, LISTING_ID)).rejects.toThrow();
 
     expect(notifySlack).toHaveBeenCalledTimes(1);
     const [message, opts] = notifySlack.mock.calls[0] as [string, { severity?: string }];
@@ -794,7 +848,7 @@ describe("publishOne", () => {
     const db = makeDb([], { retryCount: 0 });
 
     const { publishOne } = await import("./publisher.js");
-    await expect(publishOne(db, design, brief)).rejects.toThrow();
+    await expect(publishOne(db, design, brief, LISTING_ID)).rejects.toThrow();
 
     expect(notifySlack).not.toHaveBeenCalled();
   });
@@ -822,6 +876,7 @@ describe("publishOne", () => {
           title: COMPLIANT_TITLE,
         }),
         uploadListingImage: vi.fn().mockResolvedValue(undefined),
+        updateListingInventory: vi.fn().mockResolvedValue(undefined),
         activateListing: vi.fn().mockRejectedValue(new Error("etsy 500")),
         getTaxonomyId: vi.fn().mockResolvedValue(68887043),
         getSettings: vi.fn().mockReturnValue({
@@ -885,6 +940,6 @@ describe("publishOne", () => {
     });
 
     const { publishOne, PublisherError } = await import("./publisher.js");
-    await expect(publishOne(db, design, brief)).rejects.toThrow(PublisherError);
+    await expect(publishOne(db, design, brief, LISTING_ID)).rejects.toThrow(PublisherError);
   });
 });

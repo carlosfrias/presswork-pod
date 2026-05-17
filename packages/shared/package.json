@@ -25,6 +25,10 @@
       "import": "./dist/types.js",
       "types": "./src/types.ts"
     },
+    "./constants": {
+      "import": "./dist/constants.js",
+      "types": "./src/constants.ts"
+    },
     "./etsy-tokens": {
       "import": "./dist/etsy-tokens.js",
       "types": "./src/etsy-tokens.ts"
@@ -38,9 +42,11 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",
+    "@types/ws": "^8.18.1",
     "async-retry": "^1.3.3",
     "bottleneck": "^2.19.5",
     "pino": "^9.0.0",
+    "ws": "^8.20.1",
     "zod": "^3.0.0"
   },
   "devDependencies": {

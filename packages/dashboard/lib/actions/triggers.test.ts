@@ -74,12 +74,44 @@ describe("getPendingWorkCount", () => {
     expect(n).toBe(4);
   });
 
-  it("returns count of design_packages at status='approved' for the listing agent", async () => {
-    const { mod } = await loadModule({ design_packages: { count: 2 } });
+  it("listing count = approved-without-listing + listings at status='pending'", async () => {
+    // Two approved designs, one of them already linked from a listings row.
+    // One pending listings row. Expected: 1 unclaimed + 1 pending = 2.
+    const { mod } = await loadModule({
+      design_packages: {
+        rows: [{ id: "design-A" }, { id: "design-B" }],
+      },
+      listings: {
+        rows: [{ design_package_id: "design-A" }],
+        count: 1, // pending listings count for the second listings query
+      },
+    });
 
     const n = await mod.getPendingWorkCount("listing");
 
     expect(n).toBe(2);
+  });
+
+  it("listing count = 0 when every approved design already has a listings row and no pending listings", async () => {
+    // Mirrors the user-reported "Run Listing says 15 but there's nothing to do"
+    // bug: under the old query this returned 15 because designs stay at
+    // 'approved' for life now. New query returns 0 since all of them are
+    // already linked.
+    const { mod } = await loadModule({
+      design_packages: {
+        rows: [{ id: "design-A" }, { id: "design-B" }, { id: "design-C" }],
+      },
+      listings: {
+        rows: [
+          { design_package_id: "design-A" },
+          { design_package_id: "design-B" },
+          { design_package_id: "design-C" },
+        ],
+        count: 0,
+      },
+    });
+
+    expect(await mod.getPendingWorkCount("listing")).toBe(0);
   });
 
   it("returns 0 for scout (no upstream queue)", async () => {
@@ -87,6 +119,71 @@ describe("getPendingWorkCount", () => {
 
     expect(await mod.getPendingWorkCount("scout")).toBe(0);
     expect(await mod.getPendingWorkCount("ledger")).toBe(0);
+  });
+});
+
+describe("AGENT_COMMANDS sanity", () => {
+  // Catches the class of bug where the spawn args reference an npm script that
+  // doesn't exist in the agent's package.json (e.g. "dev" when only "start" is
+  // defined). Failure mode without this test: silent at build time, surfaces
+  // as a "Spawn failed — see agent_runs for details" red toast at runtime.
+  it("references npm scripts that actually exist for each agent's package.json", async () => {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const repoRoot = path.resolve(process.cwd(), "..", "..");
+    const { AGENT_COMMANDS } = await import("./triggers.config");
+
+    for (const [agent, cmd] of Object.entries(AGENT_COMMANDS)) {
+      if (!cmd) continue;
+      if (cmd.bin !== "npm") continue;
+
+      // Args shape: ["run", "--workspace", "packages/<name>", "<script>"]
+      const runIdx = cmd.args.indexOf("run");
+      const wsIdx = cmd.args.indexOf("--workspace");
+      expect(runIdx, `${agent}: missing 'run' in args`).toBeGreaterThanOrEqual(0);
+      expect(wsIdx, `${agent}: missing '--workspace' in args`).toBeGreaterThanOrEqual(0);
+
+      const workspacePath = cmd.args[wsIdx + 1];
+      const scriptName = cmd.args[cmd.args.length - 1];
+      expect(workspacePath, `${agent}: missing workspace path`).toBeTruthy();
+      expect(scriptName, `${agent}: missing script name`).toBeTruthy();
+
+      const pkgJsonPath = path.join(repoRoot, workspacePath!, "package.json");
+      const pkgRaw = await fs.readFile(pkgJsonPath, "utf8");
+      const pkg = JSON.parse(pkgRaw) as { scripts?: Record<string, string> };
+      const scripts = pkg.scripts ?? {};
+
+      expect(
+        scripts[scriptName!],
+        `${agent}: ${workspacePath}/package.json has no script "${scriptName}". ` +
+          `Available: ${Object.keys(scripts).join(", ") || "(none)"}.`,
+      ).toBeDefined();
+    }
+  });
+
+  it("references existing Python module entrypoints for VENV_PYTHON agents", async () => {
+    const fs = await import("node:fs/promises");
+    const path = await import("node:path");
+    const repoRoot = path.resolve(process.cwd(), "..", "..");
+    const { AGENT_COMMANDS } = await import("./triggers.config");
+
+    for (const [agent, cmd] of Object.entries(AGENT_COMMANDS)) {
+      if (!cmd) continue;
+      if (cmd.bin === "npm") continue;
+      // Python args shape: ["-m", "packages.<name>.main"]
+      const mIdx = cmd.args.indexOf("-m");
+      if (mIdx < 0) continue;
+      const moduleSpec = cmd.args[mIdx + 1];
+      expect(moduleSpec, `${agent}: missing module after -m`).toBeTruthy();
+
+      const filePath = path.join(repoRoot, `${moduleSpec!.replaceAll(".", "/")}.py`);
+      // Resolve via stat — throws if the file doesn't exist, with the agent
+      // and resolved path included for actionable test failure output.
+      await expect(
+        fs.stat(filePath),
+        `${agent}: expected module file at ${filePath}`,
+      ).resolves.toBeDefined();
+    }
   });
 });
 

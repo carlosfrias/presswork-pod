@@ -1,6 +1,7 @@
 import type { Db } from "./db.js";
 import { getSettings } from "./config.js";
 import { getEtsyTokens, setEtsyTokens } from "./etsy-tokens.js";
+import { isMockMode } from "./etsy-mock.js";
 import { notifySlack } from "./notifier.js";
 
 export class EtsyAuthError extends Error {
@@ -12,6 +13,11 @@ export class EtsyAuthError extends Error {
 
 const REFRESH_URL = "https://api.etsy.com/v3/public/oauth/token";
 const EXPIRY_BUFFER_SEC = 60;
+
+// Stable mock token surfaced to every Etsy call when ETSY_MOCK_MODE=true.
+// Format mirrors a real Etsy access token (prefix + opaque body) so anything
+// downstream that pattern-matches the value keeps working.
+const MOCK_ACCESS_TOKEN = "mock-access-token-aaaaaaaaaaaaaaaaaaaaaaaa";
 
 // invalid_grant means Etsy considers the refresh token dead — manual
 // re-authorization is required (regenerate via OAuth, update env, redeploy).
@@ -26,6 +32,13 @@ let _lastInvalidGrantAlertAt = 0;
 let pendingRefresh: Promise<string> | null = null;
 
 export async function getValidAccessToken(db: Db): Promise<string> {
+  // Mock mode: skip the DB read AND the refresh POST entirely. We never want
+  // to write rotating mock tokens into the real config table, and we never
+  // want a missing tokens row to block a mock-mode dry run.
+  if (isMockMode()) {
+    return MOCK_ACCESS_TOKEN;
+  }
+
   const tokens = await getEtsyTokens(db);
   const expiresAt = new Date(tokens.expiresAt).getTime();
   const nowMs = Date.now();

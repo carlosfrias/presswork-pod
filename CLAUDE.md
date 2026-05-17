@@ -130,10 +130,13 @@ Polls every 15 min for `design_packages.status='done'`.
 5. `validateCopyCompliance`: AI disclosure verbatim, no forbidden terms, no external URLs/handles/off-platform phrasing.
 6. Create Printify product (`is_visible=false`) using `image_url` + blueprint/variant IDs. Read returned mockup URLs → write to `design_packages.mockup_urls` AND set `mockups_from_actual_design=true` in the same write.
 7. Always pause at `needs_review`. Owner approves on the dashboard → status flips to `pending_publish`; the next listing run picks the row up and drives the Etsy publish via `resumePublish` / `executeEtsyPublish`. No auto-publish path.
-8. On publish (`executeEtsyPublish`): re-run full compliance gate (defense-in-depth). Create Etsy draft with `production_partner_ids: [ETSY_PRODUCTION_PARTNER_ID]`, `who_made:"i_did"`, `when_made:"made_to_order"`, `is_supply:false`.
-9. Upload Printify mockups to Etsy listing. PATCH to `active`. Flip Printify `is_visible=true`. Write `etsy_listing_id`, `is_active=true`.
+8. On publish (`executeEtsyPublish`): re-run full compliance gate (defense-in-depth). Create Etsy draft with `production_partner_ids: [ETSY_PRODUCTION_PARTNER_ID]`, `who_made:"i_did"`, `when_made:"made_to_order"`, `is_supply:false`, plus blueprint-keyed `materials` and `processing_min/max`.
+9. PUT `/v3/application/listings/{id}/inventory` with one Etsy product per Printify variant (size × color, custom-properties path) so buyers can pick a size on Etsy. Mapping in `packages/shared/src/etsy-inventory.ts`.
+10. Upload Printify mockups to Etsy listing — each call carries an `alt_text` derived from the title. PATCH to `active`. Flip Printify `is_visible=true`. Write `etsy_listing_id`, `is_active=true`.
 
 Etsy API notes: OAuth 2.0 (1-hour token expiry — refresh helper required); `taxonomy_id` lookup table per niche; one reusable `shipping_profile_id`.
+
+**Mock mode (Etsy bridge).** Set `ETSY_MOCK_MODE=true` to short-circuit every Etsy v3 call (token refresh, taxonomy, create-draft, image upload, inventory PUT, activate) and return canned fixtures from `packages/shared/src/etsy-mock.ts`. The full publish pipeline runs end-to-end against real Supabase + real Printify with no Etsy credentials needed. Flip to `false` (and rotate the four OAuth fields off the literal `"mock"` placeholder, which `config.ts` rejects as a safety check) the moment real creds land. The dashboard's listing-detail page renders an "Etsy payload preview" panel showing exactly what each call would POST/PUT.
 
 ### Agent 4 — Ledger (`packages/ledger/`)
 Two crons: receipt polling (every 30 min) and a daily digest. **Metrics-only — never calls Printify.** Order fulfillment is handled by Etsy's native Printify integration outside this codebase.

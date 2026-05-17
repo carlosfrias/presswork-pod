@@ -60,7 +60,7 @@ export const STYLE_OPTIONS: readonly StyleOption[] = [
     label: "Screen Print",
     blurb: "Flat color fills, bold black outlines, no gradients.",
     directive:
-      "Render as a hand-pulled screen print. Two to four flat solid color fills with NO gradients, NO airbrush, NO soft shading. Bold confident black outlines on every shape — varied line weight permitted, but every contour is decisively drawn. Strong silhouette that reads at six inches across. Halftone dot texture allowed for limited tonal depth, but the dominant treatment is flat color separation. Aesthetic register: 1990s indie band tour poster, classic Aaron Draplin / Mike Perry territory. Negative space is plain background.",
+      "Render as a hand-pulled screen print. Two to four flat solid color fills with NO gradients, NO airbrush, NO soft shading. Bold confident black outlines on every shape — varied line weight permitted, but every contour is decisively drawn. Strong silhouette that reads at full-chest print scale, ten to twelve inches across. Halftone dot texture allowed for limited tonal depth, but the dominant treatment is flat color separation. Aesthetic register: 1990s indie band tour poster, classic Aaron Draplin / Mike Perry territory. Negative space is plain background.",
   },
   {
     id: "woodblock",

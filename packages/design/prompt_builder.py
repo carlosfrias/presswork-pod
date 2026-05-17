@@ -381,16 +381,18 @@ def _subject_already_in_prompt(custom: str) -> bool:
     return any(hint in lowered for hint in SUBJECT_HINTS)
 
 
-# Print-readiness clause: enforce a strong silhouette that survives at print
-# size. The image models default to compositions optimized for screen viewing
-# (fine details, low-contrast accents) which lose legibility on apparel.
+# Print-readiness clause: enforce a strong silhouette that survives at full-chest
+# print scale. The image models default to compositions optimized for screen
+# viewing (fine details, low-contrast accents) which lose legibility on apparel.
 # Pattern lifted from the winning approved designs (2026-05-14 audit) — every
-# strong winner either had this language inline or implicitly satisfied it
-# via thick outlines + bold shapes. Making it an explicit auto-append surfaces
-# the constraint to the model when the operator didn't think to.
+# strong winner either had this language inline or implicitly satisfied it via
+# thick outlines + bold shapes. Making it an explicit auto-append surfaces the
+# constraint to the model when the operator didn't think to.
+# Full-chest print area on Gildan 64000: up to 14"×16". Targeting 10–12" width
+# as the legibility anchor — designs must hold up at that scale, not pocket scale.
 READABILITY_CLAUSE = (
-    " Strong silhouette that reads at six inches across — shapes large enough "
-    "and contrast high enough that the design is legible at chest-pocket scale."
+    " Strong silhouette that reads at full-chest print scale — shapes large and bold "
+    "enough and contrast high enough that the design is legible at ten to twelve inches across."
 )
 
 # Operator-language signals that they've already addressed print-size
@@ -398,10 +400,10 @@ READABILITY_CLAUSE = (
 # "strong silhouette" alone is a common style cue in screen-print briefs;
 # trusting the operator's wording is safer than double-stamping.
 READABILITY_HINTS = (
-    "reads at six inches",
+    "reads at full-chest",
+    "ten to twelve inches",
     "reads at chest",
     "legible at",
-    "six inches across",
     "strong silhouette",
     "chest-pocket scale",
 )

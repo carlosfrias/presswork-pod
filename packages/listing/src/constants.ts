@@ -48,6 +48,26 @@ const PRINTIFY_BLUEPRINT_PROVIDERS: Record<number, number> = {
   145: 3,
 };
 
+// Blueprint metadata (materials, processing-day windows, variation axes,
+// per-variant quantity) lives in @presswork/shared/etsy-blueprints so the
+// dashboard's payload-preview helper can use the same data without
+// importing the listing CLI package. Re-exported here for back-compat.
+export {
+  BLUEPRINT_MATERIALS,
+  BLUEPRINT_PROCESSING_DAYS,
+  BLUEPRINT_VARIATION_AXES,
+  POD_VARIANT_QUANTITY,
+  blueprintMaterials,
+  blueprintProcessingDays,
+  blueprintVariationAxes,
+} from "@presswork/shared";
+
+// Dynamic Mockups per-blueprint template registry lives in @presswork/shared
+// so the dashboard's "Generate Dynamic Mockups" server action can use it
+// without depending on the listing CLI package. Re-exported here for
+// back-compat / locality with other blueprint constants.
+export { dynamicMockupsTemplate } from "@presswork/shared";
+
 export function assertBlueprintSupported(
   blueprintId: number,
   printProviderId: number

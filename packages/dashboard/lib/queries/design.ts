@@ -96,7 +96,7 @@ export async function getDesignReviewQueue(): Promise<DesignReviewItem[]> {
        trend_briefs:trend_briefs!design_packages_trend_brief_id_fkey(id, niche, color_palette, claude_analysis, image_model, background_removal_mode)`,
     )
     .eq("status", "needs_review")
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: false });
   if (error || !data) {
     console.error("getDesignReviewQueue failed", error);
     return [];
@@ -128,18 +128,92 @@ export async function getDesignReviewQueue(): Promise<DesignReviewItem[]> {
   }));
 }
 
-export async function getRecentDesigns(limit = 24): Promise<DesignPackageRow[]> {
+export async function getTouchUpQueue(): Promise<DesignReviewItem[]> {
   const db = serviceClient();
   const { data, error } = await db
     .from("design_packages")
-    .select("*")
-    .order("created_at", { ascending: false })
-    .limit(limit);
+    .select(
+      `*,
+       trend_briefs:trend_briefs!design_packages_trend_brief_id_fkey(id, niche, color_palette, claude_analysis, image_model, background_removal_mode)`,
+    )
+    .eq("status", "touch_up")
+    .order("created_at", { ascending: false });
+  if (error || !data) {
+    console.error("getTouchUpQueue failed", error);
+    return [];
+  }
+  type Row = DesignPackageRow & {
+    trend_briefs:
+      | (Pick<TrendBriefRow, "id" | "niche" | "color_palette"> & {
+          claude_analysis: unknown;
+          image_model: unknown;
+          background_removal_mode: unknown;
+        })
+      | null;
+  };
+  return (data as Row[]).map((r) => ({
+    ...r,
+    regen_stack: extractRegenStack(r.metadata),
+    trend_brief: r.trend_briefs
+      ? {
+          id: r.trend_briefs.id,
+          niche: r.trend_briefs.niche,
+          color_palette: r.trend_briefs.color_palette,
+          style: extractStyle(r.trend_briefs.claude_analysis),
+          image_model: narrowImageModel(r.trend_briefs.image_model),
+          background_removal_mode: narrowBgRemoval(
+            r.trend_briefs.background_removal_mode,
+          ),
+        }
+      : null,
+  }));
+}
+
+/** DesignPackageRow extended with UI-only flags derived server-side. */
+export interface DesignGridRow extends DesignPackageRow {
+  /**
+   * True when at least one non-error listing references this design.
+   * The Reopen action refuses in this state — surface it in the UI so the
+   * operator sees why instead of hitting a server-action error overlay.
+   */
+  has_blocking_listing: boolean;
+}
+
+/**
+ * Full design history. Capped at 500 for now — paginate once exceeded.
+ */
+export async function getAllDesigns(limit = 500): Promise<DesignGridRow[]> {
+  return getRecentDesigns(limit);
+}
+
+export async function getRecentDesigns(limit = 24): Promise<DesignGridRow[]> {
+  const db = serviceClient();
+  const [{ data, error }, { data: blocking }] = await Promise.all([
+    db
+      .from("design_packages")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(limit),
+    // IDs of designs that have at least one non-error listing — used to
+    // disable the Reopen button preemptively rather than surfacing a
+    // server-action error overlay after the click.
+    db
+      .from("listings")
+      .select("design_package_id")
+      .neq("status", "error")
+      .not("design_package_id", "is", null),
+  ]);
   if (error) {
     console.error("getRecentDesigns failed", error);
     return [];
   }
-  return (data ?? []) as DesignPackageRow[];
+  const blockingIds = new Set(
+    (blocking ?? []).map((r) => (r as { design_package_id: string }).design_package_id),
+  );
+  return (data ?? []).map((d) => ({
+    ...(d as DesignPackageRow),
+    has_blocking_listing: blockingIds.has((d as DesignPackageRow).id),
+  }));
 }
 
 export interface DesignSpend {

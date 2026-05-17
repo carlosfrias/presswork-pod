@@ -95,14 +95,29 @@ describe("getDesignReviewQueue", () => {
 });
 
 describe("getRecentDesigns", () => {
-  it("returns rows from design_packages", async () => {
+  it("returns rows with has_blocking_listing=false when no listings reference them", async () => {
     const rows = [{ id: "dp-1" }, { id: "dp-2" }];
-    const { mod, capture } = await loadModule({ design_packages: { rows } });
+    const { mod } = await loadModule({ design_packages: { rows } });
 
     const result = await mod.getRecentDesigns(24);
 
-    expect(result).toEqual(rows);
-    expect(capture.selects[0].table).toBe("design_packages");
+    expect(result).toEqual([
+      { id: "dp-1", has_blocking_listing: false },
+      { id: "dp-2", has_blocking_listing: false },
+    ]);
+  });
+
+  it("marks has_blocking_listing=true for designs with a non-error listing", async () => {
+    const rows = [{ id: "dp-1" }, { id: "dp-2" }];
+    const { mod } = await loadModule({
+      design_packages: { rows },
+      listings: { rows: [{ design_package_id: "dp-1", status: "needs_review" }] },
+    });
+
+    const result = await mod.getRecentDesigns(24);
+
+    expect(result.find((r) => r.id === "dp-1")?.has_blocking_listing).toBe(true);
+    expect(result.find((r) => r.id === "dp-2")?.has_blocking_listing).toBe(false);
   });
 });
 

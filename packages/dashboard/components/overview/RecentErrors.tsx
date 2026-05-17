@@ -33,7 +33,7 @@ export function RecentErrors({ errors }: { errors: RecentError[] }) {
                   {e.error_message ?? "(no error message recorded)"}
                 </p>
               </div>
-              <time className="shrink-0 text-xs text-(--text-muted) tabular">
+              <time className="shrink-0 text-xs text-(--text-muted) tabular" suppressHydrationWarning>
                 {formatRelative(e.updated_at)}
               </time>
             </div>

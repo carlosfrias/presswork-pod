@@ -10,10 +10,12 @@ import { StylePicker } from "@/components/styles/StylePicker";
 import { ImageModelPicker } from "@/components/models/ImageModelPicker";
 import { BgRemovalPicker } from "@/components/models/BgRemovalPicker";
 import { formatRelative } from "@/lib/format";
-import { withCacheBuster } from "@/lib/imageUrl";
+import { withCacheBuster, withDownload, withTransform } from "@/lib/imageUrl";
+import { ReplaceImageForm } from "@/components/design/ReplaceImageForm";
 import {
   approveDesign,
   deleteDesign,
+  flagForTouchUp,
   regenerateDesign,
   remaskDesign,
 } from "@/lib/actions/design";
@@ -38,6 +40,8 @@ type StackEntry = {
   // as `version_index` on approve/remask so the server snaps the row's
   // image_url{,_unmasked} to this entry before acting.
   serverIndex: number | null;
+  /** fal.ai cost for this specific run. Null for legacy/backfilled entries. */
+  cost_usd: number | null;
   meta: {
     prompt: string | null;
     image_model: string | null;
@@ -57,6 +61,7 @@ function buildStack(d: DesignReviewItem): StackEntry[] {
       caption: shortCaption(v),
       synthetic: false,
       serverIndex: i,
+      cost_usd: v.cost_usd ?? null,
       meta: {
         prompt: v.prompt,
         image_model: v.image_model,
@@ -78,6 +83,7 @@ function buildStack(d: DesignReviewItem): StackEntry[] {
       caption: null,
       synthetic: true,
       serverIndex: null,
+      cost_usd: null,
       meta: {
         prompt: d.fal_prompt,
         image_model: d.trend_brief?.image_model ?? null,
@@ -119,9 +125,21 @@ export function DesignReviewCard({ design: d }: { design: DesignReviewItem }) {
   // stack entry has no unmasked saved (legacy entries pre-migration 026).
   const [showMask, setShowMask] = useState(true);
   const hasUnmasked = !!active.unmasked_url;
+  // Full-res URLs — used only by the Lightbox (zoom).
   const maskedSrc = withCacheBuster(active.masked_url, d.updated_at);
   const unmaskedSrc = withCacheBuster(active.unmasked_url, d.updated_at);
   const activeImage = showMask || !hasUnmasked ? maskedSrc : unmaskedSrc;
+  // Thumbnail URLs — 560×560 WebP (2× the 280px card width) for the inline
+  // card view. Falls back to full-res when image transforms are disabled.
+  const maskedThumb = withCacheBuster(
+    withTransform(active.masked_url, { width: 560, height: 560, quality: 85, resize: "cover" }),
+    d.updated_at,
+  );
+  const unmaskedThumb = withCacheBuster(
+    withTransform(active.unmasked_url, { width: 560, height: 560, quality: 85, resize: "cover" }),
+    d.updated_at,
+  );
+  const activeThumb = showMask || !hasUnmasked ? maskedThumb : unmaskedThumb;
 
   const [zoomOpen, setZoomOpen] = useState(false);
 
@@ -231,10 +249,10 @@ export function DesignReviewCard({ design: d }: { design: DesignReviewItem }) {
               }
               className="block h-full w-full overflow-hidden rounded-(--radius) border border-(--surface-line) bg-(--surface-2) disabled:cursor-default"
             >
-              {activeImage ? (
+              {activeThumb ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  src={activeImage}
+                  src={activeThumb}
                   alt={showMask ? "Masked design" : "Pre-mask preview"}
                   className="h-full w-full object-cover"
                   loading="lazy"
@@ -336,11 +354,16 @@ export function DesignReviewCard({ design: d }: { design: DesignReviewItem }) {
               {active.caption && (
                 <div className="text-(--text-secondary)">{active.caption}</div>
               )}
-              {active.meta.created_at && (
-                <div className="tabular">
-                  {formatRelative(active.meta.created_at)}
-                </div>
-              )}
+              <div className="flex items-center gap-2 tabular">
+                {active.meta.created_at && (
+                  <span suppressHydrationWarning>{formatRelative(active.meta.created_at)}</span>
+                )}
+                {active.cost_usd != null && active.cost_usd > 0 && (
+                  <span className="text-(--text-faint)">
+                    ${active.cost_usd.toFixed(3)} this run
+                  </span>
+                )}
+              </div>
             </div>
           )}
 
@@ -352,7 +375,12 @@ export function DesignReviewCard({ design: d }: { design: DesignReviewItem }) {
               </span>
             </div>
             <div className="font-mono">{d.id.slice(0, 8)}</div>
-            <div>{formatRelative(d.created_at)}</div>
+            <div suppressHydrationWarning>{formatRelative(d.created_at)}</div>
+            {d.generation_cost_usd > 0 && (
+              <div className="mt-1 font-medium tabular text-(--text-secondary)">
+                ${d.generation_cost_usd.toFixed(3)} total
+              </div>
+            )}
           </div>
         </div>
 
@@ -524,7 +552,7 @@ export function DesignReviewCard({ design: d }: { design: DesignReviewItem }) {
               />
               <Button
                 type="submit"
-                variant="ghost"
+                variant="secondary"
                 disabled={isBusy || !active.unmasked_url}
                 title={
                   !active.unmasked_url
@@ -542,6 +570,17 @@ export function DesignReviewCard({ design: d }: { design: DesignReviewItem }) {
                 )}
               </Button>
             </form>
+            <form action={flagForTouchUp}>
+              <input type="hidden" name="id" value={d.id} />
+              <Button
+                type="submit"
+                variant="secondary"
+                disabled={isBusy}
+                title="Flag this design for manual touch-up. Download, edit locally, re-upload — then approve."
+              >
+                Send to touch-up
+              </Button>
+            </form>
             <div className="ml-auto w-44">
               <ConfirmDelete
                 action={deleteDesign}
@@ -549,6 +588,40 @@ export function DesignReviewCard({ design: d }: { design: DesignReviewItem }) {
                 helper="Removes the design row. Refused if a listing references it."
               />
             </div>
+          </div>
+
+          <div className="flex flex-col gap-2 border-t border-(--surface-line) pt-3">
+            <div className="flex flex-wrap gap-1.5 text-[11px]">
+              {active.masked_url && (
+                <a
+                  href={
+                    withDownload(
+                      active.masked_url,
+                      `design-${d.id.slice(0, 8)}-masked.png`,
+                    ) ?? active.masked_url
+                  }
+                  download={`design-${d.id.slice(0, 8)}-masked.png`}
+                  className="rounded-(--radius-sm) border border-(--surface-line) bg-(--surface-1) px-2 py-1 text-(--text-secondary) hover:border-(--accent-warm) hover:text-(--text-primary)"
+                >
+                  Download masked
+                </a>
+              )}
+              {active.unmasked_url && (
+                <a
+                  href={
+                    withDownload(
+                      active.unmasked_url,
+                      `design-${d.id.slice(0, 8)}-unmasked.png`,
+                    ) ?? active.unmasked_url
+                  }
+                  download={`design-${d.id.slice(0, 8)}-unmasked.png`}
+                  className="rounded-(--radius-sm) border border-(--surface-line) bg-(--surface-1) px-2 py-1 text-(--text-secondary) hover:border-(--accent-warm) hover:text-(--text-primary)"
+                >
+                  Download unmasked
+                </a>
+              )}
+            </div>
+            <ReplaceImageForm id={d.id} />
           </div>
         </div>
       </div>
