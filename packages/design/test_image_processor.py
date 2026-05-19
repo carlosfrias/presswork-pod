@@ -56,7 +56,9 @@ def test_input_alpha_is_preserved():
     assert result.size == OUTPUT_DIMENSIONS_PX
 
     cx, cy = result.size[0] // 2, result.size[1] // 2
-    r, g, b, a = result.getpixel((cx, cy))
+    pixel = result.getpixel((cx, cy))
+    assert isinstance(pixel, tuple), "expected RGBA tuple from RGBA image"
+    r, g, b, a = pixel
     assert (r, g, b) == (10, 200, 80)
     assert a == 255, "opaque interior alpha must survive resize/pad"
     # Corners must stay transparent.

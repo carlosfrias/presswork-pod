@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from packages.design.birefnet import remove_background_birefnet_url
 from packages.design.bria import remove_background_bria_url
@@ -173,7 +173,7 @@ def _claim_next_remask(db: Client) -> dict[str, Any] | None:
     if not resp.data:
         return None
 
-    row = resp.data[0]
+    row = cast(dict[str, Any], resp.data[0])
     design_id = row["id"]
 
     update_resp = (
@@ -231,7 +231,7 @@ def _mark_done(
         .eq("id", design_id)
         .execute()
     )
-    pre = pre_resp.data[0] if pre_resp.data else {}
+    pre = cast(dict[str, Any], pre_resp.data[0]) if pre_resp.data else {}
     next_meta = _next_metadata_for_remask(pre, image_url, bg_mode)
 
     prior_cost = float(pre.get("generation_cost_usd") or 0)
