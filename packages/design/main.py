@@ -305,6 +305,12 @@ async def run() -> None:
                 )
                 continue
 
+            # Hoist before the closure so pyright keeps the non-None narrowing
+            # (brief is TrendBrief | None at the function scope; inside a nested
+            # def pyright can no longer track the outer None-guard).
+            _brief_image_model = brief.image_model
+            _brief_image_quality = brief.image_quality
+
             # Heartbeat write: record that this row is being worked on BEFORE
             # we kick off the expensive fal pipeline. Without this, the only
             # observability for a brief mid-flight is a concurrent poller's
@@ -333,8 +339,8 @@ async def run() -> None:
                             "printify_variant_ids": GILDAN_64000_VARIANT_IDS,
                             "metadata": {
                                 "style_descriptors": image_prompt.style_descriptors,
-                                "image_model": brief.image_model,
-                                "image_quality": brief.image_quality,
+                                "image_model": _brief_image_model,
+                                "image_quality": _brief_image_quality,
                             },
                             "status": "processing",
                         }

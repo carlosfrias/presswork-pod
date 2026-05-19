@@ -23,6 +23,7 @@ this adds ~10-20s to the first Design run only.
 """
 
 import asyncio
+from typing import cast
 
 from rembg import remove as rembg_remove
 
@@ -34,4 +35,4 @@ async def remove_background_local(png_bytes: bytes) -> bytes:
     inference so other Design-agent coroutines (status writes, logging) can
     progress while the cutout runs.
     """
-    return await asyncio.to_thread(rembg_remove, png_bytes)
+    return cast(bytes, await asyncio.to_thread(rembg_remove, png_bytes))

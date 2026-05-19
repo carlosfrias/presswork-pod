@@ -7,7 +7,7 @@ export default function NotFound() {
         Listing not found
       </h1>
       <p className="mt-2 text-sm text-(--text-muted)">
-        The ID you opened either doesn't exist or has been deleted.
+        The ID you opened either doesn&apos;t exist or has been deleted.
       </p>
       <Link
         href="/listings"
