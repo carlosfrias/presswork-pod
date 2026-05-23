@@ -284,7 +284,7 @@ export function FromScoutCard({ brief, defaultImageModel }: Props) {
             disabled={isBuilding || isSending}
           />
           <span className="text-[11px] normal-case tracking-normal text-(--text-muted)">
-            Specific physical action or emotional beat. Locks the character's moment.
+            Specific physical action or emotional beat. Locks the character&apos;s moment.
           </span>
         </label>
       </div>
