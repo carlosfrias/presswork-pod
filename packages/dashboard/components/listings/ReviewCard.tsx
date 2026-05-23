@@ -7,6 +7,7 @@ import { DynamicMockupsTrigger } from "./DynamicMockupsTrigger";
 import { formatRelative, formatUsd } from "@/lib/format";
 import {
   approveListingWithCopy,
+  recreatePrintifyProduct,
   regenerateCopy,
   rejectListing,
   retryListing,
@@ -112,6 +113,19 @@ export function ReviewCard({ listing }: { listing: ListingWithDesign }) {
                 <input type="hidden" name="id" value={listing.id} />
                 <Button type="submit" variant="secondary" size="sm">
                   Regenerate copy
+                </Button>
+              </form>
+            )}
+            {!isError && (
+              <form action={recreatePrintifyProduct}>
+                <input type="hidden" name="id" value={listing.id} />
+                <Button
+                  type="submit"
+                  variant="secondary"
+                  size="sm"
+                  title="Clears printify_product_id and re-runs the Printify product creation + mockup fetch on the next Listing agent run."
+                >
+                  Recreate Printify product
                 </Button>
               </form>
             )}

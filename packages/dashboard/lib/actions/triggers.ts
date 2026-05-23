@@ -223,32 +223,39 @@ export async function getPendingWorkCount(agent: Agent): Promise<number> {
     return count ?? 0;
   }
 
-  // Listing's queue is two-part after migration 046:
-  //   1. Approved designs that don't yet have a listings row (Phase 3 in
-  //      packages/listing/src/index.ts — a fresh claim creates a listings
-  //      row).
-  //   2. Listings at status='pending' (Phase 2 — operator retries from error,
-  //      Recreate Printify product, transient publishOne failures, or fresh
-  //      claims from the previous run that haven't been processed yet).
+  // Listing's queue is three-part after migration 046:
+  //   1. Approved designs that don't yet have a listings row (Phase 3 —
+  //      a fresh claim creates the listings row).
+  //   2. Listings at status='pending' (retries, recreate Printify, etc.)
+  //   3. Listings at status='pending_publish' (operator-approved, waiting
+  //      for the agent to publish to Etsy). These are the most common
+  //      "work waiting" signal after the operator approves a listing.
   //
   // Counting just "approved designs" overstates wildly because designs now
-  // stay at 'approved' for their lifetime (they no longer transition to
-  // 'processing' / 'done' under the new pipeline contract). PostgREST has
-  // no cross-table NOT EXISTS, so we pull the two id sets and subtract:
-  // approved designs whose id is NOT in the set of design_package_ids
-  // referenced by any listings row.
-  const [approvedDesigns, linkedDesigns, pendingListings] = await Promise.all([
-    db.from("design_packages").select("id").eq("status", "approved"),
-    db
-      .from("listings")
-      .select("design_package_id")
-      .not("design_package_id", "is", null),
-    db
-      .from("listings")
-      .select("id", { count: "exact", head: true })
-      .eq("status", "pending"),
-  ]);
-  if (approvedDesigns.error || linkedDesigns.error || pendingListings.error) {
+  // stay at 'approved' for their lifetime. PostgREST has no cross-table
+  // NOT EXISTS, so we pull the two id sets and subtract.
+  const [approvedDesigns, linkedDesigns, pendingListings, pendingPublishListings] =
+    await Promise.all([
+      db.from("design_packages").select("id").eq("status", "approved"),
+      db
+        .from("listings")
+        .select("design_package_id")
+        .not("design_package_id", "is", null),
+      db
+        .from("listings")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "pending"),
+      db
+        .from("listings")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "pending_publish"),
+    ]);
+  if (
+    approvedDesigns.error ||
+    linkedDesigns.error ||
+    pendingListings.error ||
+    pendingPublishListings.error
+  ) {
     return 0;
   }
   const linkedIds = new Set(
@@ -259,5 +266,27 @@ export async function getPendingWorkCount(agent: Agent): Promise<number> {
   const unclaimedApproved = (approvedDesigns.data ?? []).filter(
     (d) => !linkedIds.has((d as { id: string }).id),
   ).length;
-  return unclaimedApproved + (pendingListings.count ?? 0);
+  return (
+    unclaimedApproved +
+    (pendingListings.count ?? 0) +
+    (pendingPublishListings.count ?? 0)
+  );
+}
+
+/**
+ * Returns true when the listing agent is actively publishing — i.e. there
+ * are listings in 'publishing' status. Used to lock the Run Listing button
+ * (no glow, disabled) independently of the Realtime-based agent_runs check
+ * in TriggerButton. This is a reliable DB-state signal that doesn't depend
+ * on the Realtime subscription being healthy.
+ */
+export async function getIsListingAgentRunning(): Promise<boolean> {
+  const email = await requireOwnerEmail();
+  if (!email) return false;
+  const db = serviceClient();
+  const { count } = await db
+    .from("listings")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "publishing");
+  return (count ?? 0) > 0;
 }

@@ -194,13 +194,15 @@ export async function getRecentDesigns(limit = 24): Promise<DesignGridRow[]> {
       .select("*")
       .order("created_at", { ascending: false })
       .limit(limit),
-    // IDs of designs that have at least one non-error listing — used to
-    // disable the Reopen button preemptively rather than surfacing a
-    // server-action error overlay after the click.
+    // IDs of designs that have a listing at needs_review or beyond — i.e. the
+    // listing agent has done meaningful work on this design. Used to lock
+    // Reopen, Regen, and Delete so the operator doesn't accidentally undo a
+    // design that's already in the listing pipeline. "pending" is excluded:
+    // the agent is merely queued and no copy/mockups exist yet.
     db
       .from("listings")
       .select("design_package_id")
-      .neq("status", "error")
+      .in("status", ["needs_review", "pending_publish", "publishing", "active"])
       .not("design_package_id", "is", null),
   ]);
   if (error) {

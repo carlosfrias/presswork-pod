@@ -17,7 +17,7 @@ import {
 } from "@/lib/queries/overview";
 import { formatNumber, formatUsd } from "@/lib/format";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 30;
 
 export default async function OverviewPage() {
   const [kpis30, daily, health, errors, flags] = await Promise.all([

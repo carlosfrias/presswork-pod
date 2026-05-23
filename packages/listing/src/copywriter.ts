@@ -56,16 +56,57 @@ them will be rejected before publishing.
    that asks buyers to purchase, contact, or follow you anywhere outside Etsy.
    No "DM us", "follow us on", "visit our website", "buy direct", etc.
 
-Write copy that is engaging and SEO-rich while staying inside these rules.`;
+Write copy that is engaging and SEO-rich while staying inside these rules.
+
+VISION INPUT
+When an image of the approved design is included in this message, use it as
+the primary source of truth for what the product looks like. Describe what you
+actually see — the subject, style, mood, and key visual details. Ground the
+title, description, and tags in the real image, not in the brief alone. The
+brief data is secondary context for niche, SEO signals, and pricing only.`;
+
+const DEFAULT_MODEL = "claude-sonnet-4-20250514";
+
+/**
+ * Rewrite a Supabase Storage object URL to the image transform endpoint so
+ * Claude receives a viewport-sized JPEG instead of the full 4500×5400 print
+ * PNG. Claude Vision doesn't need print resolution to understand composition —
+ * 1024px is more than sufficient, and the reduced payload is ~50–200× smaller.
+ *
+ * Uses `resize=contain` (not `cover`) to preserve the full design without
+ * cropping. Non-Supabase URLs (Printify CDN, external) are returned unchanged.
+ * On Supabase free tier the render endpoint returns the original file, so this
+ * degrades gracefully without errors.
+ */
+function toVisionUrl(url: string | null): string | null {
+  if (!url) return null;
+  if (!url.includes("/storage/v1/object/public/")) return url;
+  const u = new URL(url);
+  u.pathname = u.pathname.replace(
+    "/storage/v1/object/public/",
+    "/storage/v1/render/image/public/",
+  );
+  u.searchParams.set("width", "1024");
+  u.searchParams.set("quality", "85");
+  u.searchParams.set("resize", "contain");
+  return u.toString();
+}
 
 export async function writeCopy(
   brief: TrendBrief,
-  design: DesignPackage
+  design: DesignPackage,
+  options: { model?: string; imageUrl?: string | null } = {}
 ): Promise<ListingCopy> {
+  const model = options.model ?? DEFAULT_MODEL;
+  const rawImageUrl = options.imageUrl ?? design.image_url ?? null;
+  // Downscale to 1024px before sending to Claude — print PNGs are 4500×5400
+  // and Claude Vision doesn't need that resolution to read a t-shirt design.
+  const imageUrl = toVisionUrl(rawImageUrl);
+
   const { ANTHROPIC_API_KEY } = getSettings();
   const client = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 
-  const userMessage = JSON.stringify({
+  const briefPayload = JSON.stringify({
     niche: brief.niche,
     style_keywords: brief.style_keywords,
     top_tags: brief.top_tags,
@@ -75,8 +116,26 @@ export async function writeCopy(
     variant_count: design.printify_variant_ids?.length ?? 0,
   });
 
+  // When an image is available, send it first so Claude anchors on the actual
+  // approved design before reading the brief. Vision models process image-first
+  // ordering with higher fidelity to the visual than text-first.
+  // URL-source image blocks are supported by the API but the local SDK type
+  // definition lags behind — cast through the content union the same way
+  // build-prompt.ts does for reference images.
+  const userContent = (
+    imageUrl
+      ? [
+          {
+            type: "image" as const,
+            source: { type: "url" as const, url: imageUrl },
+          },
+          { type: "text" as const, text: briefPayload },
+        ]
+      : briefPayload
+  ) as Anthropic.MessageParam["content"];
+
   const response = await client.beta.promptCaching.messages.create({
-    model: "claude-sonnet-4-20250514",
+    model,
     max_tokens: 1024,
     system: [
       {
@@ -85,7 +144,7 @@ export async function writeCopy(
         cache_control: { type: "ephemeral" },
       },
     ],
-    messages: [{ role: "user", content: userMessage }],
+    messages: [{ role: "user", content: userContent }],
     betas: ["prompt-caching-2024-07-31"],
   });
 
@@ -104,7 +163,7 @@ export async function writeCopy(
       provider: "anthropic",
       operation: "copywriter",
       cost_usd: estimateAnthropicCostUsd(
-        "claude-sonnet-4-20250514",
+        model,
         usage.input_tokens ?? 0,
         usage.output_tokens ?? 0,
         usage.cache_read_input_tokens ?? 0,
@@ -112,7 +171,7 @@ export async function writeCopy(
       ),
       input_tokens: usage.input_tokens ?? null,
       output_tokens: usage.output_tokens ?? null,
-      metadata: { model: "claude-sonnet-4-20250514", niche: brief.niche },
+      metadata: { model, niche: brief.niche, vision: imageUrl != null },
     });
   }
 

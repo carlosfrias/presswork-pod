@@ -17,10 +17,17 @@ vi.mock("next/cache", () => ({
 let mockUpdateActiveListing: ReturnType<typeof vi.fn> = vi.fn();
 let mockRenderMockup: ReturnType<typeof vi.fn> = vi.fn();
 let mockDynamicMockupsTemplate: ReturnType<typeof vi.fn> = vi.fn();
+let mockDynamicMockupsTemplates: ReturnType<typeof vi.fn> = vi.fn();
 
 interface LoadOpts extends SupabaseMockOpts {}
 interface LoadShared {
-  /** Override the per-blueprint template lookup return for this test. */
+  /**
+   * Override the per-blueprint template lookup return for this test.
+   * `undefined` → both lookups return empty (singular returns undefined,
+   * plural returns []), simulating an unregistered blueprint.
+   * A single object → both lookups return it (plural wraps in a 1-element
+   * array), mimicking the common single-template registration.
+   */
   template?: { mockupUuid: string; smartObjectUuid: string } | undefined;
 }
 
@@ -32,6 +39,9 @@ async function loadModule(opts: LoadOpts, shared: LoadShared = {}) {
   mockDynamicMockupsTemplate = vi.fn(
     () => shared.template,
   ) as ReturnType<typeof vi.fn>;
+  mockDynamicMockupsTemplates = vi.fn(
+    () => (shared.template ? [shared.template] : []),
+  ) as ReturnType<typeof vi.fn>;
 
   vi.doMock("@presswork/shared", async () => {
     const actual = await vi.importActual<typeof import("@presswork/shared")>(
@@ -42,6 +52,7 @@ async function loadModule(opts: LoadOpts, shared: LoadShared = {}) {
       updateActiveListing: mockUpdateActiveListing,
       renderMockup: mockRenderMockup,
       dynamicMockupsTemplate: mockDynamicMockupsTemplate,
+      dynamicMockupsTemplates: mockDynamicMockupsTemplates,
     };
   });
   const { client, capture } = makeSupabaseMock(opts);

@@ -44,6 +44,7 @@ export type TrendBrief = z.infer<typeof TrendBriefSchema>;
 export const DesignPackageStatusSchema = z.enum([
   "pending",
   "needs_review",
+  "touch_up",
   "approved",
   "processing",
   "done",

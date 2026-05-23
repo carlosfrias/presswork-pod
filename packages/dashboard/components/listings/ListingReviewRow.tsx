@@ -5,7 +5,7 @@ import Link from "next/link";
 import { SubmitButton } from "@/components/ui/SubmitButton";
 import { CopyEditor } from "@/components/listings/CopyEditor";
 import { formatRelative, formatUsd } from "@/lib/format";
-import { approveListing, rejectListing } from "@/lib/actions/listings";
+import { approveListing, approveListingWithCopy, regenerateCopy, rejectListing } from "@/lib/actions/listings";
 import type { ListingWithDesign } from "@/lib/queries/listings";
 
 interface Props {
@@ -118,11 +118,12 @@ export function ListingReviewRow({ listing, complianceFailCount, complianceFaili
             initialPriceUsd={listing.price_usd}
             mode="needs_review"
             compact
+            approveAction={approveListingWithCopy}
           />
           <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-(--surface-line) pt-4">
-            <form action={approveListing}>
+            <form action={regenerateCopy}>
               <input type="hidden" name="id" value={listing.id} />
-              <SubmitButton size="sm" variant="primary" idleLabel="Approve" pendingLabel="Approving…" />
+              <SubmitButton size="sm" variant="secondary" idleLabel="Regenerate copy" pendingLabel="Queuing…" />
             </form>
 
             <details className="relative">

@@ -34,6 +34,9 @@ interface Props {
 export function FromScoutCard({ brief, defaultImageModel }: Props) {
   const [seed, setSeed] = useState("");
   const [referenceUrl, setReferenceUrl] = useState("");
+  const [artReference, setArtReference] = useState("");
+  const [textInDesign, setTextInDesign] = useState("");
+  const [poseAction, setPoseAction] = useState("");
   const [style, setStyle] = useState<StyleId | null>(null);
   // Image-model chip. Seeded with the global default; operator overrides per
   // Send. Persisted on the spawned child brief via the form's hidden field.
@@ -69,6 +72,9 @@ export function FromScoutCard({ brief, defaultImageModel }: Props) {
         seed,
         referenceUrl,
         style,
+        artReference || null,
+        textInDesign || null,
+        poseAction || null,
       );
       if (result.ok) {
         setDescription(result.description);
@@ -105,6 +111,9 @@ export function FromScoutCard({ brief, defaultImageModel }: Props) {
   function handleReset() {
     setSeed("");
     setReferenceUrl("");
+    setArtReference("");
+    setTextInDesign("");
+    setPoseAction("");
     setStyle(null);
     setDescription("");
     setBuildError(null);
@@ -229,6 +238,56 @@ export function FromScoutCard({ brief, defaultImageModel }: Props) {
           Direct image URLs only (.jpg / .png / .webp). On a webpage, right-click the image → &ldquo;Copy image address&rdquo;. Share links and Google/Pinterest page URLs return HTML, not image bytes, and will fail. With 1 image, Builder treats it as composition + palette anchor. With 2-3, Builder splits roles by position: image 1 = composition, image 2 = style register, image 3 = palette/mood. Your seed can override any of those.
         </span>
       </label>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <label className="flex flex-col gap-1.5 text-xs uppercase tracking-wider text-(--text-muted)">
+          Art / cultural ref
+          <input
+            type="text"
+            value={artReference}
+            onChange={(e) => setArtReference(e.target.value)}
+            maxLength={200}
+            placeholder="Andy Warhol banana · ukiyo-e woodblock · Street Fighter crouch"
+            className="h-9 rounded-(--radius-sm) border border-(--surface-line) bg-(--surface-0) px-3 text-sm text-(--text-primary) normal-case tracking-normal focus:border-(--accent-warm) focus:outline-none"
+            disabled={isBuilding || isSending}
+          />
+          <span className="text-[11px] normal-case tracking-normal text-(--text-muted)">
+            Named movement, artist, or crossover. Locks the style/composition anchor.
+          </span>
+        </label>
+
+        <label className="flex flex-col gap-1.5 text-xs uppercase tracking-wider text-(--text-muted)">
+          Text in design
+          <input
+            type="text"
+            value={textInDesign}
+            onChange={(e) => setTextInDesign(e.target.value)}
+            maxLength={100}
+            placeholder="Dam it · Let's start a Kerfuffle"
+            className="h-9 rounded-(--radius-sm) border border-(--surface-line) bg-(--surface-0) px-3 text-sm text-(--text-primary) normal-case tracking-normal focus:border-(--accent-warm) focus:outline-none"
+            disabled={isBuilding || isSending}
+          />
+          <span className="text-[11px] normal-case tracking-normal text-(--text-muted)">
+            Exact lettering to embed in the image. Verbatim — never paraphrased.
+          </span>
+        </label>
+
+        <label className="flex flex-col gap-1.5 text-xs uppercase tracking-wider text-(--text-muted)">
+          Pose / action
+          <input
+            type="text"
+            value={poseAction}
+            onChange={(e) => setPoseAction(e.target.value)}
+            maxLength={200}
+            placeholder="Raising one hand in triumph · crouched arms extended"
+            className="h-9 rounded-(--radius-sm) border border-(--surface-line) bg-(--surface-0) px-3 text-sm text-(--text-primary) normal-case tracking-normal focus:border-(--accent-warm) focus:outline-none"
+            disabled={isBuilding || isSending}
+          />
+          <span className="text-[11px] normal-case tracking-normal text-(--text-muted)">
+            Specific physical action or emotional beat. Locks the character's moment.
+          </span>
+        </label>
+      </div>
 
       <StylePicker
         value={style}

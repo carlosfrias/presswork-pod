@@ -11,7 +11,13 @@ interface FlagsRailProps {
 }
 
 const NUMERIC = new Set(["margin_warning_threshold_usd"]);
-const ENUMS: Record<string, string[]> = {};
+const ENUMS: Record<string, string[]> = {
+  copywriter_model: [
+    "claude-sonnet-4-20250514",
+    "claude-opus-4-7",
+    "claude-haiku-4-5-20251001",
+  ],
+};
 
 export async function FlagsRail({ keys, title = "Flags", emptyHint }: FlagsRailProps) {
   const flags = await getRuntimeFlags();

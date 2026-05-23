@@ -74,22 +74,26 @@ describe("getPendingWorkCount", () => {
     expect(n).toBe(4);
   });
 
-  it("listing count = approved-without-listing + listings at status='pending'", async () => {
-    // Two approved designs, one of them already linked from a listings row.
-    // One pending listings row. Expected: 1 unclaimed + 1 pending = 2.
+  it("listing count = approved-without-listing + listings at pending + pending_publish", async () => {
+    // Two approved designs, one already linked from a listings row.
+    // The supabase mock returns the same `count` for every count-mode query
+    // on a table, so both pendingListings AND pendingPublishListings get
+    // count=1. Expected: 1 unclaimed + 1 pending + 1 pending_publish = 3.
+    // Migration 046 added the pending_publish bucket so the Run Listing
+    // glow correctly accounts for approved listings waiting to publish.
     const { mod } = await loadModule({
       design_packages: {
         rows: [{ id: "design-A" }, { id: "design-B" }],
       },
       listings: {
         rows: [{ design_package_id: "design-A" }],
-        count: 1, // pending listings count for the second listings query
+        count: 1, // applied to both pending and pending_publish count queries
       },
     });
 
     const n = await mod.getPendingWorkCount("listing");
 
-    expect(n).toBe(2);
+    expect(n).toBe(3);
   });
 
   it("listing count = 0 when every approved design already has a listings row and no pending listings", async () => {

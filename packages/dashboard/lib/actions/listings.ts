@@ -19,6 +19,7 @@ import {
   updateActiveListing as updateActiveListingOnEtsy,
   deactivateEtsyListing,
   dynamicMockupsTemplate,
+  dynamicMockupsTemplates,
   renderMockup,
   DynamicMockupsApiError,
 } from "@presswork/shared";
@@ -551,22 +552,19 @@ export async function generateDynamicMockups(formData: FormData) {
     .from("listings")
     .select(
       `id, status, design_packages:design_packages!listings_design_package_id_fkey(
-        id, image_url, printify_blueprint_id
+        id, image_url, printify_blueprint_id, mockup_urls
       )`
     )
     .eq("id", id)
     .maybeSingle();
   if (!row) throw new Error("Listing not found");
 
-  // Supabase's generic typings infer the joined design_packages as an array
-  // even though our FK is a many-to-one. Runtime is a single object — same
-  // pattern used by flattenListing in lib/queries/listings.ts. Cast through
-  // unknown so TS accepts the narrower runtime shape.
   const dp = (row as unknown as {
     design_packages?: {
       id: string;
       image_url: string | null;
       printify_blueprint_id: number | null;
+      mockup_urls: string[] | null;
     } | null;
   }).design_packages;
 
@@ -578,26 +576,31 @@ export async function generateDynamicMockups(formData: FormData) {
     throw new Error("design has no printify_blueprint_id");
   }
 
-  const template = dynamicMockupsTemplate(dp.printify_blueprint_id);
-  if (!template) {
+  const templates = dynamicMockupsTemplates(dp.printify_blueprint_id);
+  if (templates.length === 0) {
     throw new Error(
       `No Dynamic Mockups template registered for blueprint ${dp.printify_blueprint_id}. ` +
         "Add one to DYNAMIC_MOCKUPS_TEMPLATES_BY_BLUEPRINT in packages/shared/src/dynamic-mockups.ts."
     );
   }
 
-  let exportPath: string;
+  // Render all registered templates in parallel — each produces one export_path.
+  let newPaths: string[];
   try {
-    exportPath = await renderMockup({
-      mockupUuid: template.mockupUuid,
-      smartObjectUuid: template.smartObjectUuid,
-      designUrl: dp.image_url,
-      options: {
-        imageFormat: "jpg",
-        imageSize: 2000,
-        label: `listing-${id}`,
-      },
-    });
+    newPaths = await Promise.all(
+      templates.map((t, i) =>
+        renderMockup({
+          mockupUuid: t.mockupUuid,
+          smartObjectUuid: t.smartObjectUuid,
+          designUrl: dp.image_url!,
+          options: {
+            imageFormat: "jpg",
+            imageSize: 2000,
+            label: `listing-${id}-t${i}`,
+          },
+        })
+      )
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     if (err instanceof DynamicMockupsApiError) {
@@ -606,14 +609,15 @@ export async function generateDynamicMockups(formData: FormData) {
     throw new Error(`Dynamic Mockups render failed: ${message}`);
   }
 
-  // Replace mockup_urls (operator chose Dynamic Mockups instead of Printify
-  // for this listing). mockups_from_actual_design stays true — the rendered
-  // image is a composite of THIS design onto a smart-object slot, so the
-  // compliance gate downstream still passes.
+  // Order: print image (imageUrl, always first in carousel) → DM renders →
+  // Printify composites. Printify URLs contain "printify.com"; everything
+  // else is treated as a DM or operator-added image. Old DM renders are
+  // replaced (not accumulated) so re-generating doesn't bloat the carousel.
+  const printifyMocks = (dp.mockup_urls ?? []).filter(u => u.includes("printify.com"));
   const { error } = await db
     .from("design_packages")
     .update({
-      mockup_urls: [exportPath],
+      mockup_urls: [...newPaths, ...printifyMocks],
       mockups_from_actual_design: true,
     })
     .eq("id", dp.id);

@@ -108,6 +108,20 @@ export function DesignGrid({ designs }: { designs: DesignGridRow[] }) {
                   />
                 </form>
                 )
+              ) : d.has_blocking_listing ? (
+                <div
+                  className="flex-1"
+                  title="A listing is in progress — reject or complete the listing before regenerating."
+                >
+                  <button
+                    type="button"
+                    disabled
+                    className="flex w-full cursor-not-allowed items-center justify-center gap-1.5 rounded-(--radius-sm) border border-(--surface-line) bg-(--surface-1) px-3 py-1.5 text-sm text-(--text-faint) opacity-60"
+                  >
+                    <LockIcon />
+                    Regenerate
+                  </button>
+                </div>
               ) : (
                 <form action={regenerateDesign} className="flex-1">
                   <input type="hidden" name="id" value={d.id} />
@@ -178,10 +192,21 @@ export function DesignGrid({ designs }: { designs: DesignGridRow[] }) {
               action={deleteDesign}
               id={d.id}
               helper="Really?"
+              locked={d.has_blocking_listing}
+              lockedTitle="A listing is in progress — reject or complete the listing before deleting."
             />
           </div>
         </li>
       ))}
     </ul>
+  );
+}
+
+function LockIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <rect x="3" y="11" width="18" height="11" rx="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
   );
 }

@@ -3,6 +3,7 @@ import { AgentRunStatus } from "@/components/triggers/AgentRunStatus";
 import { TriggerButton } from "@/components/triggers/TriggerButton";
 import {
   type Agent,
+  getIsListingAgentRunning,
   getLastAgentRun,
   getPendingWorkCount,
 } from "@/lib/actions/triggers";
@@ -23,11 +24,12 @@ const LABEL: Record<Agent, string> = {
 
 export async function AgentRunButton({ agent }: { agent: Agent }) {
   const enabled = process.env.DASHBOARD_LOCAL_TRIGGERS_ENABLED === "true";
-  // Run last-run lookup and pending count in parallel — both hit Supabase,
-  // no reason to serialize them per page render.
-  const [last, pendingCount] = await Promise.all([
+  // Run last-run lookup, pending count, and (for listing) running check in
+  // parallel — all hit Supabase, no reason to serialize.
+  const [last, pendingCount, isRunning] = await Promise.all([
     getLastAgentRun(agent),
     getPendingWorkCount(agent),
+    agent === "listing" ? getIsListingAgentRunning() : Promise.resolve(false),
   ]);
 
   return (
@@ -37,6 +39,7 @@ export async function AgentRunButton({ agent }: { agent: Agent }) {
           agent={agent}
           label={LABEL[agent]}
           pendingCount={pendingCount}
+          locked={isRunning}
         />
       ) : (
         <details className="text-xs">

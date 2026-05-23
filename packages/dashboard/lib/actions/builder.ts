@@ -7,6 +7,7 @@ import { requireOwnerEmail } from "@/lib/auth";
 import {
   buildPromptDescription,
   BuildPromptError,
+  type CreativeHooks,
   type ScoutSignals,
 } from "@/lib/builder/build-prompt";
 import { STYLE_IDS, type StyleId } from "@/lib/styles/catalog";
@@ -123,6 +124,9 @@ export async function buildPromptForBrief(
   rawSeed: string,
   rawReferenceUrls = "",
   rawStyle: string | null = null,
+  rawArtReference: string | null = null,
+  rawTextInDesign: string | null = null,
+  rawPoseAction: string | null = null,
 ): Promise<BuildResult> {
   await assertOwner();
   const parsedId = idSchema.safeParse(briefId);
@@ -164,12 +168,19 @@ export async function buildPromptForBrief(
     color_palette: brief.color_palette as string[] | null,
   };
 
+  const hooks: CreativeHooks = {
+    artReference: rawArtReference?.trim() || null,
+    textInDesign: rawTextInDesign?.trim() || null,
+    poseAction: rawPoseAction?.trim() || null,
+  };
+
   try {
     const description = await buildPromptDescription(
       parsedSeed.data,
       scout,
       parsedUrls.data,
       parseStyle(rawStyle),
+      hooks,
     );
     return { ok: true, description };
   } catch (err) {

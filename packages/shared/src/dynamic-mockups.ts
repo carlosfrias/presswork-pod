@@ -167,12 +167,31 @@ export interface DynamicMockupsTemplate {
   smartObjectUuid: string;
 }
 
-const DYNAMIC_MOCKUPS_TEMPLATES_BY_BLUEPRINT: Record<number, DynamicMockupsTemplate> = {
-  // 145: { mockupUuid: "<paste-from-Library>", smartObjectUuid: "<paste-from-Library>" },
+// Multiple templates per blueprint — the action renders ALL of them and
+// appends every result to mockup_urls so the operator sees all options in
+// the carousel. Add more entries here as you collect more mockup styles
+// for each blueprint.
+const DYNAMIC_MOCKUPS_TEMPLATES_BY_BLUEPRINT: Record<number, DynamicMockupsTemplate[]> = {
+  145: [
+    {
+      mockupUuid: "0e6cb32a-8602-49ae-937d-620b6d928744",
+      smartObjectUuid: "bf4fdfa9-2957-4a51-9c29-bc3034f3df06",
+    },
+    // Add more Gildan 64000 templates here as you find good ones:
+    // { mockupUuid: "...", smartObjectUuid: "..." },
+  ],
 };
 
+/** Returns all registered templates for a blueprint (empty array if none). */
+export function dynamicMockupsTemplates(
+  blueprintId: number
+): DynamicMockupsTemplate[] {
+  return DYNAMIC_MOCKUPS_TEMPLATES_BY_BLUEPRINT[blueprintId] ?? [];
+}
+
+/** Returns the first template for a blueprint — used for the enabled/disabled check. */
 export function dynamicMockupsTemplate(
   blueprintId: number
 ): DynamicMockupsTemplate | undefined {
-  return DYNAMIC_MOCKUPS_TEMPLATES_BY_BLUEPRINT[blueprintId];
+  return DYNAMIC_MOCKUPS_TEMPLATES_BY_BLUEPRINT[blueprintId]?.[0];
 }

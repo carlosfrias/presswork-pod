@@ -94,6 +94,34 @@ If style_lock is null, this rule is skipped and Scout signals continue to
 fill any style gap the seed didn't name (Rule 3).
 
 ══════════════════════════════════════════════════════════════════════════
+RULE 2.7 — CREATIVE HOOKS (when present, LOCKED supplemental directives)
+══════════════════════════════════════════════════════════════════════════
+When the input contains a non-null \`creative_hooks\` object, treat each
+present field as a LOCKED constraint — exactly as binding as what the
+operator named in the seed:
+
+  \`art_reference\`: A named art movement, artist, visual style, or cultural
+    crossover (e.g. "Andy Warhol banana print style", "ukiyo-e woodblock",
+    "Street Fighter Hadouken crouch pose"). This is LOCKED as the stylistic
+    or compositional anchor. Fold it into your description as specifically
+    as the example shows — name the technique, composition, palette register,
+    or cultural touchstone it implies.
+
+  \`text_in_design\`: Exact copy that must appear physically in the final
+    image as lettering or typography. This is LOCKED verbatim — do not
+    paraphrase or omit it. Specify the text and suggest a period-appropriate
+    typeface if it helps (e.g. "in a rounded 70s serif" or "in bold Gothic
+    condensed"), but the literal text is non-negotiable.
+
+  \`pose_action\`: The specific physical action, pose, or emotional beat for
+    the subject (e.g. "pouring steamed milk with focused concentration",
+    "raising one webbed hand in triumph", "crouched with arms extended in a
+    power stance"). This is LOCKED — do not substitute a different action.
+
+Omitted or null fields in creative_hooks are simply skipped; the gaps fall
+through to the seed, references, and Scout signals as usual.
+
+══════════════════════════════════════════════════════════════════════════
 RULE 3 — SCOUT SIGNALS ARE PRIORS FOR THE GAPS, NEVER OVERRIDES
 ══════════════════════════════════════════════════════════════════════════
 When you have to FILL a gap and Scout provided relevant signals, lean on
@@ -197,6 +225,17 @@ export interface ScoutSignals {
   color_palette?: string[] | null;
 }
 
+/** Optional locked supplemental directives from the operator. Each present
+ *  field is treated as authoritative as something named in the seed. */
+export interface CreativeHooks {
+  /** Named art movement, artist, or cultural crossover to anchor style/composition. */
+  artReference?: string | null;
+  /** Exact text that must appear physically as lettering in the final image. */
+  textInDesign?: string | null;
+  /** Specific physical action, pose, or emotional beat for the subject. */
+  poseAction?: string | null;
+}
+
 /**
  * Build an image description from an operator seed and (optional) Scout signals.
  *
@@ -214,6 +253,10 @@ export interface ScoutSignals {
  *                            partitions them by dimension (composition / style
  *                            / palette). Not persisted; consumed at build
  *                            time only.
+ * @param styleId             Optional style chip selection (locked style directive).
+ * @param hooks               Optional creative hooks (art reference, text in design,
+ *                            pose/action). Each present field is LOCKED — treated
+ *                            as authoritative as the operator seed.
  * @returns                   The fleshed-out image description, ready to write
  *                            to trend_briefs.image_description.
  */
@@ -222,6 +265,7 @@ export async function buildPromptDescription(
   scout: ScoutSignals | null,
   referenceImageUrls: string[] | null = null,
   styleId: StyleId | null = null,
+  hooks: CreativeHooks | null = null,
 ): Promise<string> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -253,6 +297,14 @@ export async function buildPromptDescription(
               "palette, composition — translate all of it into your output.",
           }
         : null,
+      creative_hooks:
+        hooks && (hooks.artReference || hooks.textInDesign || hooks.poseAction)
+          ? {
+              ...(hooks.artReference ? { art_reference: hooks.artReference } : {}),
+              ...(hooks.textInDesign ? { text_in_design: hooks.textInDesign } : {}),
+              ...(hooks.poseAction ? { pose_action: hooks.poseAction } : {}),
+            }
+          : null,
       scout_brief: scout
         ? {
             niche: scout.niche,

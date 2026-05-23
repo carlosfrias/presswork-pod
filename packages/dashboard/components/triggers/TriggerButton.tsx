@@ -37,9 +37,15 @@ interface Props {
   agent: Agent;
   label: string;
   pendingCount: number;
+  /**
+   * Hard-disable regardless of Realtime state. Used when a DB-state signal
+   * (e.g. listings in 'publishing') confirms the agent is already running,
+   * so the button stays locked even if the agent_runs subscription lags.
+   */
+  locked?: boolean;
 }
 
-export function TriggerButton({ agent, label, pendingCount }: Props) {
+export function TriggerButton({ agent, label, pendingCount, locked = false }: Props) {
   const runInFlight = useRunInFlight(agent);
 
   return (
@@ -48,7 +54,7 @@ export function TriggerButton({ agent, label, pendingCount }: Props) {
       <InnerButton
         label={label}
         pendingCount={pendingCount}
-        runInFlight={runInFlight}
+        runInFlight={runInFlight || locked}
       />
     </form>
   );
@@ -141,7 +147,7 @@ function InnerButton({
         type="submit"
         variant={showGlow ? "primary" : "secondary"}
         size="sm"
-        disabled={busy}
+        disabled={busy || !hasWork}
         className={cn(
           "transition-shadow",
           showGlow && "ring-2 ring-(--accent-warm) ring-offset-2 ring-offset-(--surface-0)",

@@ -10,6 +10,7 @@ import {
   getTaxonomyId,
   getLogger,
   getSettings,
+  getRuntimeFlag,
   notifySlack,
 } from "@presswork/shared";
 import { writeCopy } from "./copywriter.js";
@@ -131,7 +132,8 @@ export async function publishOne(
       log.info({ action: "resume_existing_copy", record_id: listingId, status: existing.status });
     } else {
       log.info({ action: "generate_copy", record_id: listingId, status: "started" });
-      copy = await writeCopy(brief, design);
+      const copyModel = await getRuntimeFlag("copywriter_model", "claude-sonnet-4-20250514");
+      copy = await writeCopy(brief, design, { model: copyModel });
       validateCopyCompliance(copy);
       await db
         .from("listings")
@@ -177,10 +179,17 @@ export async function publishOne(
 
       // Data writes to design_packages — Printify-derived facts about this
       // design's mockups + per-variant labels. NOT status/error_message.
+      //
+      // Preserve any non-Printify mockups (e.g. Dynamic Mockups renders) that
+      // were added before this Printify product recreation. Only Printify CDN
+      // URLs are replaced with the fresh set from this product creation.
+      const nonPrintifyMockups = (design.mockup_urls ?? []).filter(
+        (u) => !u.includes("printify.com")
+      );
       await db
         .from("design_packages")
         .update({
-          mockup_urls: result.mockupUrls,
+          mockup_urls: [...nonPrintifyMockups, ...result.mockupUrls],
           mockups_from_actual_design: true,
           printify_variants: result.variants,
         })
