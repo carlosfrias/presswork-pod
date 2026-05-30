@@ -40,7 +40,7 @@ function parseRetryAfter(header: string | null): number | null {
 }
 
 export async function etsyFetch(db: Db, path: string, init: RequestInit = {}): Promise<unknown> {
-  const { ETSY_API_KEY } = getSettings();
+  const { ETSY_API_KEY, ETSY_API_SECRET } = getSettings();
 
   // Mock mode: still rate-limit to preserve realistic timing (and let the
   // limiter's bookkeeping continue to track mock calls), but skip the network
@@ -62,7 +62,11 @@ export async function etsyFetch(db: Db, path: string, init: RequestInit = {}): P
           headers: {
             "Content-Type": "application/json",
             Authorization: `Bearer ${token}`,
-            "x-api-key": ETSY_API_KEY,
+            // This Etsy app requires the combined "keystring:shared_secret"
+            // form in x-api-key; the keystring alone returns
+            // "Shared secret is required in x-api-key header." OAuth (etsy-auth.ts)
+            // still uses ETSY_API_KEY alone as the client_id.
+            "x-api-key": `${ETSY_API_KEY}:${ETSY_API_SECRET}`,
             ...(init.headers as Record<string, string> | undefined),
           },
         });
@@ -201,7 +205,7 @@ async function etsyMultipartFetch(
   path: string,
   formData: FormData
 ): Promise<unknown> {
-  const { ETSY_API_KEY } = getSettings();
+  const { ETSY_API_KEY, ETSY_API_SECRET } = getSettings();
 
   // Mock mode short-circuit. Multipart calls are image uploads; the dispatcher
   // returns a canned listing-image response keyed off the path's listing_id.
@@ -217,7 +221,11 @@ async function etsyMultipartFetch(
           method: "POST",
           headers: {
             Authorization: `Bearer ${token}`,
-            "x-api-key": ETSY_API_KEY,
+            // This Etsy app requires the combined "keystring:shared_secret"
+            // form in x-api-key; the keystring alone returns
+            // "Shared secret is required in x-api-key header." OAuth (etsy-auth.ts)
+            // still uses ETSY_API_KEY alone as the client_id.
+            "x-api-key": `${ETSY_API_KEY}:${ETSY_API_SECRET}`,
           },
           body: formData,
         });

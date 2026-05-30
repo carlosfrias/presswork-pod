@@ -35,13 +35,21 @@ class EtsyClient:
         self._db = get_db()
         self._tokens: EtsyTokens = load_tokens(self._db)
         self._api_key: str = settings.etsy_api_key
+        self._api_secret: str = settings.etsy_api_secret
         # Etsy's documented limit is 10 req/sec. AsyncLimiter caps actual rate
         # (not concurrency) — the previous Semaphore(5) only limited in-flight
         # requests, allowing bursts well above the API ceiling.
         self._limiter = AsyncLimiter(10, 1)
 
     def _headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self._tokens.access_token}"}
+        # Etsy requires x-api-key on every data request. This app rejects the
+        # keystring alone ("Shared secret is required in x-api-key header.") and
+        # needs the combined "keystring:shared_secret" form. The OAuth refresh
+        # above still uses the keystring alone as client_id.
+        return {
+            "Authorization": f"Bearer {self._tokens.access_token}",
+            "x-api-key": f"{self._api_key}:{self._api_secret}",
+        }
 
     async def _refresh(self) -> None:
         # Coalesce concurrent refreshes — only one in-flight POST per process.

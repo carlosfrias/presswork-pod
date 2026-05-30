@@ -20,7 +20,7 @@ async function etsyGet(path: string, token: string): Promise<unknown> {
   const res = await fetch(`https://openapi.etsy.com/v3${path}`, {
     headers: {
       Authorization: `Bearer ${token}`,
-      "x-api-key": settings.ETSY_API_KEY,
+      "x-api-key": `${settings.ETSY_API_KEY}:${settings.ETSY_API_SECRET}`,
     },
   });
   if (!res.ok) {
@@ -35,7 +35,7 @@ async function etsyPost(path: string, token: string, body: unknown): Promise<unk
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
-      "x-api-key": settings.ETSY_API_KEY,
+      "x-api-key": `${settings.ETSY_API_KEY}:${settings.ETSY_API_SECRET}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),

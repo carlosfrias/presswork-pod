@@ -30,7 +30,7 @@ import httpx
 _REDIRECT_URI = "http://localhost:3003/oauth/redirect"
 _TOKEN_URL = "https://api.etsy.com/v3/public/oauth/token"
 _AUTH_BASE = "https://www.etsy.com/oauth/connect"
-_SCOPE = "listings_r"
+_SCOPE = "listings_r listings_w transactions_r shops_r"
 _TIMEOUT_SECS = 120
 
 
