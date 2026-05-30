@@ -12,9 +12,14 @@ const config: NextConfig = {
       bodySizeLimit: "25mb",
     },
   },
-  // The dashboard pulls types from @presswork/shared as a workspace package;
-  // tell Next to transpile it instead of treating it as a prebuilt dep.
-  transpilePackages: ["@presswork/shared"],
+  // The dashboard pulls types from @presswork/shared and @presswork/listing as
+  // workspace packages; tell Next to transpile them instead of treating them as
+  // prebuilt deps. @presswork/listing exposes resumePublish for per-listing
+  // publish from the dashboard without requiring a full agent run.
+  // @presswork/shared is consumed as prebuilt dist/*.js; @presswork/listing is
+  // transpiled from source for its types. Both must be listed so Next treats
+  // them as first-party rather than external CJS deps.
+  transpilePackages: ["@presswork/shared", "@presswork/listing"],
   images: {
     remotePatterns: [
       // fal.ai design output, Supabase Storage (design PNGs), Printify mockups

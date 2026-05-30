@@ -194,16 +194,59 @@ const fixtures: FixtureEntry[] = [
     },
   },
 
+  // Delete a single listing image (more-specific path — must come before the
+  // GET list and the POST upload fixtures so DELETE isn't swallowed by them).
+  // DELETE /application/shops/{shop_id}/listings/{listing_id}/images/{image_id}
+  // Etsy returns 204 No Content; we echo the image_id back so callers can log it.
+  {
+    name: "delete_listing_image",
+    match: ({ method, path }) =>
+      method === "DELETE" &&
+      /\/application\/shops\/[^/]+\/listings\/\d+\/images\/\d+\/?$/.test(path),
+    build: ({ path }) => {
+      const idMatch = path.match(/images\/(\d+)/);
+      const imageId = idMatch ? Number(idMatch[1]) : 0;
+      return { listing_image_id: imageId };
+    },
+  },
+
   // List a listing's images — idempotency guard for the publish/resume path.
   // GET /application/shops/{shop_id}/listings/{listing_id}/images
-  // Returns count 0 so a mock publish always uploads its full mockup set (no
-  // skip); a real retry against Etsy sees the true count and skips uploaded ranks.
+  // Returns a small populated set so the dashboard "Etsy listing images" panel
+  // has real image IDs to work with in mock mode. The count must equal
+  // results.length so getListingImageCount and getListingImages are consistent.
+  // A mock publish still re-uploads its full mockup set because the ranks here
+  // start at 10 and the publisher uploads starting from rank 1 (no overlap).
   {
     name: "list_listing_images",
     match: ({ method, path }) =>
       method === "GET" &&
       /\/application\/shops\/[^/]+\/listings\/[^/]+\/images\/?$/.test(path),
-    build: () => ({ count: 0, results: [] }),
+    build: ({ path }) => {
+      const idMatch = path.match(/listings\/(\d+)\/images/);
+      const listingId = idMatch ? Number(idMatch[1]) : 0;
+      const imageId1 = deterministicId(`img1:${listingId}`, 999_999_998) + 1;
+      const imageId2 = deterministicId(`img2:${listingId}`, 999_999_998) + 1;
+      return {
+        count: 2,
+        results: [
+          {
+            listing_image_id: imageId1,
+            rank: 1,
+            url_570xN: `https://i.etsystatic.com/mock/${imageId1}_570xN.jpg`,
+            url_fullxfull: `https://i.etsystatic.com/mock/${imageId1}_fullxfull.jpg`,
+            alt_text: "Mock design image rank 1",
+          },
+          {
+            listing_image_id: imageId2,
+            rank: 2,
+            url_570xN: `https://i.etsystatic.com/mock/${imageId2}_570xN.jpg`,
+            url_fullxfull: `https://i.etsystatic.com/mock/${imageId2}_fullxfull.jpg`,
+            alt_text: "Mock design image rank 2",
+          },
+        ],
+      };
+    },
   },
 
   // Upload listing image (multipart)

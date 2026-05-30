@@ -2,6 +2,18 @@
   "name": "@presswork/listing",
   "version": "0.1.0",
   "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./src/index.ts"
+    },
+    "./publish": {
+      "import": "./dist/publish.js",
+      "types": "./src/publish.ts"
+    }
+  },
   "scripts": {
     "build": "tsc -b",
     "start": "node --import tsx/esm src/index.ts",

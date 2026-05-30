@@ -88,6 +88,12 @@ export async function etsyFetch(db: Db, path: string, init: RequestInit = {}): P
           throw new EtsyApiError(`Etsy ${res.status}: ${body}`, res.status);
         }
 
+        // 204 No Content (e.g. DELETE) has no body — return null rather than
+        // throwing a JSON parse error.
+        if (res.status === 204 || res.headers.get("content-length") === "0") {
+          return null;
+        }
+
         return res.json();
       },
       { retries: 3, factor: 2, minTimeout: 500 }
@@ -372,9 +378,23 @@ export async function uploadListingImage(
   );
 }
 
+// Full image shape returned by GET /listings/{id}/images.
+// url_570xN is the standard display size; url_fullxfull is the original upload
+// (may be absent on older images). alt_text was added in a later API version
+// so we default to null to avoid parse failures on legacy listing images.
+export const EtsyListingImageSchema = z.object({
+  listing_image_id: z.number(),
+  rank: z.number().int(),
+  url_570xN: z.string().url(),
+  url_fullxfull: z.string().url().optional(),
+  alt_text: z.string().nullable().optional(),
+});
+
+export type EtsyListingImage = z.infer<typeof EtsyListingImageSchema>;
+
 const EtsyListingImagesResponseSchema = z.object({
   count: z.number().int().nonnegative(),
-  results: z.array(z.object({ listing_image_id: z.number(), rank: z.number().int() })),
+  results: z.array(EtsyListingImageSchema),
 });
 
 /**
@@ -390,6 +410,42 @@ export async function getListingImageCount(db: Db, listingId: number): Promise<n
     `/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/images`
   );
   return EtsyListingImagesResponseSchema.parse(data).count;
+}
+
+/**
+ * Returns all images currently attached to an Etsy listing, sorted by rank.
+ * Includes listing_image_id, rank, url_570xN, url_fullxfull, and alt_text.
+ * Used by the dashboard's "Etsy listing images" panel.
+ */
+export async function getListingImages(
+  db: Db,
+  listingId: number
+): Promise<EtsyListingImage[]> {
+  const { ETSY_SHOP_ID } = getSettings();
+  const data = await etsyFetch(
+    db,
+    `/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/images`
+  );
+  const { results } = EtsyListingImagesResponseSchema.parse(data);
+  return [...results].sort((a, b) => a.rank - b.rank);
+}
+
+/**
+ * Deletes a single image from an Etsy listing.
+ * DELETE /application/shops/{shop_id}/listings/{listing_id}/images/{image_id}
+ * Etsy returns 204 No Content on success; etsyFetch accepts that as ok.
+ */
+export async function deleteListingImage(
+  db: Db,
+  listingId: number,
+  imageId: number
+): Promise<void> {
+  const { ETSY_SHOP_ID } = getSettings();
+  await etsyFetch(
+    db,
+    `/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/images/${imageId}`,
+    { method: "DELETE" }
+  );
 }
 
 export async function activateListing(
@@ -560,7 +616,9 @@ export async function deactivateEtsyListing(db: Db, listingId: number): Promise<
 
 const EtsyOfferingSchema = z.object({
   price: z.number().positive(),
-  quantity: z.number().int().nonnegative(),
+  // Etsy rejects quantity=0 on POD listings. Use .positive() (≥1) to catch
+  // misconfigured variants before the API call fails.
+  quantity: z.number().int().positive(),
   is_enabled: z.boolean(),
 });
 

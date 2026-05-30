@@ -4,6 +4,7 @@ import { SurfaceCard } from "@/components/ui/SurfaceCard";
 import { Button } from "@/components/ui/Button";
 import { StatusBadge } from "@/components/status/StatusBadge";
 import { MockupCarousel } from "@/components/listings/MockupCarousel";
+import { EtsyImagePanel } from "@/components/listings/EtsyImagePanel";
 import { ComplianceChecks } from "@/components/listings/ComplianceChecks";
 import { EtsyPayloadPreview } from "@/components/listings/EtsyPayloadPreview";
 import { CopyEditor } from "@/components/listings/CopyEditor";
@@ -12,6 +13,7 @@ import { DynamicMockupsTrigger } from "@/components/listings/DynamicMockupsTrigg
 import { SubmitButton } from "@/components/ui/SubmitButton";
 import {
   approveListing,
+  publishListingNow,
   pushListingToEtsy,
   recreatePrintifyProduct,
   regenerateCopy,
@@ -20,6 +22,7 @@ import {
 } from "@/lib/actions/listings";
 import { getListing, type ListingWithDesign } from "@/lib/queries/listings";
 import { getEtsyPayloadPreview } from "@/lib/queries/etsy-preview";
+import { getIsListingAgentRunning } from "@/lib/actions/triggers";
 import { formatRelative, formatUsd } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -30,9 +33,12 @@ interface Params {
 
 export default async function ListingDetailPage({ params }: Params) {
   const { id } = await params;
-  const listing = await getListing(id);
+  const [listing, etsyPreview, isAgentRunning] = await Promise.all([
+    getListing(id),
+    getEtsyPayloadPreview(id),
+    getIsListingAgentRunning(),
+  ]);
   if (!listing) notFound();
-  const etsyPreview = await getEtsyPayloadPreview(id);
 
   const etsyHref = listing.etsy_listing_id
     ? `https://www.etsy.com/listing/${listing.etsy_listing_id}`
@@ -91,6 +97,15 @@ export default async function ListingDetailPage({ params }: Params) {
               />
             </div>
           </SurfaceCard>
+
+          {listing.status === "active" && listing.etsy_listing_id && (
+            <EtsyImagePanel
+              listingId={listing.id}
+              etsyListingId={listing.etsy_listing_id}
+              designImageUrl={listing.design_packages?.image_url ?? null}
+              mockupUrls={listing.design_packages?.mockup_urls ?? null}
+            />
+          )}
 
           <SurfaceCard
             title="Copy"
@@ -219,7 +234,7 @@ export default async function ListingDetailPage({ params }: Params) {
                 <form action={approveListing}>
                   <input type="hidden" name="id" value={listing.id} />
                   <Button type="submit" variant="primary" className="w-full">
-                    Approve & publish
+                    Approve
                   </Button>
                 </form>
               )}
@@ -266,6 +281,13 @@ export default async function ListingDetailPage({ params }: Params) {
               </details>
             </div>
           </SurfaceCard>
+
+          {listing.status === "pending_publish" && (
+            <PublishNowCard
+              listingId={listing.id}
+              isAgentRunning={isAgentRunning}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -321,5 +343,63 @@ function PushToEtsyForm({ listing }: { listing: ListingWithDesign }) {
         />
       </div>
     </form>
+  );
+}
+
+/**
+ * Confirmation card for per-listing publish. Shown only when status is
+ * 'pending_publish'. Uses the <details> popover pattern from the Reject card
+ * so no JS is required and the operator sees the cost warning before clicking.
+ *
+ * Disabled when the listing agent is already actively publishing (isAgentRunning),
+ * matching the Run Listing button lock so both the agent and this button can't
+ * race against the same row at the same time.
+ */
+function PublishNowCard({
+  listingId,
+  isAgentRunning,
+}: {
+  listingId: string;
+  isAgentRunning: boolean;
+}) {
+  return (
+    <SurfaceCard
+      title="Publish to Etsy"
+      subtitle={
+        isAgentRunning
+          ? "The listing agent is currently publishing — wait for it to finish before publishing individually."
+          : "Publish this listing now. Each publish charges the $0.20 Etsy listing fee."
+      }
+    >
+      {isAgentRunning ? (
+        <p className="text-xs text-(--text-muted)">
+          Locked while the listing agent is running.
+        </p>
+      ) : (
+        <details className="rounded-(--radius-sm) border border-(--surface-line) p-2 text-xs">
+          <summary className="cursor-pointer text-(--text-secondary)">
+            Publish now…
+          </summary>
+          <form
+            action={publishListingNow}
+            className="mt-2 flex flex-col gap-2"
+          >
+            <input type="hidden" name="id" value={listingId} />
+            <p className="text-xs text-(--text-muted)">
+              This will POST a new Etsy listing draft, upload mockup images, and
+              activate the listing. Etsy charges a{" "}
+              <strong className="text-(--text-primary)">$0.20 listing fee</strong>{" "}
+              per listing.
+            </p>
+            <SubmitButton
+              variant="primary"
+              size="sm"
+              idleLabel="Publish to Etsy ($0.20 listing fee)"
+              pendingLabel="Publishing…"
+            />
+          </form>
+        </details>
+      )}
+    </SurfaceCard>
   );
 }

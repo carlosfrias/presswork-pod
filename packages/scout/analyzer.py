@@ -1,4 +1,5 @@
 import json
+import re
 
 import anthropic
 import structlog
@@ -11,21 +12,24 @@ log = structlog.get_logger(__name__)
 
 
 def _strip_code_fences(text: str) -> str:
-    """Remove a Markdown ```/```json code fence Claude sometimes wraps JSON in.
+    """Extract JSON from a Markdown code fence Claude sometimes wraps it in.
 
-    The model is told to respond with raw JSON, but intermittently fences it.
-    Stripping here keeps json.loads from failing on otherwise-valid output.
+    Handles a leading prose preamble before the fence (e.g. "Here is the
+    analysis:\\n```json\\n{...}\\n```"), a plain ``` fence, or bare JSON with no
+    fence at all.  The regex searches anywhere in the response so position of the
+    fence does not matter.
     """
     stripped = text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-    # Drop the opening fence line (``` or ```json) and the closing fence.
-    if "\n" in stripped:
-        stripped = stripped.split("\n", 1)[1]
-    stripped = stripped.rstrip()
-    if stripped.endswith("```"):
-        stripped = stripped[:-3]
-    return stripped.strip()
+    # Require the closing fence on its own line (``\n```\``) rather than ``\n?```\``
+    # so a literal ``` sequence *inside* a JSON value cannot terminate the match
+    # early and truncate the payload.
+    m = re.search(r"```(?:json)?\s*\n([\s\S]*?)\n```", stripped)
+    if m:
+        # Claude was told to emit raw JSON (see SYSTEM_PROMPT); log when it
+        # disobeys so we can track how often this fallback path is exercised.
+        log.warning("scout_claude_fenced_response", action="strip_code_fences")
+        return m.group(1).strip()
+    return stripped
 
 
 # How many listings per niche send their thumbnail to Claude. Etsy already
@@ -47,7 +51,8 @@ Respond ONLY with valid JSON matching this schema:
   "price_target_usd": float,
   "color_palette": [str]    // hex or color names
 }
-Never reference specific shop names, artist names, or existing IP."""
+Never reference specific shop names, artist names, or existing IP.
+Respond with raw JSON only — do NOT wrap the output in Markdown code fences or add any commentary before or after the JSON."""
 
 VISION_SYSTEM_ADDENDUM = """
 

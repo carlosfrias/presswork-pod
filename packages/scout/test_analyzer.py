@@ -6,7 +6,7 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from packages.scout.analyzer import analyze_niche
+from packages.scout.analyzer import _strip_code_fences, analyze_niche
 from packages.shared_py.models import ClaudeAnalysis
 
 _VALID_ANALYSIS = {
@@ -86,6 +86,34 @@ async def test_fenced_json_response_is_parsed(mocker):
     result = await analyze_niche(_SAMPLE_LISTINGS)
     assert isinstance(result, ClaudeAnalysis)
     assert result.niche == "dog mom gifts"
+
+
+@pytest.mark.asyncio
+async def test_fenced_json_with_preamble_is_parsed(mocker):
+    """Prose preamble before the ```json fence must not break parsing."""
+    fenced = f"Here is the analysis:\n```json\n{json.dumps(_VALID_ANALYSIS)}\n```"
+    _mock_client(mocker, fenced)
+    result = await analyze_niche(_SAMPLE_LISTINGS)
+    assert isinstance(result, ClaudeAnalysis)
+    assert result.niche == "dog mom gifts"
+
+
+def test_strip_code_fences_preserves_inline_backticks():
+    """A literal ``` inside a JSON value must not terminate the fence early.
+
+    The closing fence must sit on its own line, so a backtick run embedded in a
+    string value is kept intact and the JSON round-trips cleanly.
+    """
+    payload = {"niche": "code humor", "note": "use ``` for blocks"}
+    fenced = f"```json\n{json.dumps(payload)}\n```"
+    extracted = _strip_code_fences(fenced)
+    assert json.loads(extracted)["note"] == "use ``` for blocks"
+
+
+def test_strip_code_fences_passes_through_bare_json():
+    """Responses with no fence fall through unchanged."""
+    bare = json.dumps(_VALID_ANALYSIS)
+    assert _strip_code_fences(bare) == bare
 
 
 @pytest.mark.asyncio

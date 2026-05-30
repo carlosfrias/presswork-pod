@@ -95,7 +95,7 @@ export default async function ListingsPage() {
       {pendingPublish.length > 0 && (
         <SurfaceCard
           title={`Pending publish — ${pendingPublish.length}`}
-          subtitle="Approved · queued for Etsy. Run the listing agent to push, or open a row to push manually. Back up returns to review."
+          subtitle="Approved · queued for Etsy. Open a row to publish individually ($0.20/listing), or run the listing agent to publish all. Back up returns to review."
         >
           <div className="flex flex-col gap-2">
             {pendingPublish.map((l) => (

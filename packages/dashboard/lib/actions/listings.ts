@@ -5,8 +5,6 @@ import { z } from "zod";
 
 // Print cost for the only currently-supported blueprint (Gildan 64000).
 // Mirrors GILDAN_64000_PRINT_COST_USD in packages/listing/src/constants.ts.
-// Inlined here to avoid the dashboard depending on the listing CLI package.
-// When a second blueprint lands, lift this into shared and key by blueprint id.
 const PRINT_COST_USD = 8.5;
 const PRICING_FLOOR_MULTIPLIER = 2.5;
 const PRICE_FLOOR_USD = PRINT_COST_USD * PRICING_FLOOR_MULTIPLIER; // $21.25
@@ -23,6 +21,7 @@ import {
   renderMockup,
   DynamicMockupsApiError,
 } from "@presswork/shared";
+import { resumePublish } from "@presswork/listing/publish";
 import { serviceClient } from "@/lib/supabase/server";
 import { requireOwnerEmail } from "@/lib/auth";
 
@@ -789,4 +788,50 @@ export async function deleteListing(formData: FormData) {
   if (sendBackWarning) {
     throw new Error(`Listing deleted, but ${sendBackWarning}.`);
   }
+}
+
+/**
+ * Publish a single listing to Etsy immediately, charging the $0.20 Etsy
+ * listing fee. Only valid when the listing is at status='pending_publish'.
+ *
+ * Calls resumePublish from @presswork/listing, which drives the full publish
+ * pipeline: compliance gates, createDraftListing, inventory PUT, image upload,
+ * activateListing, Printify setProductVisible. The listing transitions through
+ * 'publishing' → 'active' (or back to 'pending_publish'/'error' on failure).
+ *
+ * The dashboard's runtime env must include:
+ *   ETSY_PRODUCTION_PARTNER_ID, ETSY_SHIPPING_PROFILE_ID,
+ *   ETSY_READINESS_STATE_ID, ETSY_ACCESS_TOKEN, ETSY_REFRESH_TOKEN,
+ *   ETSY_API_KEY, ETSY_API_SECRET, ETSY_SHOP_ID, PRINTIFY_API_TOKEN
+ * Set ETSY_MOCK_MODE=true to exercise the full pipeline without live Etsy
+ * credentials (see packages/shared/src/etsy-mock.ts).
+ */
+export async function publishListingNow(formData: FormData): Promise<void> {
+  await assertOwner();
+  const id = idSchema.parse(formData.get("id"));
+  const db = serviceClient();
+
+  // Stale-tab guard: confirm the listing is still at pending_publish before
+  // incurring the $0.20 Etsy fee. Mirrors the approveListing guard pattern.
+  const { data: row } = await db
+    .from("listings")
+    .select("status")
+    .eq("id", id)
+    .maybeSingle();
+  if (!row) throw new Error("Listing not found");
+  if (row.status !== "pending_publish") {
+    throw new Error(
+      `Cannot publish: listing is at status='${row.status}', expected 'pending_publish'. ` +
+        "Refresh the page and try again."
+    );
+  }
+
+  // resumePublish drives the full Etsy publish pipeline and owns all DB writes
+  // on both success and failure paths. On failure it sets the row back to
+  // 'pending_publish' (or 'error' after MAX_RETRIES) and rethrows so the
+  // server action surfaces the error to the UI.
+  await resumePublish(db, id);
+
+  revalidatePath("/listings");
+  revalidatePath(`/listings/${id}`);
 }

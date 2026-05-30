@@ -94,6 +94,30 @@ function baseHandlers(activateFails = false) {
     http.post(`https://openapi.etsy.com/v3/application/shops/${SHOP_ID}/listings`, () =>
       HttpResponse.json({ listing_id: ETSY_LISTING_ID, state: "draft", title: VALID_COPY.title })
     ),
+    // Etsy — inventory PUT. Validates every product offering has a numeric
+    // quantity so a missing/zero quantity regresses to HTTP 400 before any
+    // Etsy call succeeds.
+    http.put(
+      `https://openapi.etsy.com/v3/application/listings/:id/inventory`,
+      async ({ request }) => {
+        const body = await request.json() as { products?: Array<{ offerings?: Array<{ quantity?: unknown }> }> };
+        const products = body?.products ?? [];
+        const allHaveQuantity = products.every(
+          (p) =>
+            Array.isArray(p.offerings) &&
+            p.offerings.every(
+              (o) => typeof o.quantity === "number" && o.quantity > 0
+            )
+        );
+        if (!allHaveQuantity) {
+          return HttpResponse.json(
+            { error: "every product offering must have a numeric quantity > 0" },
+            { status: 400 }
+          );
+        }
+        return HttpResponse.json({ products });
+      }
+    ),
     // Etsy — upload image (stub the image download too)
     http.get("https://printify.com/:path*", () =>
       new HttpResponse(new Uint8Array([137, 80, 78, 71]).buffer, {

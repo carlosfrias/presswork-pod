@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildInventoryFromDesign, InventoryMappingError } from "./inventory.js";
+import { POD_VARIANT_QUANTITY, EtsyInventoryInputSchema } from "@presswork/shared";
 
 const baseDesign = {
   printify_blueprint_id: 145,
@@ -93,5 +94,24 @@ describe("buildInventoryFromDesign", () => {
         priceUsd: 24.99,
       })
     ).toThrow(/expects 2 axes/);
+  });
+
+  it("regression: every offering quantity equals POD_VARIANT_QUANTITY (999) — Etsy returns 400 when quantity is missing", () => {
+    // Guard against any future regression that drops the quantity field from
+    // offerings. The MSW handler in publisher-flow.test.ts mirrors Etsy's
+    // real 400 response for missing/zero quantity, so this unit-level check
+    // catches the same regression without needing the integration flag.
+    const inv = buildInventoryFromDesign({ design: baseDesign, priceUsd: 24.99 });
+
+    // Every offering must carry exactly POD_VARIANT_QUANTITY = 999.
+    for (const product of inv.products) {
+      for (const offering of product.offerings) {
+        expect(offering.quantity).toBe(POD_VARIANT_QUANTITY);
+        expect(offering.quantity).toBe(999);
+      }
+    }
+
+    // The full shape must satisfy the Etsy inventory schema without throwing.
+    expect(() => EtsyInventoryInputSchema.parse(inv)).not.toThrow();
   });
 });
