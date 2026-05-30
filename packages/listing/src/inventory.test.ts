@@ -2,29 +2,39 @@ import { describe, it, expect } from "vitest";
 import { buildInventoryFromDesign, InventoryMappingError } from "./inventory.js";
 import { POD_VARIANT_QUANTITY, EtsyInventoryInputSchema } from "@presswork/shared";
 
+// Printify returns variant option values in [color, size] order for blueprint
+// 145 (matches real data: ["white","s"]). Fixtures mirror that order.
 const baseDesign = {
   printify_blueprint_id: 145,
   printify_variants: [
-    { id: 38163, values: ["s", "black"] },
-    { id: 38177, values: ["m", "black"] },
-    { id: 38191, values: ["l", "black"] },
+    { id: 38163, values: ["black", "s"] },
+    { id: 38177, values: ["black", "m"] },
+    { id: 38191, values: ["black", "l"] },
   ],
 };
 
 describe("buildInventoryFromDesign", () => {
-  it("maps each printify variant to one Etsy product with size + color", () => {
-    const inv = buildInventoryFromDesign({ design: baseDesign, priceUsd: 24.99 });
+  it("maps each printify variant to one Etsy product with color + size", () => {
+    const inv = buildInventoryFromDesign({
+      design: baseDesign,
+      priceUsd: 24.99,
+      readinessStateId: 12345,
+    });
     expect(inv.products).toHaveLength(3);
     expect(inv.products[0]).toEqual({
       sku: "38163",
       property_values: [
         // Etsy custom-variation slots 513/514 are mandatory; without them Etsy
-        // returns "Missing input parameter: [quantity]".
-        { property_id: 513, property_name: "Size", value_ids: [], values: ["S"] },
-        { property_id: 514, property_name: "Color", value_ids: [], values: ["Black"] },
+        // returns "Missing input parameter: [quantity]". Axis order matches
+        // Printify's [color, size] value order.
+        { property_id: 513, property_name: "Color", value_ids: [], values: ["Black"] },
+        { property_id: 514, property_name: "Size", value_ids: [], values: ["S"] },
       ],
-      offerings: [{ price: 24.99, quantity: 999, is_enabled: true }],
+      offerings: [
+        { price: 24.99, quantity: 999, is_enabled: true, readiness_state_id: 12345 },
+      ],
     });
+    expect(inv.readiness_state_on_property).toEqual([]);
   });
 
   it("assigns Etsy custom-variation property_ids 513/514 in axis order", () => {
@@ -37,19 +47,37 @@ describe("buildInventoryFromDesign", () => {
     }
   });
 
+  it("puts readiness_state_id on every offering when provided, omits it otherwise", () => {
+    const withId = buildInventoryFromDesign({
+      design: baseDesign,
+      priceUsd: 24.99,
+      readinessStateId: 777,
+    });
+    for (const product of withId.products) {
+      for (const offering of product.offerings) {
+        expect(offering.readiness_state_id).toBe(777);
+      }
+    }
+
+    // Preview path (no env) must still build a valid payload, just without the id.
+    const withoutId = buildInventoryFromDesign({ design: baseDesign, priceUsd: 24.99 });
+    expect(withoutId.products[0]!.offerings[0]).not.toHaveProperty("readiness_state_id");
+  });
+
   it("title-cases plain size labels and uppercases numeric ones", () => {
     const inv = buildInventoryFromDesign({
       design: {
         printify_blueprint_id: 145,
+        // [color, size] order; size is the second axis.
         printify_variants: [
-          { id: 1, values: ["xl", "navy"] },
-          { id: 2, values: ["2xl", "navy"] },
-          { id: 3, values: ["3xl", "navy"] },
+          { id: 1, values: ["navy", "xl"] },
+          { id: 2, values: ["navy", "2xl"] },
+          { id: 3, values: ["navy", "3xl"] },
         ],
       },
       priceUsd: 24.99,
     });
-    expect(inv.products.map((p) => p.property_values[0]!.values[0])).toEqual([
+    expect(inv.products.map((p) => p.property_values[1]!.values[0])).toEqual([
       "Xl",
       "2XL",
       "3XL",

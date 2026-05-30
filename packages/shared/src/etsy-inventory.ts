@@ -23,6 +23,10 @@ interface BuildInventoryArgs {
     printify_variants?: PrintifyVariantRow[] | null;
   };
   priceUsd: number;
+  // Etsy readiness_state_id (Processing Profiles). Required by Etsy on every
+  // offering for physical listings; the publish path always passes it. Nullable
+  // so the dashboard preview can build a payload without env config.
+  readinessStateId?: number | null;
 }
 
 // Title-case a value coming back from Printify (lowercased by extractVariantOptions).
@@ -49,6 +53,7 @@ function titleCaseValue(value: string): string {
 export function buildInventoryFromDesign({
   design,
   priceUsd,
+  readinessStateId,
 }: BuildInventoryArgs): EtsyInventoryInput {
   if (!design.printify_blueprint_id) {
     throw new InventoryMappingError(
@@ -104,6 +109,11 @@ export function buildInventoryFromDesign({
           price: priceUsd,
           quantity: POD_VARIANT_QUANTITY,
           is_enabled: true,
+          // Only include when known. Etsy requires it on physical listings; the
+          // publish path always supplies it. (null/undefined → omit, e.g. preview.)
+          ...(typeof readinessStateId === "number" && readinessStateId > 0
+            ? { readiness_state_id: readinessStateId }
+            : {}),
         },
       ],
     };
@@ -114,5 +124,6 @@ export function buildInventoryFromDesign({
     price_on_property: [],
     quantity_on_property: [],
     sku_on_property: [],
+    readiness_state_on_property: [],
   };
 }

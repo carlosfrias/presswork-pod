@@ -34,8 +34,13 @@ export const BLUEPRINT_PROCESSING_DAYS: Record<number, { min: number; max: numbe
 // Order matters and must match Printify's response for the blueprint —
 // for clothing blueprints (incl. Gildan 64000) Printify returns Size then
 // Color. Confirm with a smoke product create when adding a new blueprint.
+// Order MUST match the order Printify returns option values in
+// `variant.options` (see extractVariantOptions in packages/listing/src/printify.ts).
+// For Gildan 64000 (145) Printify yields [color, size] — e.g. ["white","s"] — so
+// the axes are ["Color","Size"]. Getting this backwards mislabels the Etsy
+// variation (e.g. "Size: White").
 export const BLUEPRINT_VARIATION_AXES: Record<number, string[]> = {
-  145: ["Size", "Color"],
+  145: ["Color", "Size"],
 };
 
 // Quantity Etsy shows for each POD variant. POD blueprints fulfill on

@@ -620,6 +620,12 @@ const EtsyOfferingSchema = z.object({
   // misconfigured variants before the API call fails.
   quantity: z.number().int().positive(),
   is_enabled: z.boolean(),
+  // Required on physical listings since Etsy's Sept 30 2025 Processing Profiles
+  // migration. Omitting it makes Etsy reject the offering with a misleading
+  // `Missing input parameter: [quantity]` 400. Optional in the schema only so
+  // the dashboard preview can render without env config; the publish path
+  // always sets it.
+  readiness_state_id: z.number().int().positive().optional(),
 });
 
 const EtsyPropertyValueSchema = z.object({
@@ -651,6 +657,9 @@ export const EtsyInventoryInputSchema = z.object({
   price_on_property: z.array(z.string()).default([]),
   quantity_on_property: z.array(z.string()).default([]),
   sku_on_property: z.array(z.string()).default([]),
+  // Processing Profiles migration: present (usually empty for POD, where every
+  // variant shares one readiness state) so Etsy's parser finds the key.
+  readiness_state_on_property: z.array(z.string()).default([]),
 });
 
 export type EtsyInventoryInput = z.infer<typeof EtsyInventoryInputSchema>;

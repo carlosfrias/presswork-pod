@@ -171,6 +171,7 @@ export async function getEtsyPayloadPreview(
         printify_variants: dp.printify_variants,
       },
       priceUsd: row.price_usd,
+      readinessStateId,
     });
   } catch (err) {
     return {

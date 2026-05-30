@@ -365,6 +365,7 @@ async function executeEtsyPublish(
       printify_variants: inventoryFacts.variants,
     },
     priceUsd,
+    readinessStateId: ETSY_READINESS_STATE_ID,
   });
   await updateListingInventory(db, etsyListingId, inventory);
 
