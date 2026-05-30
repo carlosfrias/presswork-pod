@@ -35,7 +35,7 @@ async def notify_slack(
     try:
         icon = _SEVERITY_ICONS.get(severity, ":white_circle:")
         async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(url, json={"text": f"{icon} {message}"})
+            resp = await client.post(str(url), json={"text": f"{icon} {message}"})
             if not resp.is_success:
                 _log.warning("[notifier] Slack POST returned %s", resp.status_code)
     except Exception as exc:

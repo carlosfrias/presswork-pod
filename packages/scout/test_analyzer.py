@@ -79,6 +79,16 @@ async def test_valid_response_parses_to_claude_analysis(mocker):
 
 
 @pytest.mark.asyncio
+async def test_fenced_json_response_is_parsed(mocker):
+    """Claude intermittently wraps JSON in a ```json fence — strip it, don't fail."""
+    fenced = f"```json\n{json.dumps(_VALID_ANALYSIS)}\n```"
+    _mock_client(mocker, fenced)
+    result = await analyze_niche(_SAMPLE_LISTINGS)
+    assert isinstance(result, ClaudeAnalysis)
+    assert result.niche == "dog mom gifts"
+
+
+@pytest.mark.asyncio
 async def test_invalid_json_raises_value_error(mocker):
     _mock_client(mocker, "here is my analysis: sorry, not JSON")
     with pytest.raises(ValueError, match="invalid JSON"):

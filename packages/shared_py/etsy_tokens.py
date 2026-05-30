@@ -45,11 +45,15 @@ def load_tokens(db: Client) -> EtsyTokens:
     """
     resp = db.table("config").select("value").eq("key", _CONFIG_KEY).execute()
     if resp.data:
+        # The config.etsy_oauth row is a shared cross-language contract: the TS
+        # agents (Listing/Ledger) read and write it with camelCase keys
+        # (see packages/shared/src/etsy-tokens.ts). Python must use the same
+        # shape or it can't read tokens the TS refresher rotated.
         value = cast(dict[str, Any], resp.data[0]["value"])
         return EtsyTokens(
-            access_token=value["access_token"],
-            refresh_token=value["refresh_token"],
-            expires_at=datetime.fromisoformat(value["expires_at"]),
+            access_token=value["accessToken"],
+            refresh_token=value["refreshToken"],
+            expires_at=datetime.fromisoformat(value["expiresAt"]),
         )
 
     settings = get_settings()
@@ -65,10 +69,11 @@ def save_tokens(db: Client, tokens: EtsyTokens) -> None:
     db.table("config").upsert(
         {
             "key": _CONFIG_KEY,
+            # camelCase to match the TS token contract — see load_tokens above.
             "value": {
-                "access_token": tokens.access_token,
-                "refresh_token": tokens.refresh_token,
-                "expires_at": tokens.expires_at.isoformat(),
+                "accessToken": tokens.access_token,
+                "refreshToken": tokens.refresh_token,
+                "expiresAt": tokens.expires_at.isoformat(),
             },
         },
         on_conflict="key",

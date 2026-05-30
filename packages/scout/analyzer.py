@@ -9,6 +9,25 @@ from packages.shared_py.models import ClaudeAnalysis
 
 log = structlog.get_logger(__name__)
 
+
+def _strip_code_fences(text: str) -> str:
+    """Remove a Markdown ```/```json code fence Claude sometimes wraps JSON in.
+
+    The model is told to respond with raw JSON, but intermittently fences it.
+    Stripping here keeps json.loads from failing on otherwise-valid output.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+    # Drop the opening fence line (``` or ```json) and the closing fence.
+    if "\n" in stripped:
+        stripped = stripped.split("\n", 1)[1]
+    stripped = stripped.rstrip()
+    if stripped.endswith("```"):
+        stripped = stripped[:-3]
+    return stripped.strip()
+
+
 # How many listings per niche send their thumbnail to Claude. Etsy already
 # returns score-sorted, so we slice the top N. Cap bounds token cost.
 SCOUT_VISION_MAX_IMAGES = 12
@@ -175,7 +194,7 @@ async def analyze_niche(raw_listings: list[dict]) -> ClaudeAnalysis:
         raise ValueError(f"Claude returned unexpected block type: {first_block.type}")
     raw_text = first_block.text
     try:
-        data = json.loads(raw_text)
+        data = json.loads(_strip_code_fences(raw_text))
     except json.JSONDecodeError as exc:
         raise ValueError(f"Claude returned invalid JSON: {raw_text!r}") from exc
 

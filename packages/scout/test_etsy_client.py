@@ -161,5 +161,7 @@ async def test_refresh_persists_rotated_refresh_token_to_supabase(mock_db):
     # At least one upsert should write the new tokens
     persisted = [c.args[0] for c in upsert_calls if c.args and c.args[0].get("key") == "etsy_oauth"]
     assert len(persisted) >= 1
-    assert persisted[-1]["value"]["refresh_token"] == "rotated-refresh"
-    assert persisted[-1]["value"]["access_token"] == "new-token"
+    # Persisted shape is camelCase — shared cross-language contract with the TS
+    # token reader/writer (packages/shared/src/etsy-tokens.ts).
+    assert persisted[-1]["value"]["refreshToken"] == "rotated-refresh"
+    assert persisted[-1]["value"]["accessToken"] == "new-token"
