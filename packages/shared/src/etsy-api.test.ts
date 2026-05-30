@@ -354,3 +354,81 @@ describe("activateListing", () => {
     await expect(activateListing({} as never, 999)).rejects.toThrow(EtsyApiError);
   });
 });
+
+describe("getActiveEtsyListings", () => {
+  let savedEnv: NodeJS.ProcessEnv;
+
+  beforeEach(() => {
+    savedEnv = { ...process.env };
+    vi.resetModules();
+    Object.assign(process.env, validEnv);
+  });
+
+  afterEach(() => { process.env = savedEnv; });
+
+  it("normalizes price (amount/divisor) and tags, and stops after one page", async () => {
+    vi.doMock("./etsy-auth.js", () => ({
+      getValidAccessToken: vi.fn().mockResolvedValue("test-token"),
+      EtsyAuthError: class EtsyAuthError extends Error {},
+    }));
+    let calls = 0;
+    server.use(
+      http.get("https://openapi.etsy.com/v3/application/shops/99/listings/active", () => {
+        calls++;
+        return HttpResponse.json({
+          count: 2,
+          results: [
+            {
+              listing_id: 111,
+              title: "Live One",
+              description: "desc",
+              tags: ["a", "b"],
+              state: "active",
+              price: { amount: 2499, divisor: 100, currency_code: "USD" },
+            },
+            {
+              listing_id: 222,
+              title: "Live Two",
+              description: null,
+              tags: null,
+              state: "active",
+            },
+          ],
+        });
+      })
+    );
+    const { getActiveEtsyListings } = await import("./etsy-api.js");
+    const live = await getActiveEtsyListings({} as never);
+    expect(calls).toBe(1); // count === results.length → no second page
+    expect(live).toEqual([
+      { etsyListingId: 111, title: "Live One", description: "desc", tags: ["a", "b"], price: 24.99, currency: "USD" },
+      { etsyListingId: 222, title: "Live Two", description: null, tags: [], price: null, currency: null },
+    ]);
+  });
+
+  it("follows pagination until count is reached", async () => {
+    vi.doMock("./etsy-auth.js", () => ({
+      getValidAccessToken: vi.fn().mockResolvedValue("test-token"),
+      EtsyAuthError: class EtsyAuthError extends Error {},
+    }));
+    server.use(
+      http.get("https://openapi.etsy.com/v3/application/shops/99/listings/active", ({ request }) => {
+        const offset = Number(new URL(request.url).searchParams.get("offset"));
+        const result = (id: number) => ({
+          listing_id: id,
+          title: `L${id}`,
+          state: "active",
+          price: { amount: 1000, divisor: 100, currency_code: "USD" },
+        });
+        // count=3: first page returns 2 (offset 0), second returns 1 (offset 100).
+        return HttpResponse.json({
+          count: 3,
+          results: offset === 0 ? [result(1), result(2)] : [result(3)],
+        });
+      })
+    );
+    const { getActiveEtsyListings } = await import("./etsy-api.js");
+    const live = await getActiveEtsyListings({} as never);
+    expect(live.map((l) => l.etsyListingId)).toEqual([1, 2, 3]);
+  });
+});

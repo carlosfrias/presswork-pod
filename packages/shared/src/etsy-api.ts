@@ -437,6 +437,83 @@ export async function updateActiveListing(
   }
 }
 
+// ── Reading the shop's live listings ────────────────────────────────────────────
+//
+// Used by the one-time reconcile script (scripts/reconcile_etsy_listings.ts) to
+// compare what's genuinely live on Etsy against the local `listings` table after
+// the API was switched on. Goes through etsyFetch, so it inherits token refresh,
+// the shared limiter, retries, and mock mode.
+
+// Etsy returns price as a money object; the human price is amount / divisor.
+const EtsyMoneySchema = z.object({
+  amount: z.number(),
+  divisor: z.number().positive(),
+  currency_code: z.string(),
+});
+
+const EtsyActiveListingSchema = z.object({
+  listing_id: z.number(),
+  title: z.string(),
+  // Etsy occasionally returns null for these on sparse listings.
+  description: z.string().nullable().optional(),
+  tags: z.array(z.string()).nullable().optional(),
+  state: z.string(),
+  price: EtsyMoneySchema.optional(),
+});
+
+const EtsyActiveListingsResponseSchema = z.object({
+  count: z.number(),
+  results: z.array(EtsyActiveListingSchema),
+});
+
+export interface LiveEtsyListing {
+  etsyListingId: number;
+  title: string;
+  description: string | null;
+  tags: string[];
+  /** Price in its own currency units (amount / divisor). null if Etsy omitted price. */
+  price: number | null;
+  currency: string | null;
+}
+
+const ETSY_LISTINGS_PAGE_SIZE = 100;
+// Defensive ceiling so a paging bug can't loop forever against a large shop.
+const ETSY_LISTINGS_MAX_PAGES = 50;
+
+/**
+ * Fetches every active (live) listing for the configured shop, following Etsy's
+ * limit/offset pagination. Returns a normalized, deduped list keyed by
+ * etsy_listing_id.
+ */
+export async function getActiveEtsyListings(db: Db): Promise<LiveEtsyListing[]> {
+  const { ETSY_SHOP_ID } = getSettings();
+  const byId = new Map<number, LiveEtsyListing>();
+
+  for (let page = 0; page < ETSY_LISTINGS_MAX_PAGES; page++) {
+    const offset = page * ETSY_LISTINGS_PAGE_SIZE;
+    const data = await etsyFetch(
+      db,
+      `/application/shops/${ETSY_SHOP_ID}/listings/active?limit=${ETSY_LISTINGS_PAGE_SIZE}&offset=${offset}`
+    );
+    const { count, results } = EtsyActiveListingsResponseSchema.parse(data);
+
+    for (const r of results) {
+      byId.set(r.listing_id, {
+        etsyListingId: r.listing_id,
+        title: r.title,
+        description: r.description ?? null,
+        tags: r.tags ?? [],
+        price: r.price ? r.price.amount / r.price.divisor : null,
+        currency: r.price ? r.price.currency_code : null,
+      });
+    }
+
+    if (results.length === 0 || offset + results.length >= count) break;
+  }
+
+  return [...byId.values()];
+}
+
 /** Set a live Etsy listing to inactive (taken off sale). Best-effort — callers
  *  should catch and log rather than hard-failing; a DB status update should
  *  proceed even if Etsy is temporarily unreachable. */

@@ -122,6 +122,38 @@ const fixtures: FixtureEntry[] = [
     }),
   },
 
+  // List the shop's active (live) listings — used by the reconcile script.
+  // GET /application/shops/{shop_id}/listings/active
+  // Returns a small fixed set so a dry run has something to diff against. The
+  // count equals results.length so getActiveEtsyListings stops after one page.
+  {
+    name: "list_active_listings",
+    match: ({ method, path }) =>
+      method === "GET" &&
+      /\/application\/shops\/[^/]+\/listings\/active(\/|\?|$)/.test(path),
+    build: () => ({
+      count: 2,
+      results: [
+        {
+          listing_id: 4200000001,
+          title: "Mock Hand-Made Listing One",
+          description: "A live listing that exists on Etsy but not in the DB.",
+          tags: ["mock", "handmade"],
+          state: "active",
+          price: { amount: 2499, divisor: 100, currency_code: "USD" },
+        },
+        {
+          listing_id: 4200000002,
+          title: "Mock Hand-Made Listing Two",
+          description: "Another live listing absent from the local listings table.",
+          tags: ["mock"],
+          state: "active",
+          price: { amount: 1999, divisor: 100, currency_code: "USD" },
+        },
+      ],
+    }),
+  },
+
   // Create draft listing
   // POST /application/shops/{shop_id}/listings
   {
