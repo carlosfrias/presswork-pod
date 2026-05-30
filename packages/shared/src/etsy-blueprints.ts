@@ -43,6 +43,14 @@ export const BLUEPRINT_VARIATION_AXES: Record<number, string[]> = {
 // integer (Etsy rejects null / -1 / "infinite").
 export const POD_VARIANT_QUANTITY = 999;
 
+// Etsy property_ids for CUSTOM variations (not predefined taxonomy properties):
+// 513 for the first variation axis, 514 for the second. Etsy allows at most two
+// custom variations. Each property_value in an inventory PUT must carry one of
+// these ids — without it Etsy fails to parse the product and returns a
+// misleading `Missing input parameter: [quantity]` 400.
+// Ref: developers.etsy.com third-variation tutorial.
+export const ETSY_CUSTOM_PROPERTY_IDS = [513, 514] as const;
+
 export function blueprintMaterials(blueprintId: number): string[] | undefined {
   return BLUEPRINT_MATERIALS[blueprintId];
 }

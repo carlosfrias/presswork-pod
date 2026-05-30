@@ -18,11 +18,23 @@ describe("buildInventoryFromDesign", () => {
     expect(inv.products[0]).toEqual({
       sku: "38163",
       property_values: [
-        { property_name: "Size", values: ["S"] },
-        { property_name: "Color", values: ["Black"] },
+        // Etsy custom-variation slots 513/514 are mandatory; without them Etsy
+        // returns "Missing input parameter: [quantity]".
+        { property_id: 513, property_name: "Size", value_ids: [], values: ["S"] },
+        { property_id: 514, property_name: "Color", value_ids: [], values: ["Black"] },
       ],
       offerings: [{ price: 24.99, quantity: 999, is_enabled: true }],
     });
+  });
+
+  it("assigns Etsy custom-variation property_ids 513/514 in axis order", () => {
+    const inv = buildInventoryFromDesign({ design: baseDesign, priceUsd: 24.99 });
+    for (const product of inv.products) {
+      expect(product.property_values.map((pv) => pv.property_id)).toEqual([513, 514]);
+      for (const pv of product.property_values) {
+        expect(pv.value_ids).toEqual([]);
+      }
+    }
   });
 
   it("title-cases plain size labels and uppercases numeric ones", () => {

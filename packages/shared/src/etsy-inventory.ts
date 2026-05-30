@@ -1,5 +1,6 @@
 import {
   blueprintVariationAxes,
+  ETSY_CUSTOM_PROPERTY_IDS,
   POD_VARIANT_QUANTITY,
 } from "./etsy-blueprints.js";
 import type { EtsyInventoryInput, EtsyInventoryProduct } from "./etsy-api.js";
@@ -69,6 +70,13 @@ export function buildInventoryFromDesign({
     );
   }
 
+  // Etsy custom variations are limited to two axes (property_ids 513 and 514).
+  if (axes.length > ETSY_CUSTOM_PROPERTY_IDS.length) {
+    throw new InventoryMappingError(
+      `blueprint ${design.printify_blueprint_id} has ${axes.length} variation axes but Etsy custom variations support at most ${ETSY_CUSTOM_PROPERTY_IDS.length}`
+    );
+  }
+
   if (priceUsd <= 0) {
     throw new InventoryMappingError(`priceUsd must be positive (got ${priceUsd})`);
   }
@@ -80,7 +88,12 @@ export function buildInventoryFromDesign({
       );
     }
     const property_values = axes.map((axisName, idx) => ({
+      // 513 for the first axis, 514 for the second — required by Etsy even for
+      // custom variations (see ETSY_CUSTOM_PROPERTY_IDS).
+      property_id: ETSY_CUSTOM_PROPERTY_IDS[idx]!,
       property_name: axisName,
+      // Empty for custom variations; Etsy assigns the internal value id.
+      value_ids: [],
       values: [titleCaseValue(variant.values[idx]!)],
     }));
     return {

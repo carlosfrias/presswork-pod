@@ -623,11 +623,17 @@ const EtsyOfferingSchema = z.object({
 });
 
 const EtsyPropertyValueSchema = z.object({
+  // Etsy requires a numeric property_id even for CUSTOM variations: 513 for the
+  // first custom-variation axis, 514 for the second (see etsy-blueprints.ts →
+  // ETSY_CUSTOM_PROPERTY_IDS). Omitting it makes Etsy fail to parse the product
+  // and return a misleading `Missing input parameter: [quantity]` 400.
+  // Ref: developers.etsy.com third-variation tutorial.
+  property_id: z.number().int(),
   property_name: z.string().min(1),
   values: z.array(z.string().min(1)).min(1).max(1),
-  // Etsy requires value_ids alongside values when using numeric properties.
-  // For custom properties the array is omitted; Etsy assigns an internal ID.
-  value_ids: z.array(z.number().int()).optional(),
+  // Empty for custom properties — Etsy assigns an internal value ID — but the
+  // key must be present in the payload.
+  value_ids: z.array(z.number().int()).default([]),
 });
 
 const EtsyInventoryProductSchema = z.object({
