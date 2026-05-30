@@ -41,6 +41,7 @@ describe("getDesignReviewQueue", () => {
       style: "screen_print",
       image_model: "fal_gpt_image_2",
       background_removal_mode: "birefnet",
+      image_description: null,
     });
     // regen_stack defaults to [] when metadata is null
     expect(item.regen_stack).toEqual([]);

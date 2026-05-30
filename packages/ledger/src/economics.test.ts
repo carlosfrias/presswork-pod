@@ -26,8 +26,8 @@ describe("computeEtsyFees", () => {
 });
 
 describe("lookupPrintCost", () => {
-  it("returns $8.50 for blueprint 6 (Gildan 64000)", () => {
-    expect(lookupPrintCost(6)).toBe(8.5);
+  it("returns $8.50 for blueprint 145 (Gildan 64000)", () => {
+    expect(lookupPrintCost(145)).toBe(8.5);
   });
 
   it("throws UnknownBlueprintError for an unknown blueprint ID", () => {

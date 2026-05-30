@@ -194,6 +194,18 @@ const fixtures: FixtureEntry[] = [
     },
   },
 
+  // List a listing's images — idempotency guard for the publish/resume path.
+  // GET /application/shops/{shop_id}/listings/{listing_id}/images
+  // Returns count 0 so a mock publish always uploads its full mockup set (no
+  // skip); a real retry against Etsy sees the true count and skips uploaded ranks.
+  {
+    name: "list_listing_images",
+    match: ({ method, path }) =>
+      method === "GET" &&
+      /\/application\/shops\/[^/]+\/listings\/[^/]+\/images\/?$/.test(path),
+    build: () => ({ count: 0, results: [] }),
+  },
+
   // Upload listing image (multipart)
   // POST /application/shops/{shop_id}/listings/{listing_id}/images
   {

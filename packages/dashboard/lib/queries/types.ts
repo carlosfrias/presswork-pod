@@ -26,6 +26,10 @@ export interface TrendBriefRow {
   // prompt builder folds it into the Claude prompt-build call as
   // authoritative creative direction.
   prompt_constraint: string | null;
+  // Renamed from prompt_constraint by migration 045. Holds the
+  // operator-authored creative direction fed into the Design agent's
+  // FLUX prompt build.
+  image_description: string | null;
   raw_etsy_data: unknown;
   claude_analysis: unknown;
   error_message: string | null;

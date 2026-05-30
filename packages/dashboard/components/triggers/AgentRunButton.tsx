@@ -32,6 +32,10 @@ export async function AgentRunButton({ agent }: { agent: Agent }) {
     agent === "listing" ? getIsListingAgentRunning() : Promise.resolve(false),
   ]);
 
+  // design and listing have upstream queues (design_packages / listings rows
+  // awaiting processing). scout and ledger are on-demand with no queue.
+  const hasQueue = agent === "design" || agent === "listing";
+
   return (
     <div className="flex flex-col items-end gap-1">
       {enabled ? (
@@ -40,6 +44,7 @@ export async function AgentRunButton({ agent }: { agent: Agent }) {
           label={LABEL[agent]}
           pendingCount={pendingCount}
           locked={isRunning}
+          hasQueue={hasQueue}
         />
       ) : (
         <details className="text-xs">

@@ -6,7 +6,7 @@ import { Lightbox, ZoomButton } from "@/components/ui/Lightbox";
 import { ReplaceImageForm } from "@/components/design/ReplaceImageForm";
 import { formatRelative } from "@/lib/format";
 import { withCacheBuster, withDownload, withTransform } from "@/lib/imageUrl";
-import { cancelTouchUp } from "@/lib/actions/design";
+import { cancelTouchUp, regenerateDesign } from "@/lib/actions/design";
 import type { DesignReviewItem } from "@/lib/queries/design";
 
 type StackEntry = {
@@ -51,6 +51,7 @@ export function TouchUpCard({ design: d }: { design: DesignReviewItem }) {
   const hasStack = stack.length > 1;
 
   const [showMask, setShowMask] = useState(true);
+  const [editedPrompt, setEditedPrompt] = useState(d.fal_prompt ?? "");
   const hasUnmasked = !!active.unmasked_url;
   const activeUrl = (showMask || !hasUnmasked ? active.masked_url : active.unmasked_url) ?? null;
 
@@ -221,6 +222,36 @@ export function TouchUpCard({ design: d }: { design: DesignReviewItem }) {
               <ReplaceImageForm id={d.id} />
             </div>
           </div>
+
+          {d.fal_prompt != null && (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-medium text-(--text-secondary)">3 · Or re-generate with edited prompt</p>
+              <form action={regenerateDesign} className="flex flex-col gap-2">
+                <input type="hidden" name="id" value={d.id} />
+                <textarea
+                  name="image_description"
+                  value={editedPrompt}
+                  onChange={(e) => setEditedPrompt(e.target.value)}
+                  rows={5}
+                  className="w-full rounded-(--radius-sm) bg-(--surface-2) p-2 font-mono text-[11px] leading-snug text-(--text-secondary) focus:bg-(--surface-3) focus:outline-none focus:ring-1 focus:ring-(--accent-warm)"
+                  aria-label="Edit prompt before regenerating"
+                />
+                <p className="text-[10px] text-(--text-muted)">
+                  Submitting re-queues the design — it will return to the review queue once generation completes.
+                </p>
+                <div>
+                  <Button
+                    type="submit"
+                    variant="secondary"
+                    size="sm"
+                    disabled={!editedPrompt.trim()}
+                  >
+                    Regen with edited prompt
+                  </Button>
+                </div>
+              </form>
+            </div>
+          )}
 
           <div className="border-t border-(--surface-line) pt-3">
             <form action={cancelTouchUp}>

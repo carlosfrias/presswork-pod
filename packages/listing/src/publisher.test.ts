@@ -69,6 +69,8 @@ type DbMockOpts = {
   retryCount?: number;
   existingEtsyListingId?: number | null;
   retryCountReadError?: string;
+  /** Mockup URLs on the joined design_packages row (resumePublish image upload). */
+  mockupUrls?: string[];
 };
 
 type CaptureEntry = { table: string; data: Record<string, unknown> };
@@ -138,7 +140,7 @@ function makeDb(updates: CaptureEntry[], opts: DbMockOpts = {}) {
       return {
         data: {
           design_packages: {
-            mockup_urls: [],
+            mockup_urls: opts.mockupUrls ?? [],
             mockups_from_actual_design: true,
             // resumePublish needs these to build the inventory PUT payload.
             // Default to a real Gildan 64000 + one variant so happy-path
@@ -205,6 +207,7 @@ describe("publishOne", () => {
         ...actual,
         createDraftListing,
         uploadListingImage: vi.fn().mockResolvedValue(undefined),
+        getListingImageCount: vi.fn().mockResolvedValue(0),
         activateListing: vi.fn().mockResolvedValue(undefined),
         updateListingInventory: vi.fn().mockResolvedValue(undefined),
         getTaxonomyId: vi.fn().mockResolvedValue(68887043),
@@ -214,7 +217,7 @@ describe("publishOne", () => {
           ETSY_PRODUCTION_PARTNER_ID:
             overrides && "partnerId" in overrides ? overrides.partnerId : PARTNER_ID,
         }),
-        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn() }),
+        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn(), warn: vi.fn() }),
       };
     });
 
@@ -709,6 +712,120 @@ describe("publishOne", () => {
     expect(createDraftListing).not.toHaveBeenCalled();
   });
 
+  it("keeps the listing 'active' when setProductVisible fails (Printify visibility is best-effort)", async () => {
+    // Once activateListing succeeds the Etsy listing is LIVE. A Printify
+    // visibility failure must NOT throw or roll the row back to
+    // pending_publish — that would re-run the publish against a live listing.
+    const { setProductVisible } = mockPrintify();
+    setProductVisible.mockRejectedValue(new Error("printify 503"));
+
+    const notifySlack = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("@presswork/shared", async () => {
+      const actual = await vi.importActual<typeof import("@presswork/shared")>("@presswork/shared");
+      return {
+        ...actual,
+        createDraftListing: vi.fn().mockResolvedValue({ listing_id: 777 }),
+        uploadListingImage: vi.fn().mockResolvedValue(undefined),
+        getListingImageCount: vi.fn().mockResolvedValue(0),
+        activateListing: vi.fn().mockResolvedValue(undefined),
+        updateListingInventory: vi.fn().mockResolvedValue(undefined),
+        getTaxonomyId: vi.fn().mockResolvedValue(68887043),
+        getSettings: vi.fn().mockReturnValue({
+          ETSY_SHIPPING_PROFILE_ID: 99,
+          ETSY_READINESS_STATE_ID: 42,
+          ETSY_PRODUCTION_PARTNER_ID: PARTNER_ID,
+        }),
+        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn(), warn: vi.fn() }),
+        notifySlack,
+      };
+    });
+
+    const updates: CaptureEntry[] = [];
+    const db = makeDb(updates, {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending_publish",
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+        price_usd: 24.99,
+        printify_product_id: "existing-product-xyz",
+        is_active: false,
+        retry_count: 0,
+      },
+      existingEtsyListingId: 5555,
+    });
+
+    const { resumePublish } = await import("./publisher.js");
+    await expect(resumePublish(db, LISTING_ID)).resolves.toBeUndefined();
+
+    const activeWrite = updates.find(
+      (u) => u.table === "listings" && u.data.status === "active"
+    );
+    expect(activeWrite).toBeDefined();
+    expect(activeWrite?.data.is_active).toBe(true);
+    // No rollback to pending_publish / error from the visibility failure.
+    expect(
+      updates.some(
+        (u) =>
+          u.table === "listings" &&
+          (u.data.status === "pending_publish" || u.data.status === "error")
+      )
+    ).toBe(false);
+    expect(notifySlack).toHaveBeenCalledWith(expect.any(String), { severity: "warn" });
+  });
+
+  it("skips already-uploaded image ranks on resume so retries don't duplicate carousel images", async () => {
+    mockPrintify();
+    const uploadListingImage = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("@presswork/shared", async () => {
+      const actual = await vi.importActual<typeof import("@presswork/shared")>("@presswork/shared");
+      return {
+        ...actual,
+        createDraftListing: vi.fn().mockResolvedValue({ listing_id: 777 }),
+        uploadListingImage,
+        // Etsy already has 2 of the 3 mockups from a prior partial attempt.
+        getListingImageCount: vi.fn().mockResolvedValue(2),
+        activateListing: vi.fn().mockResolvedValue(undefined),
+        updateListingInventory: vi.fn().mockResolvedValue(undefined),
+        getTaxonomyId: vi.fn().mockResolvedValue(68887043),
+        getSettings: vi.fn().mockReturnValue({
+          ETSY_SHIPPING_PROFILE_ID: 99,
+          ETSY_READINESS_STATE_ID: 42,
+          ETSY_PRODUCTION_PARTNER_ID: PARTNER_ID,
+        }),
+        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn(), warn: vi.fn() }),
+        notifySlack: vi.fn().mockResolvedValue(undefined),
+      };
+    });
+
+    const updates: CaptureEntry[] = [];
+    const db = makeDb(updates, {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending_publish",
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+        price_usd: 24.99,
+        printify_product_id: "existing-product-xyz",
+        is_active: false,
+        retry_count: 1,
+      },
+      existingEtsyListingId: 5555,
+      mockupUrls: ["https://cdn/m1.jpg", "https://cdn/m2.jpg", "https://cdn/m3.jpg"],
+    });
+
+    const { resumePublish } = await import("./publisher.js");
+    await resumePublish(db, LISTING_ID);
+
+    // Only the 3rd mockup (rank 3) is uploaded; ranks 1-2 already exist on Etsy.
+    expect(uploadListingImage).toHaveBeenCalledTimes(1);
+    const call = uploadListingImage.mock.calls[0] as [unknown, number, string, { rank?: number }];
+    expect(call[2]).toBe("https://cdn/m3.jpg");
+    expect(call[3]?.rank).toBe(3);
+  });
+
   it("second-pass validateProductionPartnerId throws if partner ID is cleared mid-flow (bug #37)", async () => {
     vi.doMock("./copywriter.js", () => ({
       writeCopy: vi.fn().mockResolvedValue({
@@ -736,6 +853,7 @@ describe("publishOne", () => {
         ...actual,
         createDraftListing,
         uploadListingImage: vi.fn().mockResolvedValue(undefined),
+        getListingImageCount: vi.fn().mockResolvedValue(0),
         activateListing: vi.fn().mockResolvedValue(undefined),
         updateListingInventory: vi.fn().mockResolvedValue(undefined),
         getTaxonomyId: vi.fn().mockResolvedValue(68887043),
@@ -744,7 +862,7 @@ describe("publishOne", () => {
           ETSY_READINESS_STATE_ID: 42,
           ETSY_PRODUCTION_PARTNER_ID: partnerId,
         })),
-        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn() }),
+        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn(), warn: vi.fn() }),
       };
     });
 
@@ -792,6 +910,7 @@ describe("publishOne", () => {
         ...actual,
         createDraftListing,
         uploadListingImage: vi.fn().mockResolvedValue(undefined),
+        getListingImageCount: vi.fn().mockResolvedValue(0),
         activateListing: vi.fn().mockResolvedValue(undefined),
         updateListingInventory: vi.fn().mockResolvedValue(undefined),
         getTaxonomyId: vi.fn().mockResolvedValue(68887043),
@@ -801,7 +920,7 @@ describe("publishOne", () => {
           ETSY_PRODUCTION_PARTNER_ID:
             overrides && "partnerId" in overrides ? overrides.partnerId : PARTNER_ID,
         }),
-        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn() }),
+        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn(), warn: vi.fn() }),
         notifySlack,
       };
     });
@@ -876,6 +995,7 @@ describe("publishOne", () => {
           title: COMPLIANT_TITLE,
         }),
         uploadListingImage: vi.fn().mockResolvedValue(undefined),
+        getListingImageCount: vi.fn().mockResolvedValue(0),
         updateListingInventory: vi.fn().mockResolvedValue(undefined),
         activateListing: vi.fn().mockRejectedValue(new Error("etsy 500")),
         getTaxonomyId: vi.fn().mockResolvedValue(68887043),
@@ -884,7 +1004,7 @@ describe("publishOne", () => {
           ETSY_READINESS_STATE_ID: 42,
           ETSY_PRODUCTION_PARTNER_ID: PARTNER_ID,
         }),
-        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn() }),
+        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn(), warn: vi.fn() }),
         notifySlack,
       };
     });

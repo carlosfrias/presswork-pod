@@ -38,6 +38,9 @@ export interface DesignReviewItem extends DesignPackageRow {
         image_model: ImageModelId;
         // Per-brief background-removal override; null = "use global flag".
         background_removal_mode: BgRemovalModeId | null;
+        // Operator-authored creative direction (renamed by migration 045).
+        // Displayed in the review card as context alongside the fal_prompt.
+        image_description: string | null;
       })
     | null;
 }
@@ -93,7 +96,7 @@ export async function getDesignReviewQueue(): Promise<DesignReviewItem[]> {
     .from("design_packages")
     .select(
       `*,
-       trend_briefs:trend_briefs!design_packages_trend_brief_id_fkey(id, niche, color_palette, claude_analysis, image_model, background_removal_mode)`,
+       trend_briefs:trend_briefs!design_packages_trend_brief_id_fkey(id, niche, color_palette, claude_analysis, image_model, background_removal_mode, image_description)`,
     )
     .eq("status", "needs_review")
     .order("created_at", { ascending: false });
@@ -107,6 +110,7 @@ export async function getDesignReviewQueue(): Promise<DesignReviewItem[]> {
           claude_analysis: unknown;
           image_model: unknown;
           background_removal_mode: unknown;
+          image_description: string | null;
         })
       | null;
   };
@@ -123,6 +127,7 @@ export async function getDesignReviewQueue(): Promise<DesignReviewItem[]> {
           background_removal_mode: narrowBgRemoval(
             r.trend_briefs.background_removal_mode,
           ),
+          image_description: r.trend_briefs.image_description ?? null,
         }
       : null,
   }));
@@ -134,7 +139,7 @@ export async function getTouchUpQueue(): Promise<DesignReviewItem[]> {
     .from("design_packages")
     .select(
       `*,
-       trend_briefs:trend_briefs!design_packages_trend_brief_id_fkey(id, niche, color_palette, claude_analysis, image_model, background_removal_mode)`,
+       trend_briefs:trend_briefs!design_packages_trend_brief_id_fkey(id, niche, color_palette, claude_analysis, image_model, background_removal_mode, image_description)`,
     )
     .eq("status", "touch_up")
     .order("created_at", { ascending: false });
@@ -148,6 +153,7 @@ export async function getTouchUpQueue(): Promise<DesignReviewItem[]> {
           claude_analysis: unknown;
           image_model: unknown;
           background_removal_mode: unknown;
+          image_description: string | null;
         })
       | null;
   };
@@ -164,6 +170,7 @@ export async function getTouchUpQueue(): Promise<DesignReviewItem[]> {
           background_removal_mode: narrowBgRemoval(
             r.trend_briefs.background_removal_mode,
           ),
+          image_description: r.trend_briefs.image_description ?? null,
         }
       : null,
   }));

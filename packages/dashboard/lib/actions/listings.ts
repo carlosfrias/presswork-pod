@@ -62,12 +62,13 @@ export async function approveListing(formData: FormData) {
     .eq("status", "needs_review"); // optimistic concurrency guard
   if (error) throw new Error(`Approve failed: ${error.message}`);
 
-  await db.from("llm_usage").insert({
+  const { error: usageErr } = await db.from("llm_usage").insert({
     agent: "listing",
     provider: "etsy",
     operation: "manual_approve",
     metadata: { listing_id: id, approver: email },
   });
+  if (usageErr) console.error("llm_usage insert failed:", usageErr.message);
 
   revalidatePath("/listings");
   revalidatePath(`/listings/${id}`);
@@ -154,12 +155,13 @@ export async function approveListingWithCopy(formData: FormData) {
     .eq("status", "needs_review");
   if (error) throw new Error(`Approve failed: ${error.message}`);
 
-  await db.from("llm_usage").insert({
+  const { error: usageErr } = await db.from("llm_usage").insert({
     agent: "listing",
     provider: "etsy",
     operation: "manual_approve",
     metadata: { listing_id: id, approver: email },
   });
+  if (usageErr) console.error("llm_usage insert failed:", usageErr.message);
 
   revalidatePath("/listings");
   revalidatePath(`/listings/${id}`);
@@ -762,14 +764,29 @@ export async function deleteListing(formData: FormData) {
   const { error } = await db.from("listings").delete().eq("id", id);
   if (error) throw new Error(`Delete failed: ${error.message}`);
 
+  // Send the linked design back to review, if requested. The .eq('status',
+  // 'approved') guard means this no-ops when the design has already moved on;
+  // capture the result so a silent miss is surfaced rather than swallowed.
+  let sendBackWarning: string | null = null;
   if (sendDesignBack && row.design_package_id) {
-    await db
+    const { data: updated, error: sendBackErr } = await db
       .from("design_packages")
       .update({ status: "needs_review", error_message: null })
       .eq("id", row.design_package_id)
-      .eq("status", "approved");
+      .eq("status", "approved")
+      .select("id");
+    if (sendBackErr) {
+      sendBackWarning = `the linked design could not be returned to review: ${sendBackErr.message}`;
+    } else if (!updated || updated.length === 0) {
+      sendBackWarning =
+        "the linked design was not returned to review — it is no longer in 'approved' status";
+    }
   }
 
   revalidatePath("/listings");
   revalidatePath("/design");
+
+  if (sendBackWarning) {
+    throw new Error(`Listing deleted, but ${sendBackWarning}.`);
+  }
 }

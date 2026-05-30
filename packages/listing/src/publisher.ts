@@ -5,6 +5,7 @@ import {
   type TrendBrief,
   createDraftListing,
   uploadListingImage,
+  getListingImageCount,
   updateListingInventory,
   activateListing,
   getTaxonomyId,
@@ -367,10 +368,16 @@ async function executeEtsyPublish(
   });
   await updateListingInventory(db, etsyListingId, inventory);
 
+  // Image upload (POST) is NOT idempotent — Etsy appends a new image per POST,
+  // so a resume/retry after a partial upload would duplicate the carousel.
+  // Skip the ranks Etsy already has by reading the current image count first.
+  // In mock mode this count is always 0 (full upload preserved).
+  const alreadyUploaded = await getListingImageCount(db, etsyListingId);
+
   // alt_text per image: short, descriptive, distinct per rank. Etsy uses these
   // for accessibility and image-search SEO. We bound title length with the
   // global cap inside uploadListingImage (250 chars), so no truncation here.
-  for (let i = 0; i < mockupUrls.length; i++) {
+  for (let i = alreadyUploaded; i < mockupUrls.length; i++) {
     const url = mockupUrls[i]!;
     const altText =
       mockupUrls.length === 1
@@ -379,13 +386,34 @@ async function executeEtsyPublish(
     await uploadListingImage(db, etsyListingId, url, { altText, rank: i + 1 });
   }
 
+  // Activation is the real point of no return: once this PATCH succeeds the
+  // listing is LIVE and buyable on Etsy. Persist 'active' immediately so a
+  // later failure can't leave a live listing whose DB row still says
+  // pending_publish/error (a state the operator can't reconcile).
   await activateListing(db, etsyListingId);
-  await setProductVisible(productId);
-
   await db
     .from("listings")
     .update({ status: "active", is_active: true })
     .eq("id", listingId);
+
+  // Printify visibility is cosmetic relative to the Etsy listing already being
+  // live, so it's best-effort — a failure here must NOT throw and roll the row
+  // back to pending_publish (which would re-run this whole publish).
+  try {
+    await setProductVisible(productId);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    getLogger("listing").warn({
+      action: "set_product_visible_failed",
+      record_id: listingId,
+      printify_product_id: productId,
+      error: message,
+    });
+    await notifySlack(
+      `Listing ${listingId} is live on Etsy but Printify product ${productId} could not be made visible: ${message}`,
+      { severity: "warn" }
+    );
+  }
 }
 
 export async function resumePublish(db: Db, listingId: string): Promise<void> {

@@ -9,7 +9,7 @@ Source of truth for Claude Code on this project. Read fully before changing anyt
 Autonomous 4-agent print-on-demand pipeline on Etsy + Printify:
 
 1. **Scout** (Python) — scans Etsy for trends → `trend_briefs`
-2. **Design** (Python) — generates art via fal.ai FLUX Pro → `design_packages`
+2. **Design** (Python) — generates art via fal.ai / OpenAI image models → `design_packages`
 3. **Listing** (TS) — publishes SEO listings via Etsy API v3 → `listings`
 4. **Ledger** (TS) — polls Etsy receipts, logs economics, emits margin/revenue alerts → `orders`
 
@@ -42,7 +42,7 @@ npm workspaces; Python packages own their `requirements.txt`.
 | Scout + Design | Python 3.12 (`httpx`, `pydantic`, `structlog`) |
 | Listing + Ledger | TypeScript / Node 20 (strict mode, `zod`, `bottleneck`) |
 | AI reasoning | Claude Sonnet 4 (`claude-sonnet-4-20250514`) |
-| Image gen | fal.ai FLUX Pro 1.1 (~$0.05/image) |
+| Image gen | fal.ai / OpenAI via fal.ai (`fal_gpt_image_2` default; `fal_flux_pro`, `fal_nano_banana_2` also supported — per-brief `image_model` field) |
 | Database | Supabase (Postgres) — agent handoff state |
 | Storage | Supabase Storage — design PNGs, mockups |
 | Hosting / cron | Local CLI for now (Railway TBD). Dashboard can spawn agents locally via `DASHBOARD_LOCAL_TRIGGERS_ENABLED=true` |
@@ -82,7 +82,7 @@ Full DDL lives in `infra/supabase/migrations/`. Four core tables drive agent han
 | Table | Owner | Status flow |
 |---|---|---|
 | `trend_briefs` | Scout writes, Builder/Design read | `needs_review` → `needs_description` → `approved` → `processing` → `done` \| `error` |
-| `design_packages` | Design writes, Listing reads | `needs_review` → `approved` → `processing` → `done` \| `error` |
+| `design_packages` | Design writes, Listing reads | `needs_review` → `touch_up` → `needs_review` → `approved` → `processing` → `done` \| `error` |
 | `listings` | Listing | `pending` → `needs_review` → `pending_publish` → `publishing` → `active` \| `error` |
 | `orders` | Ledger | `logged` \| `error` (terminal — fulfillment lives outside this codebase) |
 
@@ -91,6 +91,7 @@ Rules:
 - **Every agent's output is human-gated. No bypass.** Scout writes `needs_review`; Scout-approve transitions to `needs_description`; Builder writes the image description and transitions to `approved`; Design claims `approved` and writes `needs_review` on completion; Listing claims `approved` design packages, builds the Printify product, then pauses at listings `needs_review` until the dashboard's Approve flips the row to `pending_publish`. No auto-approve runtime flags, no `HUMAN_REVIEW_ENABLED` env override — those were removed in migration 030.
 - `orders.margin_usd` is a generated column: `sale_price − print_cost − etsy_fees`.
 - `orders` has no Printify/tracking columns — those were dropped in migration 016 when fulfillment moved to Etsy's native Printify integration.
+- `trend_briefs.image_description` — Builder-authored prompt text (renamed from `custom_flux_prompt` in migration 045). When non-null, Design uses it verbatim instead of calling Claude.
 - `design_packages.mockups_from_actual_design BOOLEAN NOT NULL` — provenance flag (compliance rule 4).
 - Every table has `created_at`, `updated_at` (auto via trigger), `error_message`, `retry_count`.
 
@@ -105,16 +106,16 @@ Nightly cron (`0 2 * * *`). Produces 3–5 `trend_briefs/run`.
 2. `GET /listings/active` from Etsy, `sort_on=score`. Max 5 req/sec (asyncio semaphore).
 3. Extract titles, tags, prices, review counts.
 4. Claude Sonnet → structured `TrendBrief` JSON (`niche`, `style_keywords`, `top_tags`, `price_target_usd`, `color_palette`). System prompt forbids shop/artist/IP names.
-5. Dedupe vs last 7 days. Insert with `status='pending'`.
+5. Dedupe vs last 7 days. Insert with `status='needs_review'`.
 
 Set `SCOUT_VISION_ENABLED=true` to also send Etsy listing thumbnails to Claude (vision-aware analyzer). Off by default — adds ~3-5× per-run token cost.
 
 ### Agent 2 — Design (`packages/design/`)
-Polls every 15 min for `trend_briefs.status='pending'`.
+Polls every 15 min for `trend_briefs.status='approved'` (via `claim_pending_trend_brief` RPC).
 
 1. Claim row → `processing`.
-2. Claude Sonnet crafts FLUX-safe prompt (always append: `"print on demand design, transparent background, high resolution, vector-style"`; never artist/brand/IP names).
-3. fal.ai FLUX Pro 1.1 (`square_hd`, png, `safety_tolerance=2`) → image URL.
+2. Claude Sonnet crafts image prompt (never artist/brand/IP names). If the Builder has written an `image_description` on the brief, that text is used verbatim (skipping Claude). The historical FLUX_REQUIRED_TERMS suffix was removed — no hardcoded phrase appending.
+3. Generate image via the per-brief `image_model` field: `fal_gpt_image_2` (default, OpenAI gpt-image-2 on fal.ai), `fal_flux_pro` (FLUX Pro 1.1), or `fal_nano_banana_2` (Gemini-3 on fal.ai). Each backend uses its own client with model-appropriate sizing.
 4. Pillow → 300dpi transparent-bg PNG → Supabase Storage (`designs/` bucket).
 5. Write `design_packages` row including `printify_blueprint_id` + `printify_variant_ids`. Mark `trend_briefs.status='done'`.
 

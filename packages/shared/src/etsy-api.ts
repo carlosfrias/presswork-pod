@@ -372,6 +372,26 @@ export async function uploadListingImage(
   );
 }
 
+const EtsyListingImagesResponseSchema = z.object({
+  count: z.number().int().nonnegative(),
+  results: z.array(z.object({ listing_image_id: z.number(), rank: z.number().int() })),
+});
+
+/**
+ * How many images are already attached to an Etsy listing. Used as an
+ * idempotency guard on the publish/resume path: image upload (POST) is NOT
+ * idempotent — re-POSTing the same mockup appends a duplicate to the carousel.
+ * On a retry we skip the ranks Etsy already has rather than re-uploading them.
+ */
+export async function getListingImageCount(db: Db, listingId: number): Promise<number> {
+  const { ETSY_SHOP_ID } = getSettings();
+  const data = await etsyFetch(
+    db,
+    `/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/images`
+  );
+  return EtsyListingImagesResponseSchema.parse(data).count;
+}
+
 export async function activateListing(
   db: Db,
   listingId: number

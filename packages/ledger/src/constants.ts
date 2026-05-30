@@ -11,7 +11,7 @@ export const MARGIN_WARNING_THRESHOLD_USD = 5.0;
 
 // Per-blueprint flat print cost (USD). Update when adding new blueprints.
 export const BLUEPRINT_PRINT_COST_USD: Record<number, number> = {
-  6: 8.5, // Gildan 64000 t-shirt
+  145: 8.5, // Gildan 64000 t-shirt — must match printify_blueprint_id written by Design (packages/design/constants.py)
 };
 
 // Etsy fee components per CLAUDE.md "Per-Unit Economics"

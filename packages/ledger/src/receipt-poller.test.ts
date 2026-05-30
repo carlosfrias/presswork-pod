@@ -39,7 +39,7 @@ const BASE_RECEIPT = {
 };
 
 const LISTING_ROW = { design_package_id: "design-uuid-1" };
-const DESIGN_ROW = { printify_blueprint_id: 6 };
+const DESIGN_ROW = { printify_blueprint_id: 145 };
 
 interface MockOptions {
   insertError?: { code?: string; message: string } | null;

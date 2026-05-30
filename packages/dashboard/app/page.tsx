@@ -3,31 +3,23 @@ import { KpiTile } from "@/components/ui/KpiTile";
 import { SpendChart } from "@/components/overview/SpendChart";
 import { PipelineHealthBar } from "@/components/overview/PipelineHealth";
 import { RecentErrors } from "@/components/overview/RecentErrors";
-import { FalBalanceTile } from "@/components/overview/FalBalanceTile";
-import { AnthropicSpendTile } from "@/components/overview/AnthropicSpendTile";
-import { FlagsRail } from "@/components/flags/FlagsRail";
-import { DefaultImageModelCard } from "@/components/models/DefaultImageModelCard";
-import { deriveDefaultImageModel } from "@/lib/models/image-models";
 import {
   getKpis,
   getDailySummary,
   getPipelineHealth,
   getRecentErrors,
-  getRuntimeFlags,
 } from "@/lib/queries/overview";
 import { formatNumber, formatUsd } from "@/lib/format";
 
 export const revalidate = 30;
 
 export default async function OverviewPage() {
-  const [kpis30, daily, health, errors, flags] = await Promise.all([
+  const [kpis30, daily, health, errors] = await Promise.all([
     getKpis(30),
     getDailySummary(30),
     getPipelineHealth(),
     getRecentErrors(10),
-    getRuntimeFlags(),
   ]);
-  const defaultImageModel = deriveDefaultImageModel(flags);
 
   return (
     <div className="flex flex-col gap-8">
@@ -61,7 +53,7 @@ export default async function OverviewPage() {
         />
       </section>
 
-      <section className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6">
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <KpiTile
           label="Listings published"
           value={formatNumber(kpis30.listings_published)}
@@ -80,27 +72,6 @@ export default async function OverviewPage() {
           size="md"
           accent="neutral"
         />
-        <AnthropicSpendTile />
-        <KpiTile
-          label="Etsy fees"
-          value={formatUsd(kpis30.etsy_fees_usd, { compact: true })}
-          size="md"
-          accent="warm"
-        />
-        <FalBalanceTile />
-      </section>
-
-      <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <SurfaceCard
-          className="lg:col-span-2"
-          title="Spend vs margin"
-          subtitle="Daily, last 30 days"
-        >
-          <SpendChart data={daily} />
-        </SurfaceCard>
-        <SurfaceCard title="Recent errors" subtitle="Last 10 across all agents">
-          <RecentErrors errors={errors} />
-        </SurfaceCard>
       </section>
 
       <section>
@@ -111,14 +82,15 @@ export default async function OverviewPage() {
 
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <SurfaceCard
-          title="Image model"
-          subtitle="Default backend for new briefs"
+          className="lg:col-span-2"
+          title="Daily margin"
+          subtitle="Last 30 days"
         >
-          <DefaultImageModelCard initial={defaultImageModel} />
+          <SpendChart data={daily} />
         </SurfaceCard>
-        <div className="lg:col-span-2">
-          <FlagsRail title="Runtime flags" />
-        </div>
+        <SurfaceCard title="Recent errors" subtitle="Last 10 across all agents">
+          <RecentErrors errors={errors} />
+        </SurfaceCard>
       </section>
     </div>
   );

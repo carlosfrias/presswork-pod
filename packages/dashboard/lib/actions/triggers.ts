@@ -219,7 +219,10 @@ export async function getPendingWorkCount(agent: Agent): Promise<number> {
       .from("trend_briefs")
       .select("id", { count: "exact", head: true })
       .eq("status", "approved");
-    if (error) return 0;
+    if (error) {
+      console.error("getPendingWorkCount(design): query failed, reporting 0:", error.message);
+      return 0;
+    }
     return count ?? 0;
   }
 
@@ -256,6 +259,13 @@ export async function getPendingWorkCount(agent: Agent): Promise<number> {
     pendingListings.error ||
     pendingPublishListings.error
   ) {
+    console.error(
+      "getPendingWorkCount(listing): query failed, reporting 0:",
+      approvedDesigns.error?.message ??
+        linkedDesigns.error?.message ??
+        pendingListings.error?.message ??
+        pendingPublishListings.error?.message,
+    );
     return 0;
   }
   const linkedIds = new Set(
@@ -284,9 +294,19 @@ export async function getIsListingAgentRunning(): Promise<boolean> {
   const email = await requireOwnerEmail();
   if (!email) return false;
   const db = serviceClient();
-  const { count } = await db
+  const { count, error } = await db
     .from("listings")
     .select("id", { count: "exact", head: true })
     .eq("status", "publishing");
+  if (error) {
+    // Fail safe toward "locked": a DB blip must not unlock a concurrent
+    // trigger while a publish may be in flight. Log so the degraded query
+    // is observable rather than silently un-gating the Run button.
+    console.error(
+      "getIsListingAgentRunning: query failed, assuming running (locked):",
+      error.message,
+    );
+    return true;
+  }
   return (count ?? 0) > 0;
 }

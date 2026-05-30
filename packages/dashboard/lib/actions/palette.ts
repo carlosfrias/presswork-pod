@@ -18,7 +18,8 @@ const COLORMIND_URL = "http://colormind.io/api/";
 const FETCH_TIMEOUT_MS = 3000;
 
 export async function generatePalette(): Promise<string[]> {
-  await requireOwnerEmail();
+  const email = await requireOwnerEmail();
+  if (!email) throw new Error("Unauthorized");
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);

@@ -29,7 +29,7 @@ export function runChecks(props: ComplianceChecksProps): Check[] {
   const textForForbidden = text.replaceAll(AI_DISCLOSURE_TEXT, "").toLowerCase();
   const hasDisclosure = (props.description ?? "").includes(AI_DISCLOSURE_TEXT);
   const forbiddenHit = FORBIDDEN_LISTING_TERMS.find((t) =>
-    new RegExp(`\\b${t.replaceAll(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}\\b`).test(textForForbidden),
+    new RegExp(`(?:^|[^A-Za-z0-9])${t.replaceAll(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}(?=$|[^A-Za-z0-9])`, "i").test(textForForbidden),
   );
   const urlHit = EXTERNAL_URL_PATTERN.test(text);
   const handleHit = SOCIAL_HANDLE_PATTERN.test(text);

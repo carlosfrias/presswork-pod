@@ -43,9 +43,16 @@ interface Props {
    * so the button stays locked even if the agent_runs subscription lags.
    */
   locked?: boolean;
+  /**
+   * Whether this agent has an upstream work queue (design, listing).
+   * Queue-less agents (scout, ledger) run on-demand — their button should
+   * remain enabled whenever the agent is not already running, regardless of
+   * pendingCount (which is always 0 for queue-less agents).
+   */
+  hasQueue?: boolean;
 }
 
-export function TriggerButton({ agent, label, pendingCount, locked = false }: Props) {
+export function TriggerButton({ agent, label, pendingCount, locked = false, hasQueue = false }: Props) {
   const runInFlight = useRunInFlight(agent);
 
   return (
@@ -55,6 +62,7 @@ export function TriggerButton({ agent, label, pendingCount, locked = false }: Pr
         label={label}
         pendingCount={pendingCount}
         runInFlight={runInFlight || locked}
+        hasQueue={hasQueue}
       />
     </form>
   );
@@ -121,13 +129,19 @@ function InnerButton({
   label,
   pendingCount,
   runInFlight,
+  hasQueue,
 }: {
   label: string;
   pendingCount: number;
   runInFlight: boolean;
+  hasQueue: boolean;
 }) {
   const { pending } = useFormStatus();
   const hasWork = pendingCount > 0;
+  // Queue-less agents (scout, ledger) are always considered "ready" — they
+  // have no upstream queue so pendingCount is always 0 by design. The only
+  // guard that should disable them is being already busy.
+  const canSubmit = hasQueue ? hasWork : true;
   const busy = pending || runInFlight;
   const showGlow = hasWork && !busy;
 
@@ -147,7 +161,7 @@ function InnerButton({
         type="submit"
         variant={showGlow ? "primary" : "secondary"}
         size="sm"
-        disabled={busy || !hasWork}
+        disabled={busy || !canSubmit}
         className={cn(
           "transition-shadow",
           showGlow && "ring-2 ring-(--accent-warm) ring-offset-2 ring-offset-(--surface-0)",

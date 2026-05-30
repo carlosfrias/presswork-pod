@@ -349,10 +349,15 @@ export function DesignReviewCard({ design: d }: { design: DesignReviewItem }) {
             />
           )}
 
-          {(active.caption || active.meta.created_at) && (
+          {(active.caption || active.meta.prompt || active.meta.created_at) && (
             <div className="text-[11px] leading-snug text-(--text-muted)">
               {active.caption && (
                 <div className="text-(--text-secondary)">{active.caption}</div>
+              )}
+              {active.meta.prompt && (
+                <p className="mt-0.5 line-clamp-2 font-mono text-[10px] text-(--text-faint)">
+                  {active.meta.prompt}
+                </p>
               )}
               <div className="flex items-center gap-2 tabular">
                 {active.meta.created_at && (

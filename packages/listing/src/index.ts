@@ -72,7 +72,19 @@ export async function run(): Promise<void> {
     const approvedId = await fetchPendingPublishListing(db);
     if (approvedId) {
       log.info({ action: "resume_publish", record_id: approvedId, status: "started" });
-      await resumePublish(db, approvedId);
+      try {
+        await resumePublish(db, approvedId);
+      } catch (e) {
+        // resumePublish owns all DB writes for the failure path (it sets the
+        // listings row back to pending_publish or error). Mirror Phase 2:
+        // log and continue so one listing's publish failure can't crash the
+        // run and starve every other pending_publish / pending / approved row.
+        log.error({
+          action: "resume_publish_failure",
+          record_id: approvedId,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
       continue;
     }
 
