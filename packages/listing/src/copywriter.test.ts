@@ -57,6 +57,8 @@ const brief = {
   top_tags: ["cat shirt", "cat tee"],
   color_palette: ["black", "white"],
   price_target_usd: 24.99,
+  shirt_colors: ["White"],
+  shirt_sizes: ["S", "M", "L", "XL", "2XL"],
   retry_count: 0,
 };
 

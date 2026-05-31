@@ -51,6 +51,8 @@ const brief: TrendBrief = {
   status: "done",
   niche: "cat lovers",
   price_target_usd: 26.99,
+  shirt_colors: ["White"],
+  shirt_sizes: ["S", "M", "L", "XL", "2XL"],
   retry_count: 0,
 };
 
