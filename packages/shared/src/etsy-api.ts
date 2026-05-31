@@ -415,8 +415,9 @@ export async function uploadListingImage(
 
   // Filename extension matches the resolved content-type so the multipart part
   // is self-consistent (Etsy sniffs the bytes, but a matching name avoids any
-  // edge-case mismatch). contentType is "image/<subtype>"; jpeg → .jpg.
-  const subtype = contentType.split("/")[1] ?? "png";
+  // edge-case mismatch). imageBlob.type is "image/<subtype>"; jpeg → .jpg.
+  // (Read from the blob since contentType is scoped to the try block above.)
+  const subtype = imageBlob.type.split("/")[1] ?? "png";
   const ext = subtype === "jpeg" ? "jpg" : subtype;
   const form = new FormData();
   form.append("image", imageBlob, `design.${ext}`);
