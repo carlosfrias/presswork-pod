@@ -50,47 +50,27 @@ export async function GET(
 }
 
 // uploadListingImage fetches imageUrl server-side, so an unconstrained URL is an
-// SSRF vector (e.g. http://169.254.169.254/...). Restrict to https on the hosts we
-// actually serve listing images from: Supabase Storage (design PNG) and the mockup
-// CDNs (Printify, Dynamic Mockups).
-const TRUSTED_IMAGE_HOST_SUFFIXES = [
-  ".supabase.co",
-  ".printify.com",
-  ".dynamicmockups.com",
-] as const;
-
-// Dynamic Mockups serves rendered images from an S3 bucket, NOT from a
-// *.dynamicmockups.com host. Match this bucket EXACTLY (not as a suffix): a
-// bare ".s3...amazonaws.com" suffix would trust every bucket in the region,
-// and even endsWith on the full host is bypassable by a bucket named to end
-// with this string. Exact-host equality closes both.
-const TRUSTED_IMAGE_HOSTS_EXACT = [
-  "app-dynamicmockups-psd-engine-production.s3.eu-central-1.amazonaws.com",
-] as const;
-
-function isTrustedImageUrl(raw: string): boolean {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return false;
-  }
-  if (url.protocol !== "https:") return false;
-  const host = url.hostname.toLowerCase();
-  if (TRUSTED_IMAGE_HOSTS_EXACT.some((h) => host === h)) return true;
-  return TRUSTED_IMAGE_HOST_SUFFIXES.some(
-    (suffix) => host === suffix.slice(1) || host.endsWith(suffix)
-  );
-}
-
+// SSRF vector (e.g. http://169.254.169.254/...). Rather than allowlist image-host
+// domains (brittle — e.g. Dynamic Mockups renders live on a rotating S3 bucket,
+// not *.dynamicmockups.com), the POST handler authorizes against OUR OWN DATA:
+// the URL must already be one of THIS listing's known images (its design PNG or
+// a generated mockup). That guarantees we only ever re-upload assets we produced
+// and is immune to any mockup provider changing CDNs. https is still required
+// here as a basic guard before the server-side fetch.
 const PostBodySchema = z.object({
   imageUrl: z
     .string()
     .url()
-    .refine(isTrustedImageUrl, {
-      message:
-        "imageUrl must be an https URL on a trusted image host (Supabase Storage, Printify, or Dynamic Mockups)",
-    }),
+    .refine(
+      (raw) => {
+        try {
+          return new URL(raw).protocol === "https:";
+        } catch {
+          return false;
+        }
+      },
+      { message: "imageUrl must be an https URL" }
+    ),
   rank: z.number().int().positive().optional(),
   altText: z.string().max(250).optional(),
 });
@@ -126,7 +106,12 @@ export async function POST(
 
   const { data: listing, error } = await db
     .from("listings")
-    .select("etsy_listing_id, title")
+    .select(
+      `etsy_listing_id, title,
+       design_packages:design_packages!listings_design_package_id_fkey(
+         image_url, mockup_urls
+       )`
+    )
     .eq("id", id)
     .maybeSingle();
 
@@ -139,6 +124,35 @@ export async function POST(
     return NextResponse.json(
       { error: "Listing has no etsy_listing_id — not yet published to Etsy" },
       { status: 409 }
+    );
+  }
+
+  // Authorize the URL against this listing's own image pool: the design PNG
+  // plus every generated mockup. Anything else is rejected — this is the SSRF
+  // guard (only assets we produced can be fetched server-side) and also stops
+  // an unrelated image being added to the listing. The embedded relation comes
+  // back typed as an array, so cast via unknown (the pattern used elsewhere in
+  // the dashboard for to-one joins).
+  const design = (
+    listing as unknown as {
+      design_packages?: {
+        image_url: string | null;
+        mockup_urls: string[] | null;
+      } | null;
+    }
+  ).design_packages;
+  const allowedImageUrls = new Set<string>(
+    [design?.image_url ?? null, ...(design?.mockup_urls ?? [])].filter(
+      (u): u is string => typeof u === "string" && u.length > 0
+    )
+  );
+  if (!allowedImageUrls.has(imageUrl)) {
+    return NextResponse.json(
+      {
+        error:
+          "imageUrl is not part of this listing's design — only its design image or generated mockups can be added.",
+      },
+      { status: 400 }
     );
   }
 
