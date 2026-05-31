@@ -14,6 +14,27 @@
 
 ---
 
+## ⏯ NEXT SESSION — START HERE
+
+**Done & shipped (on `main`):** Phase 0 — `printify_variant_catalog` table (migration `053`, applied to cloud) + seed script (`scripts/seed-printify-variant-catalog.ts`). Cloud catalog holds **419 SwiftPOD variants** (63 colors × 9 sizes), verified.
+
+**Decisions locked (do not re-litigate):**
+- Provider = **SwiftPOD (39)**. Variant IDs are blueprint-scoped → White S–2XL = `38163/38177/38191/38205/38219`, 3XL = `42120`.
+- Costs: base **$10.09** (S–XL), 2XL $11.53, 3XL $12.76; ship $4.29.
+- New default retail **$26.99**; Scout range **$25.99–$34.99**.
+- Default offered set = White + S/M/L/XL/2XL. Colors selectable = full SwiftPOD catalog. Selection on `trend_briefs`, per-listing override on `listings.selected_variant_ids`.
+
+**Next action = Phase 1** (was awaiting owner go-ahead at session end):
+1. **Phase 1a** — flip provider constants (3→39) in `packages/design/constants.py` + `packages/listing/src/constants.ts`; update cost constants to $10.09/$4.29 in Listing + Ledger; re-baseline `packages/dashboard/lib/scout/generate-niche.ts` to $26.99 / $25.99–$34.99.
+2. **Phase 1b** — migrations `054` (`trend_briefs.shirt_colors[]`,`shirt_sizes[]`) + `055` (`listings.selected_variant_ids[]`) + zod/pydantic model updates. **Apply via Supabase MCP `apply_migration`, NOT `supabase db push`** — see drift note below.
+Then Phases 2–6 (Design agent, Listing agent, dashboard pickers, tests).
+
+**⚠ Known repo gotchas:**
+- **Migration-history drift:** cloud `schema_migrations` records 001–045 by `NNN`, but 046–052 were applied via timestamp-versioned migrations (MCP/dashboard), so `supabase db push` is broken (thinks 046+ unapplied → would re-create existing tables). Apply new migrations with the Supabase MCP `apply_migration` tool. (Worth a separate history-repair cleanup someday.)
+- **CI red on `main`** (pre-existing, not variants-related): `packages/listing/src/publish.test.ts` fails because the `./publish` export points at `dist/publish.js`, a build artifact CI doesn't produce before `vitest`. Belongs to the listing/image-upload workstream.
+
+---
+
 ## 1. Goal
 
 Let an operator choose which **shirt colors** and **sizes** a design/listing offers.
