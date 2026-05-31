@@ -14,6 +14,7 @@ import {
   getRuntimeFlag,
   notifySlack,
   POD_VARIANT_QUANTITY,
+  validateVariantIds,
 } from "@presswork/shared";
 import { writeCopy } from "./copywriter.js";
 import { validatePricingFloor } from "./pricing.js";
@@ -172,12 +173,34 @@ export async function publishOne(
         design.printify_blueprint_id,
         design.printify_print_provider_id
       );
+
+      // Load the operator's variant override. recreatePrintifyProduct on the
+      // dashboard resets status→'pending' (not variants), so honoring the
+      // override HERE is what makes "recreate" apply the narrowed selection.
+      const { data: variantOverrideRow } = await db
+        .from("listings")
+        .select("selected_variant_ids")
+        .eq("id", listingId)
+        .single();
+      const selectedVariantIds =
+        (variantOverrideRow as { selected_variant_ids?: number[] | null } | null)
+          ?.selected_variant_ids ?? null;
+
+      const designVariantIds = design.printify_variant_ids ?? [];
+      if (selectedVariantIds !== null && selectedVariantIds.length > 0) {
+        validateVariantIds(selectedVariantIds, designVariantIds);
+      }
+      const variantIds =
+        selectedVariantIds !== null && selectedVariantIds.length > 0
+          ? selectedVariantIds
+          : designVariantIds;
+
       log.info({ action: "create_printify_product", record_id: listingId, status: "started" });
       const result = await createHiddenProduct({
         imageUrl: design.image_url ?? "",
         blueprintId: design.printify_blueprint_id,
         printProviderId: design.printify_print_provider_id,
-        variantIds: design.printify_variant_ids ?? [],
+        variantIds,
         title: copy.title,
       });
       productId = result.productId;
@@ -456,7 +479,7 @@ export async function resumePublish(
   const { data: row, error: rowErr } = await db
     .from("listings")
     .select(
-      "status, printify_product_id, title, description, tags, price_usd, retry_count, design_package_id"
+      "status, printify_product_id, title, description, tags, price_usd, retry_count, design_package_id, selected_variant_ids"
     )
     .eq("id", listingId)
     .single();
@@ -474,6 +497,7 @@ export async function resumePublish(
     price_usd: number | null;
     retry_count: number;
     design_package_id: string | null;
+    selected_variant_ids: number[] | null;
   };
 
   if (listing.status !== "pending_publish") {
@@ -516,13 +540,26 @@ export async function resumePublish(
   const mockupUrls: string[] = designJoin?.mockup_urls ?? [];
   const mockupsFromActualDesign: boolean = designJoin?.mockups_from_actual_design ?? false;
   const blueprintId = designJoin?.printify_blueprint_id ?? null;
-  const printifyVariants = designJoin?.printify_variants ?? [];
+  let printifyVariants = designJoin?.printify_variants ?? [];
 
   if (blueprintId === null) {
     throw new PublisherError(
       `Listing ${listingId}: joined design_packages.printify_blueprint_id is missing`
     );
   }
+
+  // Apply the operator's variant override when set, narrowing the inventory
+  // to only the selected sizes/colors before building the Etsy inventory PUT.
+  if (listing.selected_variant_ids !== null && listing.selected_variant_ids.length > 0) {
+    validateVariantIds(
+      listing.selected_variant_ids,
+      printifyVariants.map((v) => v.id)
+    );
+    printifyVariants = printifyVariants.filter((v) =>
+      listing.selected_variant_ids!.includes(v.id)
+    );
+  }
+
   if (printifyVariants.length === 0) {
     throw new PublisherError(
       `Listing ${listingId}: joined design_packages.printify_variants is empty — Printify product create did not record variant labels`

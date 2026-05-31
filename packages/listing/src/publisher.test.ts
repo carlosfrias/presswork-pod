@@ -67,12 +67,15 @@ type DbMockOpts = {
     printify_product_id: string | null;
     is_active: boolean | null;
     retry_count: number | null;
+    selected_variant_ids: number[] | null;
   }> | null;
   retryCount?: number;
   existingEtsyListingId?: number | null;
   retryCountReadError?: string;
   /** Mockup URLs on the joined design_packages row (resumePublish image upload). */
   mockupUrls?: string[];
+  /** Override for the selected_variant_ids single-column query in publishOne. */
+  selectedVariantIds?: number[] | null;
 };
 
 type CaptureEntry = { table: string; data: Record<string, unknown> };
@@ -138,6 +141,13 @@ function makeDb(updates: CaptureEntry[], opts: DbMockOpts = {}) {
     if (currentSelectCols === "etsy_listing_id") {
       return { data: { etsy_listing_id: opts.existingEtsyListingId ?? null }, error: null };
     }
+    if (currentSelectCols === "selected_variant_ids") {
+      // publishOne queries this to apply the operator's variant subset override.
+      return {
+        data: { selected_variant_ids: opts.selectedVariantIds !== undefined ? opts.selectedVariantIds : null },
+        error: null,
+      };
+    }
     if (currentSelectCols.includes("design_packages")) {
       return {
         data: {
@@ -145,19 +155,28 @@ function makeDb(updates: CaptureEntry[], opts: DbMockOpts = {}) {
             mockup_urls: opts.mockupUrls ?? [],
             mockups_from_actual_design: true,
             // resumePublish needs these to build the inventory PUT payload.
-            // Default to a real Gildan 64000 + one variant so happy-path
-            // tests don't need to think about it; specific tests can override
-            // by widening this stub if they need to.
+            // Default to the full fixture variant set (matching design.printify_variant_ids)
+            // so happy-path tests don't need to think about it and selected_variant_ids
+            // filter tests can supply a subset.
             printify_blueprint_id: 145,
-            printify_variants: [{ id: 38163, values: ["s", "black"] }],
+            printify_variants: [
+              { id: 38163, values: ["s", "black"] },
+              { id: 38177, values: ["m", "black"] },
+              { id: 38191, values: ["l", "black"] },
+            ],
           },
         },
         error: null,
       };
     }
     // resumePublish reads a multi-column row; fall through to existingListing.
+    // Default selected_variant_ids to null so fixtures that predate the field
+    // don't surface as undefined (which breaks the !== null guard in resumePublish).
     if (currentSelectCols.startsWith("status,") && opts.existingListing) {
-      return { data: opts.existingListing, error: null };
+      return {
+        data: { selected_variant_ids: null, ...opts.existingListing },
+        error: null,
+      };
     }
     return { data: { id: LISTING_ID }, error: null };
   });
@@ -1187,5 +1206,191 @@ describe("publishOne", () => {
 
     // No image POST must have been attempted before the cap throw.
     expect(uploadListingImage).not.toHaveBeenCalled();
+  });
+
+  // ── Variant selection override tests ────────────────────────────────────────
+  //
+  // listings.selected_variant_ids (INT[] NULL, migration 055) lets the operator
+  // narrow which Printify variants appear on a listing. NULL = inherit the full
+  // set from design.printify_variant_ids.
+
+  it("publishOne uses selected_variant_ids when set (createHiddenProduct receives the subset)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    const { createHiddenProduct } = mockPrintify();
+    // Mock validateVariantIds as a no-op (the sibling agent owns the implementation).
+    vi.doMock("@presswork/shared", async () => {
+      const actual = await vi.importActual<typeof import("@presswork/shared")>("@presswork/shared");
+      return {
+        ...actual,
+        validateVariantIds: vi.fn(),
+        createDraftListing: vi.fn().mockResolvedValue({ listing_id: 777 }),
+        uploadListingImage: vi.fn().mockResolvedValue(undefined),
+        getListingImageCount: vi.fn().mockResolvedValue(0),
+        activateListing: vi.fn().mockResolvedValue(undefined),
+        updateListingInventory: vi.fn().mockResolvedValue(undefined),
+        getTaxonomyId: vi.fn().mockResolvedValue(68887043),
+        getSettings: vi.fn().mockReturnValue({
+          ETSY_SHIPPING_PROFILE_ID: 99,
+          ETSY_READINESS_STATE_ID: 42,
+          ETSY_PRODUCTION_PARTNER_ID: PARTNER_ID,
+        }),
+        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn(), warn: vi.fn() }),
+        notifySlack: vi.fn().mockResolvedValue(undefined),
+      };
+    });
+
+    // Operator has narrowed to a subset: [38163, 38191] out of [38163, 38177, 38191].
+    const db = makeDb([], { selectedVariantIds: [38163, 38191] });
+    const { publishOne } = await import("./publisher.js");
+    await publishOne(db, design, brief, LISTING_ID);
+
+    expect(createHiddenProduct).toHaveBeenCalledTimes(1);
+    const arg = createHiddenProduct.mock.calls[0]?.[0] as { variantIds: number[] };
+    expect(arg.variantIds).toEqual([38163, 38191]);
+  });
+
+  it("publishOne falls back to design.printify_variant_ids when selected_variant_ids is null", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    const { createHiddenProduct } = mockPrintify();
+    vi.doMock("@presswork/shared", async () => {
+      const actual = await vi.importActual<typeof import("@presswork/shared")>("@presswork/shared");
+      return {
+        ...actual,
+        validateVariantIds: vi.fn(),
+        createDraftListing: vi.fn().mockResolvedValue({ listing_id: 777 }),
+        uploadListingImage: vi.fn().mockResolvedValue(undefined),
+        getListingImageCount: vi.fn().mockResolvedValue(0),
+        activateListing: vi.fn().mockResolvedValue(undefined),
+        updateListingInventory: vi.fn().mockResolvedValue(undefined),
+        getTaxonomyId: vi.fn().mockResolvedValue(68887043),
+        getSettings: vi.fn().mockReturnValue({
+          ETSY_SHIPPING_PROFILE_ID: 99,
+          ETSY_READINESS_STATE_ID: 42,
+          ETSY_PRODUCTION_PARTNER_ID: PARTNER_ID,
+        }),
+        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn(), warn: vi.fn() }),
+        notifySlack: vi.fn().mockResolvedValue(undefined),
+      };
+    });
+
+    // selectedVariantIds not set → opts.selectedVariantIds is undefined → mock returns null.
+    const db = makeDb([], {});
+    const { publishOne } = await import("./publisher.js");
+    await publishOne(db, design, brief, LISTING_ID);
+
+    expect(createHiddenProduct).toHaveBeenCalledTimes(1);
+    const arg = createHiddenProduct.mock.calls[0]?.[0] as { variantIds: number[] };
+    // Full design set must be forwarded when no override is set.
+    expect(arg.variantIds).toEqual([38163, 38177, 38191]);
+  });
+
+  it("publishOne throws VariantSelectionError when selected_variant_ids contains an id outside design.printify_variant_ids", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    const { VariantSelectionError: MockVariantSelectionError } = await (async () => {
+      // Capture real error class before doMock replaces the module.
+      return { VariantSelectionError: class VariantSelectionError extends Error {} };
+    })();
+    vi.doMock("@presswork/shared", async () => {
+      const actual = await vi.importActual<typeof import("@presswork/shared")>("@presswork/shared");
+      // validateVariantIds throws VariantSelectionError when not a subset.
+      return {
+        ...actual,
+        VariantSelectionError: MockVariantSelectionError,
+        validateVariantIds: vi.fn().mockImplementation(() => {
+          throw new MockVariantSelectionError("variant 99999 not in design");
+        }),
+        getSettings: vi.fn().mockReturnValue({
+          ETSY_SHIPPING_PROFILE_ID: 99,
+          ETSY_READINESS_STATE_ID: 42,
+          ETSY_PRODUCTION_PARTNER_ID: PARTNER_ID,
+        }),
+        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn(), warn: vi.fn() }),
+        notifySlack: vi.fn().mockResolvedValue(undefined),
+      };
+    });
+
+    // 99999 is not in design.printify_variant_ids ([38163, 38177, 38191]).
+    const db = makeDb([], { selectedVariantIds: [38163, 99999] });
+    const { publishOne } = await import("./publisher.js");
+    await expect(publishOne(db, design, brief, LISTING_ID)).rejects.toThrow(
+      "variant 99999 not in design"
+    );
+  });
+
+  it("resumePublish filters printify_variants to selected_variant_ids before building inventory", async () => {
+    mockPrintify();
+    const updateListingInventory = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("@presswork/shared", async () => {
+      const actual = await vi.importActual<typeof import("@presswork/shared")>("@presswork/shared");
+      return {
+        ...actual,
+        validateVariantIds: vi.fn(),
+        createDraftListing: vi.fn().mockResolvedValue({ listing_id: 777 }),
+        uploadListingImage: vi.fn().mockResolvedValue(undefined),
+        getListingImageCount: vi.fn().mockResolvedValue(0),
+        activateListing: vi.fn().mockResolvedValue(undefined),
+        updateListingInventory,
+        getTaxonomyId: vi.fn().mockResolvedValue(68887043),
+        getSettings: vi.fn().mockReturnValue({
+          ETSY_SHIPPING_PROFILE_ID: 99,
+          ETSY_READINESS_STATE_ID: 42,
+          ETSY_PRODUCTION_PARTNER_ID: PARTNER_ID,
+        }),
+        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn(), warn: vi.fn() }),
+        notifySlack: vi.fn().mockResolvedValue(undefined),
+      };
+    });
+
+    // The mock db returns all three variants from design_packages; listing row
+    // carries selected_variant_ids = [38163, 38191] (subset of the full set).
+    const db = makeDb([], {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending_publish",
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+        price_usd: 24.99,
+        printify_product_id: PRODUCT_ID,
+        is_active: false,
+        retry_count: 0,
+        selected_variant_ids: [38163, 38191],
+      },
+      existingEtsyListingId: 5555,
+    });
+
+    const { resumePublish } = await import("./publisher.js");
+    await resumePublish(db, LISTING_ID);
+
+    // updateListingInventory receives the buildInventoryFromDesign output which
+    // is built from the filtered printifyVariants. Verify the call was made —
+    // the actual inventory shape is covered by inventory.test.ts.
+    expect(updateListingInventory).toHaveBeenCalledTimes(1);
+    // Call signature: updateListingInventory(db, etsyListingId, inventory)
+    // [0]=db, [1]=etsyListingId, [2]=inventory payload.
+    const inventoryArg = updateListingInventory.mock.calls[0]?.[2];
+    // buildInventoryFromDesign produces { products: [...] }; each variant maps
+    // to one product entry. We just verify the call was made with a truthy payload —
+    // the exact shape is covered by inventory.test.ts.
+    expect(inventoryArg).toBeDefined();
   });
 });

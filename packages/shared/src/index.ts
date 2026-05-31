@@ -17,3 +17,4 @@ export * from "./printify-http.js";
 export * from "./printify-metrics.js";
 export * from "./runtime-flags.js";
 export * from "./types.js";
+export * from "./variant-selection.js";

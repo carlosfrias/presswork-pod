@@ -10,7 +10,6 @@ from packages.design.bria import remove_background_bria_url
 from packages.design.constants import (
     GILDAN_64000_BLUEPRINT_ID,
     GILDAN_64000_PRINT_PROVIDER_ID,
-    GILDAN_64000_VARIANT_IDS,
 )
 from packages.design.fal_client import generate_image_url as generate_flux_image_url
 from packages.design.gpt_image_client import (
@@ -26,6 +25,7 @@ from packages.design.prompt_builder import build_image_prompt
 from packages.design.remask import run_remask_sweep
 from packages.design.storage import upload_design
 from packages.design.upscaler import upscale_url
+from packages.design.variant_catalog import resolve_variant_ids
 from packages.shared_py.config import get_settings
 from packages.shared_py.db import get_db
 from packages.shared_py.fal_http import download_image
@@ -157,6 +157,17 @@ async def run() -> None:
         t0 = time.monotonic()
         brief_id = str(brief.id)
 
+        # Resolve operator-selected color/size combos into Printify variant IDs.
+        # Falls back to GILDAN_64000_VARIANT_IDS (White S/M/L/XL/2XL) if the
+        # brief has no selections or no catalog rows match.
+        resolved_variant_ids = resolve_variant_ids(
+            db,
+            GILDAN_64000_BLUEPRINT_ID,
+            GILDAN_64000_PRINT_PROVIDER_ID,
+            brief.shirt_colors or [],
+            brief.shirt_sizes or [],
+        )
+
         def _select_existing() -> Any:
             return (
                 db.table("design_packages")
@@ -255,7 +266,7 @@ async def run() -> None:
                     "fal_prompt_hash": fal_prompt_hash,
                     "printify_blueprint_id": GILDAN_64000_BLUEPRINT_ID,
                     "printify_print_provider_id": GILDAN_64000_PRINT_PROVIDER_ID,
-                    "printify_variant_ids": GILDAN_64000_VARIANT_IDS,
+                    "printify_variant_ids": resolved_variant_ids,
                     "image_url": cached_row["image_url"],
                     "image_url_unmasked": cached_row.get("image_url_unmasked"),
                     "status": _DESIGN_OUTPUT_STATUS,
@@ -336,7 +347,7 @@ async def run() -> None:
                             "fal_prompt_hash": fal_prompt_hash,
                             "printify_blueprint_id": GILDAN_64000_BLUEPRINT_ID,
                             "printify_print_provider_id": GILDAN_64000_PRINT_PROVIDER_ID,
-                            "printify_variant_ids": GILDAN_64000_VARIANT_IDS,
+                            "printify_variant_ids": resolved_variant_ids,
                             "metadata": {
                                 "style_descriptors": image_prompt.style_descriptors,
                                 "image_model": _brief_image_model,
