@@ -9,6 +9,7 @@ import { ColorPaletteEditor } from "@/components/design/ColorPaletteEditor";
 import { StylePicker } from "@/components/styles/StylePicker";
 import { ImageModelPicker } from "@/components/models/ImageModelPicker";
 import { BgRemovalPicker } from "@/components/models/BgRemovalPicker";
+import { VariantPicker } from "@/components/variants/VariantPicker";
 import { formatRelative } from "@/lib/format";
 import { withCacheBuster, withDownload, withTransform } from "@/lib/imageUrl";
 import { ReplaceImageForm } from "@/components/design/ReplaceImageForm";
@@ -105,7 +106,13 @@ function shortCaption(v: DesignReviewItem["regen_stack"][number]): string {
   return parts.join(" · ");
 }
 
-export function DesignReviewCard({ design: d }: { design: DesignReviewItem }) {
+export function DesignReviewCard({
+  design: d,
+  variantOptions,
+}: {
+  design: DesignReviewItem;
+  variantOptions: { colors: string[]; sizes: string[] };
+}) {
   // Stack of historical iterations (newest-last). For legacy rows the stack
   // is a single synthetic entry pointing at the row's current image pair.
   const stack = useMemo(() => buildStack(d), [d]);
@@ -202,6 +209,16 @@ export function DesignReviewCard({ design: d }: { design: DesignReviewItem }) {
   const [palette, setPalette] = useState<string[]>(initialPalette);
   const paletteDirty =
     JSON.stringify(palette) !== JSON.stringify(initialPalette);
+
+  const initialShirtColors = d.trend_brief?.shirt_colors ?? ["White"];
+  const [shirtColors, setShirtColors] = useState<string[]>(initialShirtColors);
+  const shirtColorsDirty =
+    JSON.stringify(shirtColors) !== JSON.stringify(initialShirtColors);
+
+  const initialShirtSizes = d.trend_brief?.shirt_sizes ?? ["S", "M", "L", "XL", "2XL"];
+  const [shirtSizes, setShirtSizes] = useState<string[]>(initialShirtSizes);
+  const shirtSizesDirty =
+    JSON.stringify(shirtSizes) !== JSON.stringify(initialShirtSizes);
 
   // Browsing a non-newest entry should be visible — banner sits beneath the
   // image so the operator knows the action buttons (Approve / Re-mask) will
@@ -415,6 +432,16 @@ export function DesignReviewCard({ design: d }: { design: DesignReviewItem }) {
 
           <BgRemovalPicker value={bgRemoval} onChange={setBgRemoval} />
 
+          <VariantPicker
+            colorOptions={variantOptions.colors}
+            sizeOptions={variantOptions.sizes}
+            selectedColors={shirtColors}
+            selectedSizes={shirtSizes}
+            onColorsChange={setShirtColors}
+            onSizesChange={setShirtSizes}
+            disabled={isBusy}
+          />
+
           {d.fal_prompt != null && (
             <details className="text-xs" open={promptDirty}>
               <summary className="cursor-pointer text-(--text-muted) hover:text-(--text-primary)">
@@ -480,6 +507,18 @@ export function DesignReviewCard({ design: d }: { design: DesignReviewItem }) {
               palette.filter((h) => /^#[0-9a-f]{6}$/.test(h.toLowerCase())),
             )}
           />
+          <input
+            type="hidden"
+            form={`regen-${d.id}`}
+            name="shirt_colors"
+            value={JSON.stringify(shirtColors)}
+          />
+          <input
+            type="hidden"
+            form={`regen-${d.id}`}
+            name="shirt_sizes"
+            value={JSON.stringify(shirtSizes)}
+          />
 
           {d.error_message && (
             <div className="rounded-(--radius-sm) bg-(--accent-bad)/10 p-2 text-xs text-(--accent-bad)">
@@ -539,6 +578,8 @@ export function DesignReviewCard({ design: d }: { design: DesignReviewItem }) {
                   </>
                 ) : promptDirty ||
                   paletteDirty ||
+                  shirtColorsDirty ||
+                  shirtSizesDirty ||
                   imageModel !== (d.trend_brief?.image_model ?? "fal_gpt_image_2") ||
                   bgRemoval !== (d.trend_brief?.background_removal_mode ?? null) ? (
                   "Regen with edit"

@@ -25,6 +25,9 @@ describe("getDesignReviewQueue", () => {
           claude_analysis: { style: "screen_print" },
           image_model: "fal_gpt_image_2",
           background_removal_mode: "birefnet",
+          shirt_colors: null,
+          shirt_sizes: null,
+          image_description: null,
         },
       },
     ];
@@ -42,6 +45,8 @@ describe("getDesignReviewQueue", () => {
       image_model: "fal_gpt_image_2",
       background_removal_mode: "birefnet",
       image_description: null,
+      shirt_colors: ["White"],
+      shirt_sizes: ["S", "M", "L", "XL", "2XL"],
     });
     // regen_stack defaults to [] when metadata is null
     expect(item.regen_stack).toEqual([]);

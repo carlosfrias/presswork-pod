@@ -664,6 +664,63 @@ export async function recreatePrintifyProduct(formData: FormData) {
   revalidatePath(`/listings/${id}`);
 }
 
+/**
+ * Save the operator's per-listing variant-ID override. An empty selection
+ * (all unchecked) is stored as NULL, meaning "inherit the full design set".
+ *
+ * Validates the selected IDs against the design package's available set
+ * before writing — mirrors the validateCopyCompliance catch pattern.
+ */
+export async function updateListingVariants(formData: FormData) {
+  await assertOwner();
+  const id = idSchema.parse(formData.get("id"));
+
+  const selected = formData
+    .getAll("selectedVariantIds")
+    .map(Number)
+    .filter((n) => !Number.isNaN(n));
+
+  const db = serviceClient();
+
+  // Read the authoritative available IDs from the design package.
+  const { data: row } = await db
+    .from("listings")
+    .select(
+      `id, design_packages:design_packages!listings_design_package_id_fkey(
+        printify_variant_ids
+      )`
+    )
+    .eq("id", id)
+    .maybeSingle();
+  if (!row) throw new Error("Listing not found");
+
+  const dp = (row as unknown as {
+    design_packages?: { printify_variant_ids: number[] | null } | null;
+  }).design_packages;
+  const available: number[] = dp?.printify_variant_ids ?? [];
+
+  if (selected.length > 0) {
+    const { validateVariantIds, VariantSelectionError } = await import(
+      "@presswork/shared"
+    );
+    try {
+      validateVariantIds(selected, available);
+    } catch (err) {
+      if (err instanceof VariantSelectionError) throw new Error(err.message);
+      throw err;
+    }
+  }
+
+  const { error } = await db
+    .from("listings")
+    .update({ selected_variant_ids: selected.length > 0 ? selected : null })
+    .eq("id", id);
+  if (error) throw new Error(`Save variant selection failed: ${error.message}`);
+
+  revalidatePath("/listings");
+  revalidatePath(`/listings/${id}`);
+}
+
 export async function retryListing(formData: FormData) {
   await assertOwner();
   const id = idSchema.parse(formData.get("id"));

@@ -14,16 +14,19 @@ import {
   getDesignReviewQueue,
   getTouchUpQueue,
 } from "@/lib/queries/design";
+import { getVariantOptions } from "@/lib/queries/variants";
 
 export const revalidate = 30;
 
 export default async function DesignPage() {
-  const [allDesigns, spend, reviewQueue, touchUpQueue] = await Promise.all([
-    getAllDesigns(500),
-    getDesignSpend(30),
-    getDesignReviewQueue(),
-    getTouchUpQueue(),
-  ]);
+  const [allDesigns, spend, reviewQueue, touchUpQueue, variantOptions] =
+    await Promise.all([
+      getAllDesigns(500),
+      getDesignSpend(30),
+      getDesignReviewQueue(),
+      getTouchUpQueue(),
+      getVariantOptions(145, 39),
+    ]);
 
   return (
     <div className="flex flex-col gap-8">
@@ -64,7 +67,7 @@ export default async function DesignPage() {
         ) : (
           <div className="flex flex-col gap-4">
             {reviewQueue.map((d) => (
-              <DesignReviewCard key={d.id} design={d} />
+              <DesignReviewCard key={d.id} design={d} variantOptions={variantOptions} />
             ))}
           </div>
         )}

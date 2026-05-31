@@ -46,6 +46,7 @@ interface PreviewRow {
   description: string | null;
   tags: string[] | null;
   price_usd: number | null;
+  selected_variant_ids: number[] | null;
   design_packages:
     | {
         id: string;
@@ -66,7 +67,7 @@ export async function getEtsyPayloadPreview(
   const { data, error } = await db
     .from("listings")
     .select(
-      `id, status, title, description, tags, price_usd,
+      `id, status, title, description, tags, price_usd, selected_variant_ids,
        design_packages:design_packages!listings_design_package_id_fkey(
          id, mockup_urls, mockups_from_actual_design,
          printify_blueprint_id, printify_variants
@@ -168,12 +169,21 @@ export async function getEtsyPayloadPreview(
     ...(blueprintItemSpecs(dp.printify_blueprint_id) ?? {}),
   };
 
+  // When the operator has selected a specific subset of variants, filter
+  // printify_variants to that subset before building Etsy inventory — mirrors
+  // the resumePublish logic in publisher.ts (read-only here, no mutations).
+  const selectedIds = row.selected_variant_ids;
+  const effectiveVariants =
+    selectedIds && selectedIds.length > 0
+      ? dp.printify_variants.filter((v) => selectedIds.includes(v.id))
+      : dp.printify_variants;
+
   let inventory: EtsyInventoryInput | undefined;
   try {
     inventory = buildInventoryFromDesign({
       design: {
         printify_blueprint_id: dp.printify_blueprint_id,
-        printify_variants: dp.printify_variants,
+        printify_variants: effectiveVariants,
       },
       priceUsd: row.price_usd,
       readinessStateId,

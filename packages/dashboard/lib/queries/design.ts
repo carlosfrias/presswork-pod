@@ -41,6 +41,10 @@ export interface DesignReviewItem extends DesignPackageRow {
         // Operator-authored creative direction (renamed by migration 045).
         // Displayed in the review card as context alongside the fal_prompt.
         image_description: string | null;
+        // Non-null: mapper defaults null DB values to safe fallbacks so
+        // downstream components never need to handle undefined.
+        shirt_colors: string[];
+        shirt_sizes: string[];
       })
     | null;
 }
@@ -96,7 +100,7 @@ export async function getDesignReviewQueue(): Promise<DesignReviewItem[]> {
     .from("design_packages")
     .select(
       `*,
-       trend_briefs:trend_briefs!design_packages_trend_brief_id_fkey(id, niche, color_palette, claude_analysis, image_model, background_removal_mode, image_description)`,
+       trend_briefs:trend_briefs!design_packages_trend_brief_id_fkey(id, niche, color_palette, shirt_colors, shirt_sizes, claude_analysis, image_model, background_removal_mode, image_description)`,
     )
     .eq("status", "needs_review")
     .order("created_at", { ascending: false });
@@ -107,6 +111,8 @@ export async function getDesignReviewQueue(): Promise<DesignReviewItem[]> {
   type Row = DesignPackageRow & {
     trend_briefs:
       | (Pick<TrendBriefRow, "id" | "niche" | "color_palette"> & {
+          shirt_colors: string[] | null;
+          shirt_sizes: string[] | null;
           claude_analysis: unknown;
           image_model: unknown;
           background_removal_mode: unknown;
@@ -128,6 +134,8 @@ export async function getDesignReviewQueue(): Promise<DesignReviewItem[]> {
             r.trend_briefs.background_removal_mode,
           ),
           image_description: r.trend_briefs.image_description ?? null,
+          shirt_colors: r.trend_briefs.shirt_colors ?? ["White"],
+          shirt_sizes: r.trend_briefs.shirt_sizes ?? ["S", "M", "L", "XL", "2XL"],
         }
       : null,
   }));
@@ -139,7 +147,7 @@ export async function getTouchUpQueue(): Promise<DesignReviewItem[]> {
     .from("design_packages")
     .select(
       `*,
-       trend_briefs:trend_briefs!design_packages_trend_brief_id_fkey(id, niche, color_palette, claude_analysis, image_model, background_removal_mode, image_description)`,
+       trend_briefs:trend_briefs!design_packages_trend_brief_id_fkey(id, niche, color_palette, shirt_colors, shirt_sizes, claude_analysis, image_model, background_removal_mode, image_description)`,
     )
     .eq("status", "touch_up")
     .order("created_at", { ascending: false });
@@ -150,6 +158,8 @@ export async function getTouchUpQueue(): Promise<DesignReviewItem[]> {
   type Row = DesignPackageRow & {
     trend_briefs:
       | (Pick<TrendBriefRow, "id" | "niche" | "color_palette"> & {
+          shirt_colors: string[] | null;
+          shirt_sizes: string[] | null;
           claude_analysis: unknown;
           image_model: unknown;
           background_removal_mode: unknown;
@@ -171,6 +181,8 @@ export async function getTouchUpQueue(): Promise<DesignReviewItem[]> {
             r.trend_briefs.background_removal_mode,
           ),
           image_description: r.trend_briefs.image_description ?? null,
+          shirt_colors: r.trend_briefs.shirt_colors ?? ["White"],
+          shirt_sizes: r.trend_briefs.shirt_sizes ?? ["S", "M", "L", "XL", "2XL"],
         }
       : null,
   }));

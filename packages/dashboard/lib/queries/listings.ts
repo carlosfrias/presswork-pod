@@ -41,9 +41,14 @@ export interface ListingWithDesign extends ListingRow {
     | "image_url"
     | "mockup_urls"
     | "printify_blueprint_id"
+    | "printify_print_provider_id"
+    | "printify_variant_ids"
     | "mockups_from_actual_design"
     | "updated_at"
-  > | null;
+  > & {
+    /** Narrowed from the `unknown` DesignPackageRow type for consumer convenience. */
+    printify_variants: Array<{ id: number; values: string[] }> | null;
+  } | null;
   trend_brief: Pick<TrendBriefRow, "id" | "niche"> | null;
 }
 
@@ -57,7 +62,8 @@ export async function getListingsByStatus(
     .select(
       `*,
        design_packages:design_packages!listings_design_package_id_fkey(
-         id, image_url, mockup_urls, printify_blueprint_id, mockups_from_actual_design, updated_at,
+         id, image_url, mockup_urls, printify_blueprint_id, printify_print_provider_id,
+         printify_variant_ids, printify_variants, mockups_from_actual_design, updated_at,
          trend_briefs:trend_briefs!design_packages_trend_brief_id_fkey(
            id, niche
          )
@@ -81,13 +87,34 @@ type RawListingJoin = ListingRow & {
         | "image_url"
         | "mockup_urls"
         | "printify_blueprint_id"
+        | "printify_print_provider_id"
+        | "printify_variant_ids"
         | "mockups_from_actual_design"
         | "updated_at"
       > & {
+        printify_variants: unknown;
         trend_briefs: Pick<TrendBriefRow, "id" | "niche"> | null;
       })
     | null;
 };
+
+function narrowPrintifyVariants(
+  raw: unknown
+): Array<{ id: number; values: string[] }> | null {
+  if (!Array.isArray(raw)) return null;
+  const result: Array<{ id: number; values: string[] }> = [];
+  for (const item of raw) {
+    if (
+      item &&
+      typeof item === "object" &&
+      typeof (item as Record<string, unknown>).id === "number" &&
+      Array.isArray((item as Record<string, unknown>).values)
+    ) {
+      result.push(item as { id: number; values: string[] });
+    }
+  }
+  return result.length > 0 ? result : null;
+}
 
 function flattenListing(row: RawListingJoin): ListingWithDesign {
   const dp = row.design_packages;
@@ -99,6 +126,9 @@ function flattenListing(row: RawListingJoin): ListingWithDesign {
           image_url: dp.image_url,
           mockup_urls: dp.mockup_urls,
           printify_blueprint_id: dp.printify_blueprint_id,
+          printify_print_provider_id: dp.printify_print_provider_id,
+          printify_variant_ids: dp.printify_variant_ids,
+          printify_variants: narrowPrintifyVariants(dp.printify_variants),
           mockups_from_actual_design: dp.mockups_from_actual_design,
           updated_at: dp.updated_at,
         }
@@ -114,7 +144,8 @@ export async function getListing(id: string): Promise<ListingWithDesign | null> 
     .select(
       `*,
        design_packages:design_packages!listings_design_package_id_fkey(
-         id, image_url, mockup_urls, printify_blueprint_id, mockups_from_actual_design, updated_at,
+         id, image_url, mockup_urls, printify_blueprint_id, printify_print_provider_id,
+         printify_variant_ids, printify_variants, mockups_from_actual_design, updated_at,
          trend_briefs:trend_briefs!design_packages_trend_brief_id_fkey(
            id, niche
          )
@@ -153,7 +184,8 @@ export async function getRecentListings(limit = 20): Promise<ListingWithDesign[]
     .select(
       `*,
        design_packages:design_packages!listings_design_package_id_fkey(
-         id, image_url, mockup_urls, printify_blueprint_id, mockups_from_actual_design, updated_at,
+         id, image_url, mockup_urls, printify_blueprint_id, printify_print_provider_id,
+         printify_variant_ids, printify_variants, mockups_from_actual_design, updated_at,
          trend_briefs:trend_briefs!design_packages_trend_brief_id_fkey(
            id, niche
          )

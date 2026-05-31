@@ -65,6 +65,31 @@ function parseBgRemovalAction(raw: FormDataEntryValue | null): BgRemovalAction {
     : { kind: "set", value: null };
 }
 
+// Two-state encoding for the shirt-color / shirt-size chip rows on regen:
+//   "skip"  → field absent (legacy callers); leave column alone
+//   "set"   → operator explicitly chose a set (may be empty → agent fallback)
+// Unlike color_palette there is no hex validation — these are plain TEXT[].
+type StringArrayAction =
+  | { kind: "skip" }
+  | { kind: "set"; value: string[] };
+
+// Parses a JSON string-array form field (shirt_colors / shirt_sizes). These map
+// to NOT NULL TEXT[] columns, so an empty or malformed value is treated as
+// "skip" (preserve the brief's existing selection) rather than writing NULL,
+// which the schema rejects and would fail the whole Regen. Only a non-empty
+// array replaces the selection.
+function parseStringArrayAction(raw: FormDataEntryValue | null): StringArrayAction {
+  if (typeof raw !== "string") return { kind: "skip" };
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return { kind: "skip" };
+    const items = parsed.map(String).filter((s) => s.length > 0);
+    return items.length > 0 ? { kind: "set", value: items } : { kind: "skip" };
+  } catch {
+    return { kind: "skip" };
+  }
+}
+
 async function assertOwner() {
   const email = await requireOwnerEmail();
   if (!email) throw new Error("Unauthorized");
@@ -314,6 +339,8 @@ export async function regenerateDesign(formData: FormData) {
   const bgRemovalAction = parseBgRemovalAction(
     formData.get("background_removal_mode"),
   );
+  const shirtColorsAction = parseStringArrayAction(formData.get("shirt_colors"));
+  const shirtSizesAction = parseStringArrayAction(formData.get("shirt_sizes"));
   const db = serviceClient();
 
   // Clear the design row's downstream state, then revert the upstream brief
@@ -400,6 +427,12 @@ export async function regenerateDesign(formData: FormData) {
     if (bgRemovalAction.kind === "set") {
       // null = clear the override → Python falls back to the runtime flag.
       briefUpdate.background_removal_mode = bgRemovalAction.value;
+    }
+    if (shirtColorsAction.kind === "set") {
+      briefUpdate.shirt_colors = shirtColorsAction.value;
+    }
+    if (shirtSizesAction.kind === "set") {
+      briefUpdate.shirt_sizes = shirtSizesAction.value;
     }
     // Merge style into claude_analysis without clobbering existing keys
     // (source, parent_brief_id, etc.). Read-modify-write is safe here

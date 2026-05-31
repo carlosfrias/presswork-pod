@@ -10,6 +10,7 @@ import { EtsyPayloadPreview } from "@/components/listings/EtsyPayloadPreview";
 import { CopyEditor } from "@/components/listings/CopyEditor";
 import { StaleArtworkBadge } from "@/components/listings/StaleArtworkBadge";
 import { DynamicMockupsTrigger } from "@/components/listings/DynamicMockupsTrigger";
+import { VariantOverrideEditor } from "@/components/listings/VariantOverrideEditor";
 import { SubmitButton } from "@/components/ui/SubmitButton";
 import {
   approveListing,
@@ -192,6 +193,25 @@ export default async function ListingDetailPage({ params }: Params) {
               <p className="whitespace-pre-wrap break-words rounded-(--radius-sm) border border-(--accent-bad)/30 bg-(--accent-bad)/10 p-4 text-sm leading-relaxed text-(--accent-bad)">
                 {listing.error_message}
               </p>
+            </SurfaceCard>
+          )}
+
+          {(listing.status === "needs_review" ||
+            listing.status === "pending_publish") && (
+            <SurfaceCard
+              title="Variant override"
+              subtitle="Narrow which colors and sizes are offered on this listing. Leave all checked to use the full design set."
+            >
+              <VariantOverrideEditor
+                listingId={listing.id}
+                availableVariantIds={
+                  listing.design_packages?.printify_variant_ids ?? []
+                }
+                printifyVariants={
+                  listing.design_packages?.printify_variants ?? null
+                }
+                selectedVariantIds={listing.selected_variant_ids ?? null}
+              />
             </SurfaceCard>
           )}
 

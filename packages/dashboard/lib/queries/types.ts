@@ -22,6 +22,10 @@ export interface TrendBriefRow {
   top_tags: string[] | null;
   price_target_usd: number | null;
   color_palette: string[] | null;
+  /** Operator-selected shirt colors to include in this run (e.g. ["White", "Black"]). */
+  shirt_colors: string[] | null;
+  /** Operator-selected shirt sizes to include in this run (e.g. ["S","M","L","XL","2XL"]). */
+  shirt_sizes: string[] | null;
   // Operator-authored image description. Builder writes this; Design's
   // prompt builder folds it into the Claude prompt-build call as
   // authoritative creative direction.
@@ -128,6 +132,12 @@ export interface ListingRow {
    * trigger auto-rebuilds — so this column only matters for active rows.
    */
   design_synced_at: string | null;
+  /**
+   * Variant IDs the operator has explicitly chosen for this listing.
+   * When non-null and non-empty, the publisher and preview filter
+   * printify_variants to this subset before building Etsy inventory.
+   */
+  selected_variant_ids: number[] | null;
 }
 
 export interface OrderRow {
