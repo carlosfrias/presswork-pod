@@ -418,11 +418,9 @@ const EtsyListingImagesResponseSchema = z.object({
  * On a retry we skip the ranks Etsy already has rather than re-uploading them.
  */
 export async function getListingImageCount(db: Db, listingId: number): Promise<number> {
-  const { ETSY_SHOP_ID } = getSettings();
-  const data = await etsyFetch(
-    db,
-    `/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/images`
-  );
+  // Etsy's GET listing-images endpoint is NOT shop-scoped (unlike POST/DELETE).
+  // The shop-scoped path returns 404 "Resource not found".
+  const data = await etsyFetch(db, `/application/listings/${listingId}/images`);
   return EtsyListingImagesResponseSchema.parse(data).count;
 }
 
@@ -435,11 +433,8 @@ export async function getListingImages(
   db: Db,
   listingId: number
 ): Promise<EtsyListingImage[]> {
-  const { ETSY_SHOP_ID } = getSettings();
-  const data = await etsyFetch(
-    db,
-    `/application/shops/${ETSY_SHOP_ID}/listings/${listingId}/images`
-  );
+  // GET images is NOT shop-scoped (POST/DELETE are) — shop path 404s.
+  const data = await etsyFetch(db, `/application/listings/${listingId}/images`);
   const { results } = EtsyListingImagesResponseSchema.parse(data);
   return [...results].sort((a, b) => a.rank - b.rank);
 }

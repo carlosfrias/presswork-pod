@@ -211,7 +211,9 @@ const fixtures: FixtureEntry[] = [
   },
 
   // List a listing's images — idempotency guard for the publish/resume path.
-  // GET /application/shops/{shop_id}/listings/{listing_id}/images
+  // GET /application/listings/{listing_id}/images  (NOT shop-scoped — unlike
+  // POST/DELETE; the shop-scoped GET path 404s on real Etsy). The matcher allows
+  // an optional shop segment for safety.
   // Returns a small populated set so the dashboard "Etsy listing images" panel
   // has real image IDs to work with in mock mode. The count must equal
   // results.length so getListingImageCount and getListingImages are consistent.
@@ -221,7 +223,7 @@ const fixtures: FixtureEntry[] = [
     name: "list_listing_images",
     match: ({ method, path }) =>
       method === "GET" &&
-      /\/application\/shops\/[^/]+\/listings\/[^/]+\/images\/?$/.test(path),
+      /\/application\/(?:shops\/[^/]+\/)?listings\/\d+\/images\/?$/.test(path),
     build: ({ path }) => {
       const idMatch = path.match(/listings\/(\d+)\/images/);
       const listingId = idMatch ? Number(idMatch[1]) : 0;

@@ -124,6 +124,12 @@ function baseHandlers(activateFails = false) {
         headers: { "Content-Type": "image/png" },
       })
     ),
+    // Etsy — GET listing images (resume idempotency guard). NOT shop-scoped:
+    // the shop-scoped GET 404s on real Etsy.
+    http.get(
+      `https://openapi.etsy.com/v3/application/listings/${ETSY_LISTING_ID}/images`,
+      () => HttpResponse.json({ count: 0, results: [] })
+    ),
     http.post(
       `https://openapi.etsy.com/v3/application/shops/${SHOP_ID}/listings/${ETSY_LISTING_ID}/images`,
       () => HttpResponse.json({ listing_image_id: 1, rank: 1 }, { status: 201 })
