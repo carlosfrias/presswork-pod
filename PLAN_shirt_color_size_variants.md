@@ -26,12 +26,12 @@
 
 **Next action = Phase 1** (was awaiting owner go-ahead at session end):
 1. **Phase 1a** — flip provider constants (3→39) in `packages/design/constants.py` + `packages/listing/src/constants.ts`; update cost constants to $10.09/$4.29 in Listing + Ledger; re-baseline `packages/dashboard/lib/scout/generate-niche.ts` to $26.99 / $25.99–$34.99.
-2. **Phase 1b** — migrations `054` (`trend_briefs.shirt_colors[]`,`shirt_sizes[]`) + `055` (`listings.selected_variant_ids[]`) + zod/pydantic model updates. **Apply via Supabase MCP `apply_migration`, NOT `supabase db push`** — see drift note below.
+2. **Phase 1b** — migrations `054` (`trend_briefs.shirt_colors[]`,`shirt_sizes[]`) + `055` (`listings.selected_variant_ids[]`) + zod/pydantic model updates. Apply with `supabase db push` (migration-history drift was repaired 2026-05-31 — see note below).
 Then Phases 2–6 (Design agent, Listing agent, dashboard pickers, tests).
 
-**⚠ Known repo gotchas:**
-- **Migration-history drift:** cloud `schema_migrations` records 001–045 by `NNN`, but 046–052 were applied via timestamp-versioned migrations (MCP/dashboard), so `supabase db push` is broken (thinks 046+ unapplied → would re-create existing tables). Apply new migrations with the Supabase MCP `apply_migration` tool. (Worth a separate history-repair cleanup someday.)
-- **CI red on `main`** (pre-existing, not variants-related): `packages/listing/src/publish.test.ts` fails because the `./publish` export points at `dist/publish.js`, a build artifact CI doesn't produce before `vitest`. Belongs to the listing/image-upload workstream.
+**✅ Repo cleanup done (2026-05-31), both formerly-blocking gotchas resolved:**
+- **Migration-history drift — FIXED.** Cloud `schema_migrations` had 046–053 recorded as timestamp versions (046–049, 052, 053) with 050/051 absent entirely, so `supabase db push` saw 046+ as unapplied. Repaired via `supabase migration repair --status applied 046…053` + `--status reverted` on the 6 orphan timestamp rows (history table only — schema untouched; all 046–053 changes were already live). `supabase migration list` now shows clean 001–053 Local=Remote and `db push --dry-run` reports "up to date." **Use `supabase db push` for 054/055.**
+- **CI red on `main` — FIXED** (commit on `main`). `publish.test.ts` asserted the `dist/publish.js` build artifact exists; CI runs vitest without `tsc -b` so it failed (green only locally with a stale `dist/`). Rewrote the guard to validate the build-independent invariant (export wired to `./dist/*.js` + backing `src/*.ts` source exists + matching basenames).
 
 ---
 
