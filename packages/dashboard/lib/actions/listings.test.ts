@@ -18,6 +18,7 @@ let mockUpdateActiveListing: ReturnType<typeof vi.fn> = vi.fn();
 let mockRenderMockup: ReturnType<typeof vi.fn> = vi.fn();
 let mockDynamicMockupsTemplate: ReturnType<typeof vi.fn> = vi.fn();
 let mockDynamicMockupsTemplates: ReturnType<typeof vi.fn> = vi.fn();
+let mockResumePublish: ReturnType<typeof vi.fn> = vi.fn();
 
 interface LoadOpts extends SupabaseMockOpts {}
 interface LoadShared {
@@ -42,6 +43,7 @@ async function loadModule(opts: LoadOpts, shared: LoadShared = {}) {
   mockDynamicMockupsTemplates = vi.fn(
     () => (shared.template ? [shared.template] : []),
   ) as ReturnType<typeof vi.fn>;
+  mockResumePublish = vi.fn().mockResolvedValue(undefined);
 
   vi.doMock("@presswork/shared", async () => {
     const actual = await vi.importActual<typeof import("@presswork/shared")>(
@@ -55,6 +57,9 @@ async function loadModule(opts: LoadOpts, shared: LoadShared = {}) {
       dynamicMockupsTemplates: mockDynamicMockupsTemplates,
     };
   });
+  vi.doMock("@presswork/listing/publish", () => ({
+    resumePublish: mockResumePublish,
+  }));
   const { client, capture } = makeSupabaseMock(opts);
   vi.doMock("@/lib/supabase/server", () => ({ serviceClient: () => client }));
   vi.resetModules();
@@ -66,6 +71,7 @@ async function loadModule(opts: LoadOpts, shared: LoadShared = {}) {
     revalidatePath: revalidatePath as ReturnType<typeof vi.fn>,
     updateActiveListingSpy: mockUpdateActiveListing,
     renderMockupSpy: mockRenderMockup,
+    resumePublishSpy: mockResumePublish,
   };
 }
 
@@ -495,5 +501,87 @@ describe("regenerateCopy", () => {
       tags: null,
       error_message: null,
     });
+  });
+});
+
+describe("publishListingNow", () => {
+  /** Helper: build FormData that may include multiple values for the same key */
+  function makePublishFormData(id: string, selectedImageUrls?: string[]): FormData {
+    const fd = new FormData();
+    fd.set("id", id);
+    if (selectedImageUrls) {
+      for (const url of selectedImageUrls) {
+        fd.append("selectedImageUrls", url);
+      }
+    }
+    return fd;
+  }
+
+  it("enforces owner + pending_publish status guard — rejects when listing is not pending_publish", async () => {
+    const { mod } = await loadModule({
+      listings: { maybeSingle: { status: "needs_review" } },
+    });
+
+    await expect(
+      mod.publishListingNow(makePublishFormData(VALID_ID)),
+    ).rejects.toThrow(/Cannot publish.*status='needs_review'.*pending_publish/);
+  });
+
+  it("enforces owner + pending_publish status guard — rejects when listing not found", async () => {
+    const { mod } = await loadModule({
+      listings: { maybeSingle: null },
+    });
+
+    await expect(
+      mod.publishListingNow(makePublishFormData(VALID_ID)),
+    ).rejects.toThrow(/Listing not found/);
+  });
+
+  it("no selection: calls resumePublish with empty opts (upload-all preserved)", async () => {
+    const { mod, resumePublishSpy, revalidatePath } = await loadModule({
+      listings: { maybeSingle: { status: "pending_publish" } },
+    });
+
+    await mod.publishListingNow(makePublishFormData(VALID_ID));
+
+    expect(resumePublishSpy).toHaveBeenCalledTimes(1);
+    const [, calledId, calledOpts] = resumePublishSpy.mock.calls[0];
+    expect(calledId).toBe(VALID_ID);
+    expect(calledOpts).toEqual({});
+
+    expect(revalidatePath).toHaveBeenCalledWith("/listings");
+    expect(revalidatePath).toHaveBeenCalledWith(`/listings/${VALID_ID}`);
+  });
+
+  it("forwards parsed selection: resumePublish receives selectedMockupUrls in order", async () => {
+    const { mod, resumePublishSpy } = await loadModule({
+      listings: { maybeSingle: { status: "pending_publish" } },
+    });
+
+    const urls = [
+      "https://cdn.printify.com/mockup-a.jpg",
+      "https://cdn.printify.com/mockup-b.jpg",
+    ];
+
+    await mod.publishListingNow(makePublishFormData(VALID_ID, urls));
+
+    expect(resumePublishSpy).toHaveBeenCalledTimes(1);
+    const [, calledId, calledOpts] = resumePublishSpy.mock.calls[0];
+    expect(calledId).toBe(VALID_ID);
+    expect(calledOpts).toEqual({ selectedMockupUrls: urls });
+  });
+
+  it("rejects when a selectedImageUrl value is not a valid URL", async () => {
+    const { mod } = await loadModule({
+      listings: { maybeSingle: { status: "pending_publish" } },
+    });
+
+    const fd = new FormData();
+    fd.set("id", VALID_ID);
+    fd.append("selectedImageUrls", "not-a-url");
+
+    await expect(mod.publishListingNow(fd)).rejects.toThrow(
+      /Invalid selectedImageUrls/,
+    );
   });
 });

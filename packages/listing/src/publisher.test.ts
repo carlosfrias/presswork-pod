@@ -1062,4 +1062,128 @@ describe("publishOne", () => {
     const { publishOne, PublisherError } = await import("./publisher.js");
     await expect(publishOne(db, design, brief, LISTING_ID)).rejects.toThrow(PublisherError);
   });
+
+  // ── Image selection tests ────────────────────────────────────────────────────
+  //
+  // Part 1 of the image-management plan: resumePublish accepts an optional
+  // selectedMockupUrls to upload only a subset of the mockup pool.
+
+  function makeImageSelectionSetup() {
+    mockPrintify();
+    const uploadListingImage = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("@presswork/shared", async () => {
+      const actual = await vi.importActual<typeof import("@presswork/shared")>("@presswork/shared");
+      return {
+        ...actual,
+        createDraftListing: vi.fn().mockResolvedValue({ listing_id: 777 }),
+        uploadListingImage,
+        getListingImageCount: vi.fn().mockResolvedValue(0),
+        activateListing: vi.fn().mockResolvedValue(undefined),
+        updateListingInventory: vi.fn().mockResolvedValue(undefined),
+        getTaxonomyId: vi.fn().mockResolvedValue(68887043),
+        getSettings: vi.fn().mockReturnValue({
+          ETSY_SHIPPING_PROFILE_ID: 99,
+          ETSY_READINESS_STATE_ID: 42,
+          ETSY_PRODUCTION_PARTNER_ID: PARTNER_ID,
+        }),
+        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn(), warn: vi.fn() }),
+        notifySlack: vi.fn().mockResolvedValue(undefined),
+      };
+    });
+    return { uploadListingImage };
+  }
+
+  function makePendingPublishDb(mockupUrls: string[]) {
+    return makeDb([], {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending_publish",
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+        price_usd: 24.99,
+        printify_product_id: PRODUCT_ID,
+        is_active: false,
+        retry_count: 0,
+      },
+      existingEtsyListingId: 5555,
+      mockupUrls,
+    });
+  }
+
+  it("selection subset: only the selected URLs are uploaded, in selection order", async () => {
+    const { uploadListingImage } = makeImageSelectionSetup();
+
+    const allMockups = [
+      "https://cdn/m1.jpg",
+      "https://cdn/m2.jpg",
+      "https://cdn/m3.jpg",
+    ];
+    // Select only m3 then m1 (reversed, non-contiguous) to verify ordering is
+    // preserved from the selection, not from the original array.
+    const selection = ["https://cdn/m3.jpg", "https://cdn/m1.jpg"];
+
+    const db = makePendingPublishDb(allMockups);
+    const { resumePublish } = await import("./publisher.js");
+    await resumePublish(db, LISTING_ID, { selectedMockupUrls: selection });
+
+    expect(uploadListingImage).toHaveBeenCalledTimes(2);
+    const calls = uploadListingImage.mock.calls as [unknown, number, string, { rank?: number }][];
+    expect(calls[0]?.[2]).toBe("https://cdn/m3.jpg");
+    expect(calls[0]?.[3]?.rank).toBe(1);
+    expect(calls[1]?.[2]).toBe("https://cdn/m1.jpg");
+    expect(calls[1]?.[3]?.rank).toBe(2);
+  });
+
+  it("no selection (opts omitted): all mockups are uploaded (backward-compatible regression)", async () => {
+    const { uploadListingImage } = makeImageSelectionSetup();
+
+    const allMockups = ["https://cdn/a.jpg", "https://cdn/b.jpg", "https://cdn/c.jpg"];
+    const db = makePendingPublishDb(allMockups);
+
+    const { resumePublish } = await import("./publisher.js");
+    // Call without opts at all — must behave exactly as before.
+    await resumePublish(db, LISTING_ID);
+
+    expect(uploadListingImage).toHaveBeenCalledTimes(3);
+    const calls = uploadListingImage.mock.calls as [unknown, number, string, { rank?: number }][];
+    expect(calls[0]?.[2]).toBe("https://cdn/a.jpg");
+    expect(calls[1]?.[2]).toBe("https://cdn/b.jpg");
+    expect(calls[2]?.[2]).toBe("https://cdn/c.jpg");
+  });
+
+  it("selection containing a URL not in mockup_urls is silently ignored (not uploaded)", async () => {
+    const { uploadListingImage } = makeImageSelectionSetup();
+
+    const allMockups = ["https://cdn/real1.jpg", "https://cdn/real2.jpg"];
+    // Selection includes one URL that is genuinely on the row and one that is not.
+    const selection = ["https://cdn/real1.jpg", "https://cdn/BOGUS.jpg"];
+
+    const db = makePendingPublishDb(allMockups);
+    const { resumePublish } = await import("./publisher.js");
+    await resumePublish(db, LISTING_ID, { selectedMockupUrls: selection });
+
+    // Only the valid URL is uploaded; the bogus one is silently dropped.
+    expect(uploadListingImage).toHaveBeenCalledTimes(1);
+    const calls = uploadListingImage.mock.calls as [unknown, number, string, { rank?: number }][];
+    expect(calls[0]?.[2]).toBe("https://cdn/real1.jpg");
+  });
+
+  it("selectedMockupUrls length > 10 rejects with PublisherError before any image POST", async () => {
+    const { uploadListingImage } = makeImageSelectionSetup();
+
+    // Build 11 mockup URLs — all are genuinely in the row so the selection
+    // passes the membership check and only the cap guard fires.
+    const allMockups = Array.from({ length: 11 }, (_, i) => `https://cdn/m${i + 1}.jpg`);
+    const selection = [...allMockups]; // select all 11 (> 10 cap)
+
+    const db = makePendingPublishDb(allMockups);
+    const { resumePublish, PublisherError } = await import("./publisher.js");
+    await expect(
+      resumePublish(db, LISTING_ID, { selectedMockupUrls: selection })
+    ).rejects.toThrow(PublisherError);
+
+    // No image POST must have been attempted before the cap throw.
+    expect(uploadListingImage).not.toHaveBeenCalled();
+  });
 });

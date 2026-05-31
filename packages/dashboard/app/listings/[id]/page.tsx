@@ -24,6 +24,7 @@ import { getListing, type ListingWithDesign } from "@/lib/queries/listings";
 import { getEtsyPayloadPreview } from "@/lib/queries/etsy-preview";
 import { getIsListingAgentRunning } from "@/lib/actions/triggers";
 import { formatRelative, formatUsd } from "@/lib/format";
+import { withTransform } from "@/lib/imageUrl";
 
 export const dynamic = "force-dynamic";
 
@@ -286,6 +287,7 @@ export default async function ListingDetailPage({ params }: Params) {
             <PublishNowCard
               listingId={listing.id}
               isAgentRunning={isAgentRunning}
+              mockupUrls={listing.design_packages?.mockup_urls ?? null}
             />
           )}
         </div>
@@ -358,9 +360,11 @@ function PushToEtsyForm({ listing }: { listing: ListingWithDesign }) {
 function PublishNowCard({
   listingId,
   isAgentRunning,
+  mockupUrls,
 }: {
   listingId: string;
   isAgentRunning: boolean;
+  mockupUrls: string[] | null;
 }) {
   return (
     <SurfaceCard
@@ -391,6 +395,38 @@ function PublishNowCard({
               <strong className="text-(--text-primary)">$0.20 listing fee</strong>{" "}
               per listing.
             </p>
+            {mockupUrls && mockupUrls.length > 0 && (
+              <div className="flex flex-col gap-2">
+                <p className="text-xs text-(--text-muted)">
+                  Uncheck any image you don&apos;t want uploaded (max 10).
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {mockupUrls.map((url, i) => (
+                    <label
+                      key={url}
+                      className="flex cursor-pointer flex-col items-center gap-1"
+                    >
+                      <div className="relative">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={withTransform(url, { width: 80, height: 80, quality: 70, resize: "cover" }) ?? url}
+                          alt={`Mockup ${i + 1}`}
+                          loading="lazy"
+                          className="h-20 w-20 rounded-(--radius-sm) border border-(--surface-line) object-cover"
+                        />
+                      </div>
+                      <input
+                        type="checkbox"
+                        name="selectedImageUrls"
+                        value={url}
+                        defaultChecked
+                        className="accent-(--accent-warm)"
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
             <SubmitButton
               variant="primary"
               size="sm"

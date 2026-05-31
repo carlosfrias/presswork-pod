@@ -37,6 +37,8 @@ import {
 import { buildInventoryFromDesign } from "./inventory.js";
 
 const MAX_RETRIES = 3;
+// Etsy caps a listing at 10 images; attempting to upload more is a hard error.
+const MAX_ETSY_LISTING_IMAGES = 10;
 
 export class PublisherError extends Error {
   constructor(message: string) {
@@ -305,7 +307,8 @@ async function executeEtsyPublish(
   priceUsd: number,
   mockupUrls: string[],
   mockupsFromActualDesign: boolean,
-  inventoryFacts: InventoryFacts
+  inventoryFacts: InventoryFacts,
+  selectedMockupUrls?: string[]
 ): Promise<void> {
   const { ETSY_SHIPPING_PROFILE_ID, ETSY_PRODUCTION_PARTNER_ID, ETSY_READINESS_STATE_ID } = getSettings();
 
@@ -383,13 +386,30 @@ async function executeEtsyPublish(
   // In mock mode this count is always 0 (full upload preserved).
   const alreadyUploaded = await getListingImageCount(db, etsyListingId);
 
+  // Determine the effective upload list. If the caller supplied a selection,
+  // filter mockupUrls to that subset (preserving the caller's order), silently
+  // dropping any URL that isn't actually in the row's mockup_urls (defense-
+  // in-depth). An empty or absent selection means "upload all" (current behavior).
+  const mockupSet = new Set(mockupUrls);
+  const uploadUrls =
+    selectedMockupUrls && selectedMockupUrls.length > 0
+      ? selectedMockupUrls.filter((u) => mockupSet.has(u))
+      : mockupUrls;
+
+  if (uploadUrls.length > MAX_ETSY_LISTING_IMAGES) {
+    throw new PublisherError(
+      `Selected ${uploadUrls.length} images but Etsy caps a listing at ${MAX_ETSY_LISTING_IMAGES}. ` +
+        `Reduce the selection to ${MAX_ETSY_LISTING_IMAGES} or fewer images before publishing.`
+    );
+  }
+
   // alt_text per image: short, descriptive, distinct per rank. Etsy uses these
   // for accessibility and image-search SEO. We bound title length with the
   // global cap inside uploadListingImage (250 chars), so no truncation here.
-  for (let i = alreadyUploaded; i < mockupUrls.length; i++) {
-    const url = mockupUrls[i]!;
+  for (let i = alreadyUploaded; i < uploadUrls.length; i++) {
+    const url = uploadUrls[i]!;
     const altText =
-      mockupUrls.length === 1
+      uploadUrls.length === 1
         ? `Product photo of: ${copy.title}`
         : `Product photo ${i + 1} of: ${copy.title}`;
     await uploadListingImage(db, etsyListingId, url, { altText, rank: i + 1 });
@@ -425,7 +445,11 @@ async function executeEtsyPublish(
   }
 }
 
-export async function resumePublish(db: Db, listingId: string): Promise<void> {
+export async function resumePublish(
+  db: Db,
+  listingId: string,
+  opts: { selectedMockupUrls?: string[] } = {}
+): Promise<void> {
   const log = getLogger("listing");
   const t0 = Date.now();
 
@@ -523,7 +547,8 @@ export async function resumePublish(db: Db, listingId: string): Promise<void> {
       listing.price_usd ?? 0,
       mockupUrls,
       mockupsFromActualDesign,
-      { blueprintId, variants: printifyVariants }
+      { blueprintId, variants: printifyVariants },
+      opts.selectedMockupUrls
     );
     log.info({
       action: "resume_publish_complete",

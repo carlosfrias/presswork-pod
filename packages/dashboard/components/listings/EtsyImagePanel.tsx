@@ -103,9 +103,15 @@ interface LiveImageRowProps {
 
 function LiveImageRow({ image, onDelete }: LiveImageRowProps) {
   const [pending, setPending] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleDelete = useCallback(async () => {
+  const handleDeleteClick = useCallback(() => {
+    setConfirming(true);
+  }, []);
+
+  const handleConfirm = useCallback(async () => {
+    setConfirming(false);
     setPending(true);
     setError(null);
     try {
@@ -116,6 +122,10 @@ function LiveImageRow({ image, onDelete }: LiveImageRowProps) {
       setPending(false);
     }
   }, [image.listing_image_id, onDelete]);
+
+  const handleCancel = useCallback(() => {
+    setConfirming(false);
+  }, []);
 
   return (
     <li className="flex items-center gap-3 rounded-(--radius-sm) border border-(--surface-line) bg-(--surface-2) p-2">
@@ -138,26 +148,50 @@ function LiveImageRow({ image, onDelete }: LiveImageRowProps) {
           <p className="mt-0.5 text-xs text-(--accent-bad)">{error}</p>
         )}
       </div>
-      <Button
-        variant="danger"
-        size="sm"
-        onClick={handleDelete}
-        disabled={pending}
-        aria-label={`Delete Etsy image rank ${image.rank}`}
-      >
-        {pending ? "Deleting…" : "Delete"}
-      </Button>
+      {confirming ? (
+        <span className="flex shrink-0 items-center gap-1">
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={handleConfirm}
+            aria-label={`Confirm delete of Etsy image rank ${image.rank}`}
+          >
+            Confirm
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleCancel}
+            aria-label="Cancel delete"
+          >
+            Cancel
+          </Button>
+        </span>
+      ) : (
+        <Button
+          variant="danger"
+          size="sm"
+          onClick={handleDeleteClick}
+          disabled={pending}
+          aria-label={`Delete Etsy image rank ${image.rank}`}
+        >
+          {pending ? "Deleting…" : "Delete"}
+        </Button>
+      )}
     </li>
   );
 }
 
+const ETSY_IMAGE_LIMIT = 10;
+
 interface AvailableImageRowProps {
   url: string;
   label: string;
+  atLimit: boolean;
   onAdd: (url: string) => Promise<void>;
 }
 
-function AvailableImageRow({ url, label, onAdd }: AvailableImageRowProps) {
+function AvailableImageRow({ url, label, atLimit, onAdd }: AvailableImageRowProps) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -192,7 +226,7 @@ function AvailableImageRow({ url, label, onAdd }: AvailableImageRowProps) {
         variant="success"
         size="sm"
         onClick={handleAdd}
-        disabled={pending}
+        disabled={pending || atLimit}
         aria-label={`Add ${label} to Etsy listing`}
       >
         {pending ? "Adding…" : "Add to Etsy"}
@@ -221,6 +255,9 @@ export function EtsyImagePanel({
   (mockupUrls ?? []).forEach((url, i) => {
     availableSources.push({ url, label: `Mockup ${i + 1}` });
   });
+
+  // True once we know the live count is at the Etsy maximum.
+  const atLimit = liveImages !== null && liveImages.length >= ETSY_IMAGE_LIMIT;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -325,12 +362,18 @@ export function EtsyImagePanel({
                 <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-(--text-secondary)">
                   Available images ({availableSources.length})
                 </h3>
+                {atLimit && (
+                  <p className="mb-2 text-xs text-(--text-muted)">
+                    Etsy allows a maximum of {ETSY_IMAGE_LIMIT} images. Remove an image before adding another.
+                  </p>
+                )}
                 <ul className="flex flex-col gap-2">
                   {availableSources.map(({ url, label }) => (
                     <AvailableImageRow
                       key={url}
                       url={url}
                       label={label}
+                      atLimit={atLimit}
                       onAdd={handleAdd}
                     />
                   ))}

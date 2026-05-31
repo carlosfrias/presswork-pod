@@ -826,11 +826,26 @@ export async function publishListingNow(formData: FormData): Promise<void> {
     );
   }
 
+  // Parse optional image selection from the form. Each checked checkbox posts
+  // its value under the same name, so getAll returns the ordered array.
+  const rawSelectedUrls = formData.getAll("selectedImageUrls").map(String);
+  const selectedImageUrlsResult = z.string().url().array().safeParse(rawSelectedUrls);
+  if (!selectedImageUrlsResult.success) {
+    throw new Error(
+      `Invalid selectedImageUrls: ${selectedImageUrlsResult.error.message}`
+    );
+  }
+  const selectedImageUrls = selectedImageUrlsResult.data;
+
   // resumePublish drives the full Etsy publish pipeline and owns all DB writes
   // on both success and failure paths. On failure it sets the row back to
   // 'pending_publish' (or 'error' after MAX_RETRIES) and rethrows so the
   // server action surfaces the error to the UI.
-  await resumePublish(db, id);
+  await resumePublish(
+    db,
+    id,
+    selectedImageUrls.length > 0 ? { selectedMockupUrls: selectedImageUrls } : {}
+  );
 
   revalidatePath("/listings");
   revalidatePath(`/listings/${id}`);
