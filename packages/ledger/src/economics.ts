@@ -1,5 +1,6 @@
 import {
   BLUEPRINT_PRINT_COST_USD,
+  BLUEPRINT_SHIPPING_COST_USD,
   ETSY_FEE_TRANSACTION_PCT,
   ETSY_FEE_PROCESSING_PCT,
   ETSY_FEE_PROCESSING_FIXED_USD,
@@ -36,6 +37,13 @@ export function lookupPrintCost(blueprintId: number): number {
     throw new UnknownBlueprintError(blueprintId);
   }
   return cost;
+}
+
+// Printify shipping cost we absorb per order. Returns null (not throw) for an
+// unmapped blueprint so a missing shipping figure degrades to NULL economics
+// rather than dropping the whole order row.
+export function lookupShippingCost(blueprintId: number): number | null {
+  return BLUEPRINT_SHIPPING_COST_USD[blueprintId] ?? null;
 }
 
 // Normalize a buyer-paid amount in their currency to USD using the static rate

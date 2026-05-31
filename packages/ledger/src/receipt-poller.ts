@@ -8,6 +8,7 @@ import {
 import {
   computeEtsyFees,
   lookupPrintCost,
+  lookupShippingCost,
   normalizeToUsd,
   UnknownBlueprintError,
   UnknownCurrencyError,
@@ -95,7 +96,7 @@ async function logReceipt(db: Db, receipt: EtsyReceipt): Promise<LogReceiptOutco
   }
 
   const etsyFeesUsd = computeEtsyFees(salePriceUsd);
-  const printCostUsd = await resolvePrintCost(db, receipt);
+  const { printCostUsd, shippingCostUsd } = await resolveCosts(db, receipt);
 
   const outcome = await insertOrderRow(db, etsyReceiptId, {
     sale_price: salePrice,
@@ -103,15 +104,20 @@ async function logReceipt(db: Db, receipt: EtsyReceipt): Promise<LogReceiptOutco
     currency_code: currencyCode,
     etsy_fees_usd: etsyFeesUsd,
     print_cost_usd: printCostUsd,
+    shipping_cost_usd: shippingCostUsd,
     buyer_country: receipt.country_iso,
   });
 
   if (outcome === "logged" && printCostUsd !== null) {
-    const margin = salePriceUsd - printCostUsd - etsyFeesUsd;
+    // Shipping is a real cost we absorb (Printify bills it on fulfillment), so
+    // include it in the margin we warn on.
+    const margin =
+      salePriceUsd - printCostUsd - (shippingCostUsd ?? 0) - etsyFeesUsd;
     if (margin < MARGIN_WARNING_THRESHOLD_USD) {
       await notifySlack(
         `Low margin: receipt ${etsyReceiptId} margin $${margin.toFixed(2)} ` +
-          `(sale $${salePriceUsd.toFixed(2)} USD, print $${printCostUsd.toFixed(2)}, fees $${etsyFeesUsd.toFixed(2)})`,
+          `(sale $${salePriceUsd.toFixed(2)} USD, print $${printCostUsd.toFixed(2)}, ` +
+          `shipping $${(shippingCostUsd ?? 0).toFixed(2)}, fees $${etsyFeesUsd.toFixed(2)})`,
         { severity: "warn" }
       );
     }
@@ -133,6 +139,7 @@ interface OrderEconomics {
   currency_code: string;
   etsy_fees_usd?: number;
   print_cost_usd?: number | null;
+  shipping_cost_usd?: number | null;
   buyer_country: string;
 }
 
@@ -166,14 +173,20 @@ async function insertOrderRow(
   return "logged";
 }
 
+interface ResolvedCosts {
+  printCostUsd: number | null;
+  shippingCostUsd: number | null;
+}
+
 // Best-effort: find the listing → design_package the receipt's first line item
-// refers to, then look up the flat print cost for its blueprint. If the listing
-// wasn't created by the Listing Agent (manual Etsy listing, pre-existing
-// inventory), we still log the order — print_cost_usd just stays NULL.
-async function resolvePrintCost(db: Db, receipt: EtsyReceipt): Promise<number | null> {
+// refers to, then look up the flat print + shipping costs for its blueprint. If
+// the listing wasn't created by the Listing Agent (manual Etsy listing,
+// pre-existing inventory), we still log the order — the costs just stay NULL.
+async function resolveCosts(db: Db, receipt: EtsyReceipt): Promise<ResolvedCosts> {
   const log = getLogger("ledger");
+  const none: ResolvedCosts = { printCostUsd: null, shippingCostUsd: null };
   const firstItem = receipt.transactions[0];
-  if (!firstItem) return null;
+  if (!firstItem) return none;
 
   const { data: listingRow } = await db
     .from("listings")
@@ -188,7 +201,7 @@ async function resolvePrintCost(db: Db, receipt: EtsyReceipt): Promise<number | 
       action: "resolve_print_cost_no_listing",
       etsy_listing_id: firstItem.listing_id,
     });
-    return null;
+    return none;
   }
 
   const { data: designRow } = await db
@@ -198,10 +211,13 @@ async function resolvePrintCost(db: Db, receipt: EtsyReceipt): Promise<number | 
     .maybeSingle();
 
   const design = designRow as { printify_blueprint_id: number } | null;
-  if (!design) return null;
+  if (!design) return none;
 
   try {
-    return lookupPrintCost(design.printify_blueprint_id);
+    return {
+      printCostUsd: lookupPrintCost(design.printify_blueprint_id),
+      shippingCostUsd: lookupShippingCost(design.printify_blueprint_id),
+    };
   } catch (err) {
     if (err instanceof UnknownBlueprintError) {
       log.warn({
@@ -209,7 +225,7 @@ async function resolvePrintCost(db: Db, receipt: EtsyReceipt): Promise<number | 
         action: "resolve_print_cost_unknown_blueprint",
         blueprint_id: design.printify_blueprint_id,
       });
-      return null;
+      return none;
     }
     throw err;
   }

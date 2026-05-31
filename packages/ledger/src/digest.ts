@@ -12,6 +12,7 @@ export interface DigestSummary {
   revenueUsd: number;
   feesUsd: number;
   printCostUsd: number;
+  shippingCostUsd: number;
   marginUsd: number;
   errored: number;
 }
@@ -34,7 +35,9 @@ export async function runDailyDigest(
 async function summarise(db: Db, window: DigestWindow): Promise<DigestSummary> {
   const { data, error } = await db
     .from("orders")
-    .select("status, sale_price_usd, etsy_fees_usd, print_cost_usd, margin_usd")
+    .select(
+      "status, sale_price_usd, etsy_fees_usd, print_cost_usd, shipping_cost_usd, margin_usd"
+    )
     .gte("created_at", window.start)
     .lt("created_at", window.end);
 
@@ -47,12 +50,14 @@ async function summarise(db: Db, window: DigestWindow): Promise<DigestSummary> {
     sale_price_usd: number | null;
     etsy_fees_usd: number | null;
     print_cost_usd: number | null;
+    shipping_cost_usd: number | null;
     margin_usd: number | null;
   }>;
 
   let revenueUsd = 0;
   let feesUsd = 0;
   let printCostUsd = 0;
+  let shippingCostUsd = 0;
   let marginUsd = 0;
   let errored = 0;
 
@@ -61,6 +66,7 @@ async function summarise(db: Db, window: DigestWindow): Promise<DigestSummary> {
     revenueUsd += row.sale_price_usd ?? 0;
     feesUsd += row.etsy_fees_usd ?? 0;
     printCostUsd += row.print_cost_usd ?? 0;
+    shippingCostUsd += row.shipping_cost_usd ?? 0;
     marginUsd += row.margin_usd ?? 0;
   }
 
@@ -70,6 +76,7 @@ async function summarise(db: Db, window: DigestWindow): Promise<DigestSummary> {
     revenueUsd,
     feesUsd,
     printCostUsd,
+    shippingCostUsd,
     marginUsd,
     errored,
   };
@@ -84,6 +91,7 @@ function formatSlackDigest(s: DigestSummary): string {
     `• Revenue: $${s.revenueUsd.toFixed(2)}\n` +
     `• Etsy fees: $${s.feesUsd.toFixed(2)}\n` +
     `• Print cost: $${s.printCostUsd.toFixed(2)}\n` +
+    `• Shipping cost: $${s.shippingCostUsd.toFixed(2)}\n` +
     `• Margin: $${s.marginUsd.toFixed(2)}` +
     errorLine
   );
@@ -96,6 +104,7 @@ function formatEmailDigest(s: DigestSummary): string {
     `Revenue (USD): $${s.revenueUsd.toFixed(2)}`,
     `Etsy fees (USD): $${s.feesUsd.toFixed(2)}`,
     `Print cost (USD): $${s.printCostUsd.toFixed(2)}`,
+    `Shipping cost (USD): $${s.shippingCostUsd.toFixed(2)}`,
     `Margin (USD): $${s.marginUsd.toFixed(2)}`,
     `Errored rows: ${s.errored}`,
   ].join("\n");

@@ -89,7 +89,7 @@ Full DDL lives in `infra/supabase/migrations/`. Four core tables drive agent han
 Rules:
 - **Never skip a status step.** Enforce transitions in code.
 - **Every agent's output is human-gated. No bypass.** Scout writes `needs_review`; Scout-approve transitions to `needs_description`; Builder writes the image description and transitions to `approved`; Design claims `approved` and writes `needs_review` on completion; Listing claims `approved` design packages, builds the Printify product, then pauses at listings `needs_review` until the dashboard's Approve flips the row to `pending_publish`. No auto-approve runtime flags, no `HUMAN_REVIEW_ENABLED` env override — those were removed in migration 030.
-- `orders.margin_usd` is a generated column: `sale_price − print_cost − etsy_fees`.
+- `orders.margin_usd` is a generated column: `sale_price_usd − print_cost_usd − shipping_cost_usd − etsy_fees_usd` (migration 052 added `shipping_cost_usd` — the Printify fulfillment shipping the shop absorbs on every order, since listings ship free to the buyer; `BLUEPRINT_SHIPPING_COST_USD` in the Ledger).
 - `orders` has no Printify/tracking columns — those were dropped in migration 016 when fulfillment moved to Etsy's native Printify integration.
 - `trend_briefs.image_description` — Builder-authored prompt text (renamed from `custom_flux_prompt` in migration 045). When non-null, Design uses it verbatim instead of calling Claude.
 - `design_packages.mockups_from_actual_design BOOLEAN NOT NULL` — provenance flag (compliance rule 4).

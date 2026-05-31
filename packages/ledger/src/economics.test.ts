@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   computeEtsyFees,
   lookupPrintCost,
+  lookupShippingCost,
   normalizeToUsd,
   UnknownBlueprintError,
   UnknownCurrencyError,
@@ -33,6 +34,16 @@ describe("lookupPrintCost", () => {
   it("throws UnknownBlueprintError for an unknown blueprint ID", () => {
     expect(() => lookupPrintCost(99999)).toThrow(UnknownBlueprintError);
     expect(() => lookupPrintCost(99999)).toThrow("99999");
+  });
+});
+
+describe("lookupShippingCost", () => {
+  it("returns $4.50 for blueprint 145 (Gildan 64000)", () => {
+    expect(lookupShippingCost(145)).toBe(4.5);
+  });
+
+  it("returns null (not throw) for an unknown blueprint so the order still logs", () => {
+    expect(lookupShippingCost(99999)).toBeNull();
   });
 });
 

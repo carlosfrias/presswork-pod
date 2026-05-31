@@ -14,6 +14,13 @@ export const BLUEPRINT_PRINT_COST_USD: Record<number, number> = {
   145: 8.5, // Gildan 64000 t-shirt — must match printify_blueprint_id written by Design (packages/design/constants.py)
 };
 
+// Per-blueprint Printify shipping cost (USD) the shop pays on fulfillment. We
+// absorb this on every order regardless of the buyer-facing Etsy shipping
+// (free-shipping guarantee or calculated), so it belongs in margin as a cost.
+export const BLUEPRINT_SHIPPING_COST_USD: Record<number, number> = {
+  145: 4.5, // Gildan 64000 t-shirt, US first-item shipping
+};
+
 // Etsy fee components per CLAUDE.md "Per-Unit Economics"
 export const ETSY_FEE_TRANSACTION_PCT = 0.065;
 export const ETSY_FEE_PROCESSING_PCT = 0.03;

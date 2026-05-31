@@ -122,6 +122,7 @@ describe("pollReceipts (ledger)", () => {
     expect(row["sale_price_usd"]).toBeCloseTo(24.99, 2);
     expect(row["currency_code"]).toBe("USD");
     expect(row["print_cost_usd"]).toBe(8.5);
+    expect(row["shipping_cost_usd"]).toBe(4.5);
     expect(row["buyer_country"]).toBe("US");
     expect(row["etsy_fees_usd"]).toBeGreaterThan(0);
   });
@@ -156,6 +157,7 @@ describe("pollReceipts (ledger)", () => {
     expect(result.logged).toBe(1);
     const row = db.insertCalls[0]!;
     expect(row["print_cost_usd"]).toBeNull();
+    expect(row["shipping_cost_usd"]).toBeNull();
     expect(row["sale_price_usd"]).toBeCloseTo(24.99, 2);
   });
 
