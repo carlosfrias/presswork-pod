@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import { assertBlueprintSupported, printifyVariantPriceCents } from "./constants.js";
 
 describe("assertBlueprintSupported (audit #53)", () => {
-  it("passes for the registered (145, 3) pair", () => {
-    expect(() => assertBlueprintSupported(145, 3)).not.toThrow();
+  it("passes for the registered (145, 39) pair", () => {
+    expect(() => assertBlueprintSupported(145, 39)).not.toThrow();
   });
 
   it("throws naming the missing blueprint when the id isn't registered", () => {
@@ -17,7 +17,7 @@ describe("assertBlueprintSupported (audit #53)", () => {
     expect(() => assertBlueprintSupported(145, 42)).toThrow(
       /does not match the registered pairing/
     );
-    expect(() => assertBlueprintSupported(145, 42)).toThrow(/expected provider 3/);
+    expect(() => assertBlueprintSupported(145, 42)).toThrow(/expected provider 39/);
   });
 });
 

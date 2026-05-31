@@ -27,7 +27,7 @@ const validEnv = {
 const INPUT = {
   imageUrl: "https://cdn.supabase.co/designs/abc123.png",
   blueprintId: 145,
-  printProviderId: 3,
+  printProviderId: 39,
   variantIds: [38163, 38177, 38191],
   title: "Test T-Shirt",
 };
@@ -99,7 +99,7 @@ describe("createHiddenProduct (two-step upload then create)", () => {
       print_areas: Array<{ placeholders: Array<{ images: Array<{ id: string }> }> }>;
     };
     expect(productBody.blueprint_id).toBe(145);
-    expect(productBody.print_provider_id).toBe(3);
+    expect(productBody.print_provider_id).toBe(39);
     expect(productBody.print_areas[0]?.placeholders[0]?.images[0]?.id).toBe(UPLOAD_ID);
 
     expect(result.productId).toBe("product-abc");

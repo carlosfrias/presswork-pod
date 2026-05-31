@@ -77,6 +77,8 @@ class TrendBrief(BaseModel):
     image_model: ImageModel = "fal_gpt_image_2"
     image_quality: ImageQuality | None = None
     background_removal_mode: BackgroundRemovalMode | None = None
+    shirt_colors: list[str] = Field(default_factory=lambda: ["White"])
+    shirt_sizes: list[str] = Field(default_factory=lambda: ["S", "M", "L", "XL", "2XL"])
     error_message: str | None = None
     retry_count: int = 0
 
@@ -95,6 +97,8 @@ class TrendBriefCreate(BaseModel):
     image_model: ImageModel = "fal_gpt_image_2"
     image_quality: ImageQuality | None = None
     background_removal_mode: BackgroundRemovalMode | None = None
+    shirt_colors: list[str] = Field(default_factory=lambda: ["White"])
+    shirt_sizes: list[str] = Field(default_factory=lambda: ["S", "M", "L", "XL", "2XL"])
 
 
 DesignPackageStatus = Literal["pending", "needs_review", "approved", "processing", "done", "error"]

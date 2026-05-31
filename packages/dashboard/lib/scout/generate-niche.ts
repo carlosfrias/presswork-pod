@@ -16,7 +16,7 @@ import { estimateAnthropicCostUsd, recordUsage } from "@presswork/shared";
 const MODEL = "claude-sonnet-4-20250514";
 
 const SYSTEM_PROMPT = `You are a print-on-demand market scout for a US-based Etsy + Printify shop
-selling unisex t-shirts at a typical retail price of $24.99 (range $19.99–$34.99).
+selling unisex t-shirts at a typical retail price of $26.99 (range $25.99–$34.99).
 
 Given an optional hint from the operator, generate ONE niche brief: a
 specific design space with strong selling potential on Etsy.
@@ -30,7 +30,7 @@ WHAT MAKES A GOOD NICHE
   league members" — buyers wear the shirt because it labels them as part of
   the tribe.
 - Avoid saturated commodities ("cat lover", "coffee lover", "wine mom") —
-  the floor is too low to compete on at $24.99.
+  the floor is too low to compete on at $26.99.
 - Slight quirk, hobby pride, or subculture identity sells best.
 
 When the operator provides a hint, treat it as a STARTING POINT — refine into
@@ -70,7 +70,7 @@ OUTPUT FIELDS
   light tee colors.
 
 • price_target_usd (number)
-  19.99–34.99 range. Default 24.99 for everyday niches; 29.99–34.99 for
+  25.99–34.99 range. Default 26.99 for everyday niches; 29.99–34.99 for
   hobby-pride / gift / specialty niches where buyers expect to spend more.
 
 ══════════════════════════════════════════════════════════════════════════
@@ -259,9 +259,9 @@ function validate(parsed: unknown, raw: string): GeneratedNicheBrief {
   }
 
   const price = Number(p.price_target_usd);
-  if (!Number.isFinite(price) || price < 19.99 || price > 34.99) {
+  if (!Number.isFinite(price) || price < 25.99 || price > 34.99) {
     throw new GenerateNicheError(
-      `price_target_usd must be 19.99–34.99, got ${p.price_target_usd}`,
+      `price_target_usd must be 25.99–34.99, got ${p.price_target_usd}`,
       raw,
     );
   }

@@ -121,8 +121,8 @@ describe("pollReceipts (ledger)", () => {
     expect(row["sale_price"]).toBeCloseTo(24.99, 2);
     expect(row["sale_price_usd"]).toBeCloseTo(24.99, 2);
     expect(row["currency_code"]).toBe("USD");
-    expect(row["print_cost_usd"]).toBe(8.5);
-    expect(row["shipping_cost_usd"]).toBe(4.5);
+    expect(row["print_cost_usd"]).toBe(10.09);
+    expect(row["shipping_cost_usd"]).toBe(4.29);
     expect(row["buyer_country"]).toBe("US");
     expect(row["etsy_fees_usd"]).toBeGreaterThan(0);
   });
@@ -190,7 +190,7 @@ describe("pollReceipts (ledger)", () => {
       listReceipts: vi.fn().mockResolvedValue([
         {
           ...BASE_RECEIPT,
-          // $12 sale → fees ~$1.59, print cost $8.50 → margin ~$1.91 (< $5)
+          // $12 sale → fees ~$1.59, print $10.09 + ship $4.29 → margin ~-$3.97 (< $5)
           grandtotal: { amount: 1200, divisor: 100, currency_code: "USD" },
         },
       ]),

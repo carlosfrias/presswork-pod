@@ -9,7 +9,7 @@ export const LISTING_DEFAULTS = {
 } as const;
 
 // Gildan 64000 base print cost in USD (v1 single-product scope)
-export const GILDAN_64000_PRINT_COST_USD = 8.5;
+export const GILDAN_64000_PRINT_COST_USD = 10.09;
 
 // Per-blueprint default variant price (in cents) sent to Printify on create-product.
 // Printify requires variants.*.price > 0 even for hidden products. The buyer-facing
@@ -44,8 +44,8 @@ export function printifyVariantPriceCents(blueprintId: number): number {
 // To support a new blueprint: add the entry here AND have Design write the
 // matching provider_id when inserting the design row.
 const PRINTIFY_BLUEPRINT_PROVIDERS: Record<number, number> = {
-  // Gildan 64000 Softstyle Unisex T-Shirt → Marco Fine Arts
-  145: 3,
+  // Gildan 64000 Softstyle Unisex T-Shirt → SwiftPOD
+  145: 39,
 };
 
 // Blueprint metadata (materials, processing-day windows, variation axes,

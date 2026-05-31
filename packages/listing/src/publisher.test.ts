@@ -39,7 +39,7 @@ const design: DesignPackage = {
   status: "done",
   image_url: "https://cdn.supabase.co/designs/test.png",
   printify_blueprint_id: 145,
-  printify_print_provider_id: 3,
+  printify_print_provider_id: 39,
   printify_variant_ids: [38163, 38177, 38191],
   retry_count: 0,
 };
@@ -50,7 +50,7 @@ const brief: TrendBrief = {
   updated_at: "2026-01-01T00:00:00Z",
   status: "done",
   niche: "cat lovers",
-  price_target_usd: 24.99,
+  price_target_usd: 26.99,
   retry_count: 0,
 };
 
@@ -115,7 +115,7 @@ function makeDb(updates: CaptureEntry[], opts: DbMockOpts = {}) {
       title: null,
       description: null,
       tags: null,
-      price_usd: 24.99,
+      price_usd: 26.99,
       printify_product_id: null,
       is_active: false,
       retry_count: 0,
@@ -398,7 +398,7 @@ describe("publishOne", () => {
       variantIds: number[];
     };
     expect(arg.blueprintId).toBe(145);
-    expect(arg.printProviderId).toBe(3);
+    expect(arg.printProviderId).toBe(39);
     expect(arg.variantIds).toEqual([38163, 38177, 38191]);
   });
 
@@ -617,7 +617,7 @@ describe("publishOne", () => {
         title: COMPLIANT_TITLE,
         description: COMPLIANT_DESCRIPTION,
         tags: COMPLIANT_TAGS,
-        price_usd: 24.99,
+        price_usd: 26.99,
         printify_product_id: "existing-product-xyz",
         is_active: false,
         retry_count: 1,

@@ -28,6 +28,8 @@ export const TrendBriefSchema = z.object({
   top_tags: z.array(z.string()).nullable().optional(),
   price_target_usd: z.number().nullable().optional(),
   color_palette: z.array(z.string()).nullable().optional(),
+  shirt_colors: z.array(z.string()),
+  shirt_sizes: z.array(z.string()),
   raw_etsy_data: z.unknown().nullable().optional(),
   claude_analysis: z.unknown().nullable().optional(),
   error_message: z.string().nullable().optional(),
@@ -118,6 +120,7 @@ export const ListingSchema = z.object({
   tags: z.array(z.string()).nullable().optional(),
   price_usd: z.number().nullable().optional(),
   is_active: z.boolean().default(false),
+  selected_variant_ids: z.array(z.number().int()).nullable().optional(),
   error_message: z.string().nullable().optional(),
   retry_count: z.number().int().default(0),
 });

@@ -5,9 +5,9 @@ import { z } from "zod";
 
 // Print cost for the only currently-supported blueprint (Gildan 64000).
 // Mirrors GILDAN_64000_PRINT_COST_USD in packages/listing/src/constants.ts.
-const PRINT_COST_USD = 8.5;
+const PRINT_COST_USD = 10.09;
 const PRICING_FLOOR_MULTIPLIER = 2.5;
-const PRICE_FLOOR_USD = PRINT_COST_USD * PRICING_FLOOR_MULTIPLIER; // $21.25
+const PRICE_FLOOR_USD = PRINT_COST_USD * PRICING_FLOOR_MULTIPLIER; // $25.23
 import {
   ListingCopySchema,
   ComplianceError,

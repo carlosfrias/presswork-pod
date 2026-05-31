@@ -7,11 +7,13 @@ STORAGE_BUCKET = "designs"
 GILDAN_64000_BLUEPRINT_ID: int = 145
 
 # Print provider that owns the variant IDs below. Printify variant IDs are scoped
-# to a (blueprint_id, print_provider_id) pair — variant 38163 only resolves under
-# print_provider_id=3 (Marco Fine Arts) for blueprint 145. The Listing Agent
-# passes this value into the create-product call alongside blueprint_id; mismatched
-# pairs are rejected by Printify's API.
-GILDAN_64000_PRINT_PROVIDER_ID: int = 3
+# to a (blueprint_id, print_provider_id) pair — the White IDs listed below
+# (38163, 38177, 38191, 38205, 38219) resolve under print_provider_id=39 (SwiftPOD)
+# for blueprint 145. IDs are blueprint-scoped; the same White variant IDs were
+# valid under the prior provider (Marco Fine Arts, id=3) and remain valid here.
+# The Listing Agent passes this value into the create-product call alongside
+# blueprint_id; mismatched pairs are rejected by Printify's API.
+GILDAN_64000_PRINT_PROVIDER_ID: int = 39
 
 # White t-shirt, sizes S / M / L / XL / 2XL
 GILDAN_64000_VARIANT_IDS: list[int] = [38163, 38177, 38191, 38205, 38219]
