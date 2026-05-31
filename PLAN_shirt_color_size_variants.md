@@ -8,7 +8,9 @@
 > - **Phase 0 done (2026-05-30):** `printify_variant_catalog` table created + applied to cloud (`053`), seed script written, catalog seeded & verified.
 > - **Provider changed → SwiftPOD (id 39).** The original provider (Marco Fine Arts, id 3) stocks only 2 colors. A 20-provider comparison led to adopting **SwiftPOD: 63 colors × 9 sizes (XS–5XL), $4.29 US ship, fixed provider for consistent color/quality.** Catalog now holds 419 SwiftPOD variants (Marco rows removed).
 > - **Key finding:** Printify variant IDs for blueprint 145 are **blueprint-scoped, not provider-scoped** — White S–2XL = `38163/38177/38191/38205/38219` under both providers; 3XL = `42120`. So existing White IDs stay valid; only `print_provider_id` (3 → 39) must change.
-> - **⚠ Open before pricing-sensitive code:** SwiftPOD's **base print cost per unit** is not exposed by the Printify catalog API. Must be read from the Printify dashboard (or a test product) and used to update `GILDAN_64000_PRINT_COST_USD` / Ledger `BLUEPRINT_PRINT_COST_USD` (currently $8.50, Marco) before the 2.5× floor + margin math are trusted.
+> - **SwiftPOD base cost confirmed (2026-05-30, via throwaway product probe):** S/M/L/XL = **$10.09**, 2XL = **$11.53**, 3XL = **$12.76**. US shipping = $4.29. (Was $8.50 flat for Marco.)
+>   - **Pricing-floor impact:** 2.5× floor for S–XL = **$25.23** (was $21.25). The current **$24.99 price point now FAILS** `validatePricingFloor` by $0.24. Listings must move to **≥ $25.99** (target $26.99–$27.99 for a healthy 3× on the base). Per-unit at $25.99: print $10.09 + ship $4.29 + Etsy fees ~$2.92 → **net ~$8.69 (33%)**.
+>   - **Size-variable cost:** 2XL/3XL carry upcharges, so a single flat `print_cost` slightly under-protects those sizes. v1 keeps a flat base ($10.09) for the floor + Ledger and flags 2XL/3XL; making cost per-variant is a follow-up.
 
 ---
 
@@ -136,7 +138,8 @@ This table becomes the authoritative color/size ⇄ variant_id map for both lang
 Variant IDs are blueprint-scoped, so this is mostly constant changes — but touches the live pipeline, so do it as one coherent step:
 - `packages/design/constants.py`: `GILDAN_64000_PRINT_PROVIDER_ID = 3 → 39`. Keep `GILDAN_64000_VARIANT_IDS` as White S–2XL (`38163…38219`) — still valid under SwiftPOD; optionally add 3XL `42120` per D1.
 - `packages/listing/src/constants.ts`: `PRINTIFY_BLUEPRINT_PROVIDERS = { 145: 39 }`; keep `assertBlueprintSupported` consistent.
-- **Confirm SwiftPOD base print cost** (dashboard / test product) → update `GILDAN_64000_PRINT_COST_USD` (Listing floor) and `BLUEPRINT_PRINT_COST_USD`/`BLUEPRINT_SHIPPING_COST_USD` (Ledger). **Do not skip** — the 2.5× floor + margins depend on it. SwiftPOD US ship = $4.29.
+- **Update cost constants to SwiftPOD (confirmed):** `GILDAN_64000_PRINT_COST_USD` 8.50 → **10.09** (Listing floor), `BLUEPRINT_PRINT_COST_USD[145]` 8.50 → **10.09** and `BLUEPRINT_SHIPPING_COST_USD[145]` 4.50 → **4.29** (Ledger). Raises the 2.5× floor to **$25.23**.
+- **Re-baseline pricing → new default $26.99** (DECIDED): net ~$9.60/unit (36%), clears the floor. Update `packages/dashboard/lib/scout/generate-niche.ts` — replace the "$24.99 typical / $19.99–$34.99 / default 24.99" guidance with **default $26.99, range $25.99–$34.99**. Operator can still set each listing's price (floor-validated). Confirm no other live flow assumes $24.99.
 - Existing live listings: already created under provider 3 with shared White IDs; new products will be created under 39. No back-migration needed unless re-creating a product.
 
 ### Phase 1b — Schema for selection + override
