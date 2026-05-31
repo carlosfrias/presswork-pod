@@ -15,17 +15,29 @@ describe("@presswork/listing/publish entrypoint", () => {
     expect(typeof resumePublish).toBe("function");
   });
 
-  it("exposes the ./publish subpath export pointing at an existing file", () => {
+  it("exposes the ./publish subpath export backed by an existing source file", () => {
     const pkg = JSON.parse(
       readFileSync(resolve(here, "..", "package.json"), "utf8")
     ) as { exports?: Record<string, { import?: string; types?: string }> };
 
     const sub = pkg.exports?.["./publish"];
     expect(sub?.import).toBeDefined();
+    expect(sub?.types).toBeDefined();
 
-    // The referenced source file must exist (relative to the package root).
-    const target = resolve(here, "..", sub!.import!);
-    expect(() => readFileSync(target, "utf8")).not.toThrow();
+    // `import` points at a compiled artifact (dist/*.js) that only exists after
+    // `tsc -b` — CI runs vitest without a build, so we must NOT readFileSync it.
+    // Instead validate the build-independent invariant: the export is wired to
+    // dist/, and the TypeScript source backing it (types) actually exists.
+    expect(sub!.import).toMatch(/^\.\/dist\/.+\.js$/);
+
+    const sourcePath = resolve(here, "..", sub!.types!);
+    expect(() => readFileSync(sourcePath, "utf8")).not.toThrow();
+
+    // The artifact path and source path must describe the same module, so a
+    // repointed export can't silently pass: dist/<name>.js ⇄ src/<name>.ts.
+    const distName = sub!.import!.replace(/^\.\/dist\//, "").replace(/\.js$/, "");
+    const srcName = sub!.types!.replace(/^\.\/src\//, "").replace(/\.ts$/, "");
+    expect(distName).toBe(srcName);
   });
 
   it("does not route the dashboard through the agent poll-loop barrel", () => {
