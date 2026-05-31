@@ -3,6 +3,7 @@ import {
   buildInventoryFromDesign,
   blueprintMaterials,
   blueprintProcessingDays,
+  blueprintItemSpecs,
   POD_VARIANT_QUANTITY,
   type EtsyInventoryInput,
 } from "@presswork/shared";
@@ -164,6 +165,7 @@ export async function getEtsyPayloadPreview(
     ...(processing
       ? { processing_min: processing.min, processing_max: processing.max }
       : {}),
+    ...(blueprintItemSpecs(dp.printify_blueprint_id) ?? {}),
   };
 
   let inventory: EtsyInventoryInput | undefined;

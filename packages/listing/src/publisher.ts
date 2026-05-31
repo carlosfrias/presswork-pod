@@ -32,6 +32,7 @@ import {
   assertBlueprintSupported,
   blueprintMaterials,
   blueprintProcessingDays,
+  blueprintItemSpecs,
 } from "./constants.js";
 import { buildInventoryFromDesign } from "./inventory.js";
 
@@ -330,6 +331,8 @@ async function executeEtsyPublish(
     const taxonomyId = await getTaxonomyId(db, "tshirt");
     const materials = blueprintMaterials(inventoryFacts.blueprintId);
     const processing = blueprintProcessingDays(inventoryFacts.blueprintId);
+    // Physical specs for Etsy "calculated" shipping profiles (rejected otherwise).
+    const itemSpecs = blueprintItemSpecs(inventoryFacts.blueprintId);
     const { listing_id } = await createDraftListing(db, {
       taxonomy_id: taxonomyId,
       who_made: "i_did",
@@ -349,6 +352,7 @@ async function executeEtsyPublish(
       ...(processing
         ? { processing_min: processing.min, processing_max: processing.max }
         : {}),
+      ...(itemSpecs ?? {}),
     });
     etsyListingId = listing_id;
     // Persist immediately, BEFORE attempting image upload or activation, so any

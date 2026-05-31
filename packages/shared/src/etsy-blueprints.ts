@@ -26,19 +26,12 @@ export const BLUEPRINT_PROCESSING_DAYS: Record<number, { min: number; max: numbe
   145: { min: 1, max: 3 },
 };
 
-// Ordered names of the property axes Printify returns in `options[]` when
-// creating a product. Lets us turn `printify_variants[].values: ["s","black"]`
-// (positional, lowercased) into Etsy property_values
-// `[{property_name:"Size",values:["S"]}, …]`.
-//
-// Order matters and must match Printify's response for the blueprint —
-// for clothing blueprints (incl. Gildan 64000) Printify returns Size then
-// Color. Confirm with a smoke product create when adding a new blueprint.
-// Order MUST match the order Printify returns option values in
-// `variant.options` (see extractVariantOptions in packages/listing/src/printify.ts).
-// For Gildan 64000 (145) Printify yields [color, size] — e.g. ["white","s"] — so
-// the axes are ["Color","Size"]. Getting this backwards mislabels the Etsy
-// variation (e.g. "Size: White").
+// Ordered names of the property axes, positionally matching the order Printify
+// returns option values in `variant.options` (see extractVariantOptions in
+// packages/listing/src/printify.ts). For Gildan 64000 (145) Printify yields
+// [color, size] — e.g. ["white","s"] — so the axes are ["Color","Size"].
+// Getting this backwards mislabels the Etsy variation (e.g. "Size: White").
+// Confirm with a smoke product create when adding a new blueprint.
 export const BLUEPRINT_VARIATION_AXES: Record<number, string[]> = {
   145: ["Color", "Size"],
 };
@@ -55,6 +48,39 @@ export const POD_VARIANT_QUANTITY = 999;
 // misleading `Missing input parameter: [quantity]` 400.
 // Ref: developers.etsy.com third-variation tutorial.
 export const ETSY_CUSTOM_PROPERTY_IDS = [513, 514] as const;
+
+// Packaged physical specs sent on createDraftListing so Etsy "calculated"
+// shipping profiles can compute postage (they reject the listing otherwise:
+// "missing item_weight … item_dimensions_unit"). These are the product's real
+// shipped dimensions/weight, NOT a shipping price — Etsy + the buyer's location
+// determine the rate. Approximate single-unit, poly-mailer values; tune per
+// blueprint. Harmless on flat-rate profiles (Etsy just ignores them there).
+export interface BlueprintItemSpecs {
+  item_weight: number;
+  item_weight_unit: "oz" | "lb" | "g" | "kg";
+  item_length: number;
+  item_width: number;
+  item_height: number;
+  item_dimensions_unit: "in" | "cm" | "mm" | "m" | "ft" | "yd";
+}
+
+export const BLUEPRINT_ITEM_SPECS: Record<number, BlueprintItemSpecs> = {
+  // Gildan 64000 unisex tee, folded in a poly mailer.
+  145: {
+    item_weight: 6,
+    item_weight_unit: "oz",
+    item_length: 10,
+    item_width: 8,
+    item_height: 1,
+    item_dimensions_unit: "in",
+  },
+};
+
+export function blueprintItemSpecs(
+  blueprintId: number
+): BlueprintItemSpecs | undefined {
+  return BLUEPRINT_ITEM_SPECS[blueprintId];
+}
 
 export function blueprintMaterials(blueprintId: number): string[] | undefined {
   return BLUEPRINT_MATERIALS[blueprintId];

@@ -60,6 +60,7 @@ export {
   blueprintMaterials,
   blueprintProcessingDays,
   blueprintVariationAxes,
+  blueprintItemSpecs,
 } from "@presswork/shared";
 
 // Dynamic Mockups per-blueprint template registry lives in @presswork/shared

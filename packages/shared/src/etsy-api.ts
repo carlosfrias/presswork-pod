@@ -201,6 +201,15 @@ export const EtsyListingCreateInputSchema = z.object({
   materials: z.array(z.string()).optional(),
   processing_min: z.number().int().optional(),
   processing_max: z.number().int().optional(),
+  // Required when the shop's shipping_profile_id is a "calculated" profile —
+  // Etsy computes postage from these. Optional in the schema so flat-rate
+  // profiles still work; the publish path always sends them (see BLUEPRINT_ITEM_SPECS).
+  item_weight: z.number().positive().optional(),
+  item_weight_unit: z.enum(["oz", "lb", "g", "kg"]).optional(),
+  item_length: z.number().positive().optional(),
+  item_width: z.number().positive().optional(),
+  item_height: z.number().positive().optional(),
+  item_dimensions_unit: z.enum(["in", "cm", "mm", "m", "ft", "yd"]).optional(),
 });
 
 export type EtsyListingCreateInput = z.infer<typeof EtsyListingCreateInputSchema>;
