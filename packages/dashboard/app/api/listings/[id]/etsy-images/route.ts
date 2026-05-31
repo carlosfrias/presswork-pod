@@ -59,6 +59,15 @@ const TRUSTED_IMAGE_HOST_SUFFIXES = [
   ".dynamicmockups.com",
 ] as const;
 
+// Dynamic Mockups serves rendered images from an S3 bucket, NOT from a
+// *.dynamicmockups.com host. Match this bucket EXACTLY (not as a suffix): a
+// bare ".s3...amazonaws.com" suffix would trust every bucket in the region,
+// and even endsWith on the full host is bypassable by a bucket named to end
+// with this string. Exact-host equality closes both.
+const TRUSTED_IMAGE_HOSTS_EXACT = [
+  "app-dynamicmockups-psd-engine-production.s3.eu-central-1.amazonaws.com",
+] as const;
+
 function isTrustedImageUrl(raw: string): boolean {
   let url: URL;
   try {
@@ -68,6 +77,7 @@ function isTrustedImageUrl(raw: string): boolean {
   }
   if (url.protocol !== "https:") return false;
   const host = url.hostname.toLowerCase();
+  if (TRUSTED_IMAGE_HOSTS_EXACT.some((h) => host === h)) return true;
   return TRUSTED_IMAGE_HOST_SUFFIXES.some(
     (suffix) => host === suffix.slice(1) || host.endsWith(suffix)
   );
