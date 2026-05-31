@@ -174,6 +174,8 @@ const LISTING_INPUT = {
   when_made: "made_to_order",
   is_supply: false,
   shipping_profile_id: 123,
+  // Required by Etsy on create (Missing input parameter: [quantity] otherwise).
+  quantity: 999,
   // Required by Etsy POD policy (compliance rule 1). Schema rejects empty/missing.
   production_partner_ids: [999001],
   readiness_state_id: 1,

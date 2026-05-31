@@ -13,6 +13,7 @@ import {
   getSettings,
   getRuntimeFlag,
   notifySlack,
+  POD_VARIANT_QUANTITY,
 } from "@presswork/shared";
 import { writeCopy } from "./copywriter.js";
 import { validatePricingFloor } from "./pricing.js";
@@ -334,6 +335,9 @@ async function executeEtsyPublish(
       who_made: "i_did",
       when_made: "made_to_order",
       is_supply: false,
+      // Required by Etsy on create; a placeholder that updateListingInventory
+      // immediately overrides per variant.
+      quantity: POD_VARIANT_QUANTITY,
       shipping_profile_id: ETSY_SHIPPING_PROFILE_ID,
       readiness_state_id: ETSY_READINESS_STATE_ID,
       production_partner_ids: [ETSY_PRODUCTION_PARTNER_ID],

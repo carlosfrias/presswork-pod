@@ -182,6 +182,11 @@ export const EtsyListingCreateInputSchema = z.object({
   when_made: z.string(),
   is_supply: z.boolean(),
   shipping_profile_id: z.number().int(),
+  // Etsy REQUIRES a top-level quantity on listing creation (POST /listings).
+  // Omitting it returns `Missing input parameter: [quantity]`. For variant
+  // listings this is a placeholder — updateListingInventory overrides per-variant
+  // quantities immediately after — but it must be present and ≥1.
+  quantity: z.number().int().positive(),
   title: z.string().max(140),
   description: z.string(),
   price: z.number().positive(),

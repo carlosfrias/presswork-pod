@@ -3,6 +3,7 @@ import {
   buildInventoryFromDesign,
   blueprintMaterials,
   blueprintProcessingDays,
+  POD_VARIANT_QUANTITY,
   type EtsyInventoryInput,
 } from "@presswork/shared";
 import { serviceClient } from "@/lib/supabase/server";
@@ -150,6 +151,8 @@ export async function getEtsyPayloadPreview(
     who_made: "i_did",
     when_made: "made_to_order",
     is_supply: false,
+    // Etsy requires a top-level quantity on create; inventory PUT overrides it.
+    quantity: POD_VARIANT_QUANTITY,
     shipping_profile_id: shippingProfileId,
     readiness_state_id: readinessStateId,
     production_partner_ids: productionPartnerId ? [productionPartnerId] : [],
