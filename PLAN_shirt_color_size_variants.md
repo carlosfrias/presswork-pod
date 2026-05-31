@@ -1,7 +1,7 @@
 # Plan — T-Shirt Color & Size Variants (Design + Listing)
 
-**Status:** Phase 0 COMPLETE ✅ — Phases 1–6 pending approval.
-**Date:** 2026-05-30
+**Status:** Phases 0–1 COMPLETE ✅ — Phases 2–6 pending.
+**Date:** 2026-05-30 (Phase 1 shipped 2026-05-31)
 **Author:** Claude (orchestrated research workflow, 6 parallel subsystem readers)
 
 > ### Progress log
@@ -11,12 +11,15 @@
 > - **SwiftPOD base cost confirmed (2026-05-30, via throwaway product probe):** S/M/L/XL = **$10.09**, 2XL = **$11.53**, 3XL = **$12.76**. US shipping = $4.29. (Was $8.50 flat for Marco.)
 >   - **Pricing-floor impact:** 2.5× floor for S–XL = **$25.23** (was $21.25). The current **$24.99 price point now FAILS** `validatePricingFloor` by $0.24. Listings must move to **≥ $25.99** (target $26.99–$27.99 for a healthy 3× on the base). Per-unit at $25.99: print $10.09 + ship $4.29 + Etsy fees ~$2.92 → **net ~$8.69 (33%)**.
 >   - **Size-variable cost:** 2XL/3XL carry upcharges, so a single flat `print_cost` slightly under-protects those sizes. v1 keeps a flat base ($10.09) for the floor + Ledger and flags 2XL/3XL; making cost per-variant is a follow-up.
+> - **Phase 1 done (2026-05-31, commit `bb78b1b`):** 1a — provider `3→39` in design/listing constants; print cost `8.5→10.09` + shipping `4.5→4.29` in listing + ledger + dashboard; Scout retail re-baselined to default `$26.99` / range `$25.99–$34.99` (incl. `price_target_usd` validation bound). 1b — migrations `054` (`trend_briefs.shirt_colors[]`/`shirt_sizes[]`) + `055` (`listings.selected_variant_ids INT[]`) applied to cloud via `supabase db push`; `shared/types.ts` + `shared_py/models.py` fields added. Built via lean workflow (Sonnet build+verify, 1 Opus pricing-correctness review); tsc clean, 44 TS test files + 168 py tests pass, floor coherence verified. **No image-gen changes (PNG is color-agnostic) — confirmed.**
 
 ---
 
 ## ⏯ NEXT SESSION — START HERE
 
-**Done & shipped (on `main`):** Phase 0 — `printify_variant_catalog` table (migration `053`, applied to cloud) + seed script (`scripts/seed-printify-variant-catalog.ts`). Cloud catalog holds **419 SwiftPOD variants** (63 colors × 9 sizes), verified.
+**Done & shipped (on `main`):**
+- **Phase 0** — `printify_variant_catalog` table (migration `053`) + seed script. Cloud catalog holds **419 SwiftPOD variants** (63 colors × 9 sizes), verified.
+- **Phase 1** (commit `bb78b1b`) — provider `3→39` + cost/price re-baseline ($10.09/$4.29, retail $26.99, range $25.99–$34.99) across design/listing/ledger/dashboard; migrations `054`/`055` applied to cloud; `shared/types.ts` + `shared_py/models.py` carry the new fields. Floor now $25.23; all tests green.
 
 **Decisions locked (do not re-litigate):**
 - Provider = **SwiftPOD (39)**. Variant IDs are blueprint-scoped → White S–2XL = `38163/38177/38191/38205/38219`, 3XL = `42120`.
@@ -24,10 +27,10 @@
 - New default retail **$26.99**; Scout range **$25.99–$34.99**.
 - Default offered set = White + S/M/L/XL/2XL. Colors selectable = full SwiftPOD catalog. Selection on `trend_briefs`, per-listing override on `listings.selected_variant_ids`.
 
-**Next action = Phase 1** (was awaiting owner go-ahead at session end):
-1. **Phase 1a** — flip provider constants (3→39) in `packages/design/constants.py` + `packages/listing/src/constants.ts`; update cost constants to $10.09/$4.29 in Listing + Ledger; re-baseline `packages/dashboard/lib/scout/generate-niche.ts` to $26.99 / $25.99–$34.99.
-2. **Phase 1b** — migrations `054` (`trend_briefs.shirt_colors[]`,`shirt_sizes[]`) + `055` (`listings.selected_variant_ids[]`) + zod/pydantic model updates. Apply with `supabase db push` (migration-history drift was repaired 2026-05-31 — see note below).
-Then Phases 2–6 (Design agent, Listing agent, dashboard pickers, tests).
+**Next action = Phases 2 & 3** (Design resolver + Listing override — can run in parallel; the schema + catalog they depend on are now live):
+1. **Phase 2 — Design agent (Python) resolves selection → variant IDs.** New `packages/design/variant_catalog.py`: given `(blueprint_id, provider_id=39, colors[], sizes[])`, query `printify_variant_catalog` → `variant_id`s; fall back to `GILDAN_64000_VARIANT_IDS` only if empty. Wire into `main.py` cache-hit (`:256-262`) **and** normal (`:333-346`) paths to write the resolved list from the brief's `shirt_colors`/`shirt_sizes` (now on `trend_briefs`). No image-gen changes.
+2. **Phase 3 — Listing agent (TS) honors override.** `publisher.ts`: variant IDs = `listing.selected_variant_ids ?? design.printify_variant_ids`; `resumePublish` JOIN also selects `selected_variant_ids` and filters `printify_variants` to it before `buildInventoryFromDesign`. New shared `validateVariantIds()` (override must be a subset of the design set). `recreatePrintifyProduct` must honor the override.
+Then Phases 4–6 (dashboard Design picker, dashboard Listing override editor, tests + cloud integration smoke).
 
 **✅ Repo cleanup done (2026-05-31), both formerly-blocking gotchas resolved:**
 - **Migration-history drift — FIXED.** Cloud `schema_migrations` had 046–053 recorded as timestamp versions (046–049, 052, 053) with 050/051 absent entirely, so `supabase db push` saw 046+ as unapplied. Repaired via `supabase migration repair --status applied 046…053` + `--status reverted` on the 6 orphan timestamp rows (history table only — schema untouched; all 046–053 changes were already live). `supabase migration list` now shows clean 001–053 Local=Remote and `db push --dry-run` reports "up to date." **Use `supabase db push` for 054/055.**
