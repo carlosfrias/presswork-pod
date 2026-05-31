@@ -666,14 +666,18 @@ const EtsyInventoryProductSchema = z.object({
 
 export const EtsyInventoryInputSchema = z.object({
   products: z.array(EtsyInventoryProductSchema).min(1),
-  // Properties whose price/quantity/sku is shared across all variants. Empty
-  // arrays are explicit (Etsy expects the keys present).
-  price_on_property: z.array(z.string()).default([]),
-  quantity_on_property: z.array(z.string()).default([]),
-  sku_on_property: z.array(z.string()).default([]),
-  // Processing Profiles migration: present (usually empty for POD, where every
-  // variant shares one readiness state) so Etsy's parser finds the key.
-  readiness_state_on_property: z.array(z.string()).default([]),
+  // Each array holds the property_id(s) that the given attribute VARIES on. An
+  // empty array means that attribute must be identical across all products;
+  // a populated array tells Etsy the attribute differs per the listed property.
+  // We keep price/quantity uniform (empty) but SKU is unique per variant, so
+  // sku_on_property lists the variation property_ids (513/514) — otherwise Etsy
+  // rejects with "sku must be consistent across all products".
+  price_on_property: z.array(z.number().int()).default([]),
+  quantity_on_property: z.array(z.number().int()).default([]),
+  sku_on_property: z.array(z.number().int()).default([]),
+  // Processing Profiles migration: present (empty for POD, where every variant
+  // shares one readiness state) so Etsy's parser finds the key.
+  readiness_state_on_property: z.array(z.number().int()).default([]),
 });
 
 export type EtsyInventoryInput = z.infer<typeof EtsyInventoryInputSchema>;

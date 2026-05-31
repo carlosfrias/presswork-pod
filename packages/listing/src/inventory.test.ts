@@ -84,11 +84,14 @@ describe("buildInventoryFromDesign", () => {
     ]);
   });
 
-  it("emits empty price_on_property arrays so all variants share the listing price", () => {
+  it("keeps price/quantity uniform but declares SKU varies on every axis", () => {
     const inv = buildInventoryFromDesign({ design: baseDesign, priceUsd: 24.99 });
+    // Same price + quantity across variants → empty (Etsy enforces equality).
     expect(inv.price_on_property).toEqual([]);
     expect(inv.quantity_on_property).toEqual([]);
-    expect(inv.sku_on_property).toEqual([]);
+    // Per-variant SKU → must list the variation property_ids, else Etsy 400s
+    // "sku must be consistent across all products".
+    expect(inv.sku_on_property).toEqual([513, 514]);
   });
 
   it("rejects a design with no blueprint", () => {

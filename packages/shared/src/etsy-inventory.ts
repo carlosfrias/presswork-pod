@@ -119,11 +119,17 @@ export function buildInventoryFromDesign({
     };
   });
 
+  // Price and quantity are uniform across variants (empty arrays). SKU is the
+  // Printify variant id — unique per variant — so it varies on every axis;
+  // list those property_ids or Etsy rejects with "sku must be consistent
+  // across all products".
+  const variationPropertyIds = axes.map((_, idx) => ETSY_CUSTOM_PROPERTY_IDS[idx]!);
+
   return {
     products,
     price_on_property: [],
     quantity_on_property: [],
-    sku_on_property: [],
+    sku_on_property: variationPropertyIds,
     readiness_state_on_property: [],
   };
 }
