@@ -283,6 +283,54 @@ describe("uploadListingImage download guards (audit #40)", () => {
     ).rejects.toThrow(EtsyApiError);
   });
 
+  it("accepts a generic binary content-type when the URL has an image extension (Dynamic Mockups S3)", async () => {
+    vi.doMock("./etsy-auth.js", () => ({
+      getValidAccessToken: vi.fn().mockResolvedValue("test-token"),
+      EtsyAuthError: class EtsyAuthError extends Error {},
+    }));
+    const dmUrl =
+      "https://app-dynamicmockups-psd-engine-production.s3.eu-central-1.amazonaws.com/variation-exports/abc.jpg";
+    let uploadHit = false;
+    server.use(
+      // S3 serves a real JPEG but with a generic content-type.
+      http.get(dmUrl, () =>
+        new HttpResponse("fake-jpeg-bytes", {
+          status: 200,
+          headers: { "Content-Type": "binary/octet-stream" },
+        })
+      ),
+      http.post(
+        "https://openapi.etsy.com/v3/application/shops/:shopId/listings/:listingId/images",
+        () => {
+          uploadHit = true;
+          return HttpResponse.json({ listing_image_id: 1, rank: 1 });
+        }
+      )
+    );
+    const { uploadListingImage } = await import("./etsy-api.js");
+    await uploadListingImage({} as never, 1, dmUrl);
+    expect(uploadHit).toBe(true);
+  });
+
+  it("still rejects a generic binary content-type when the URL has no image extension", async () => {
+    vi.doMock("./etsy-auth.js", () => ({
+      getValidAccessToken: vi.fn().mockResolvedValue("test-token"),
+      EtsyAuthError: class EtsyAuthError extends Error {},
+    }));
+    server.use(
+      http.get("https://example.com/mystery-blob", () =>
+        new HttpResponse("data", {
+          status: 200,
+          headers: { "Content-Type": "binary/octet-stream" },
+        })
+      )
+    );
+    const { uploadListingImage, EtsyApiError } = await import("./etsy-api.js");
+    await expect(
+      uploadListingImage({} as never, 1, "https://example.com/mystery-blob")
+    ).rejects.toThrow(EtsyApiError);
+  });
+
   it("rejects when Content-Length exceeds max", async () => {
     vi.doMock("./etsy-auth.js", () => ({
       getValidAccessToken: vi.fn().mockResolvedValue("test-token"),

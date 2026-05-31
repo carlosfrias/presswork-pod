@@ -285,6 +285,31 @@ export async function createDraftListing(
   return EtsyListingResponseSchema.parse(data);
 }
 
+// Map a file extension (from the URL path) to an image MIME type. Used as a
+// fallback when a CDN serves an image with a generic content-type such as
+// "binary/octet-stream" (e.g. the Dynamic Mockups S3 bucket). Returns null when
+// the extension isn't a recognized image format.
+const IMAGE_EXT_TO_MIME: Record<string, string> = {
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  png: "image/png",
+  gif: "image/gif",
+  webp: "image/webp",
+};
+
+function inferImageMimeFromUrl(rawUrl: string): string | null {
+  let pathname: string;
+  try {
+    pathname = new URL(rawUrl).pathname;
+  } catch {
+    pathname = rawUrl;
+  }
+  const lastDot = pathname.lastIndexOf(".");
+  if (lastDot === -1) return null;
+  const ext = pathname.slice(lastDot + 1).toLowerCase();
+  return IMAGE_EXT_TO_MIME[ext] ?? null;
+}
+
 export async function uploadListingImage(
   db: Db,
   listingId: number,
@@ -335,10 +360,20 @@ export async function uploadListingImage(
       throw new EtsyApiError(`Failed to download image from ${imageUrl}: ${imageRes.status}`);
     }
 
-    const contentType = imageRes.headers.get("content-type") ?? "";
-    if (!contentType.toLowerCase().startsWith("image/")) {
+    // Decide the image MIME type. Prefer the server's content-type, but some
+    // CDNs (e.g. the Dynamic Mockups S3 bucket) serve real JPEGs as a generic
+    // "binary/octet-stream". In that case fall back to inferring the type from
+    // the URL's file extension. We only reject when NEITHER the header nor the
+    // extension indicates an image — the URL itself is already authorized
+    // upstream (it must be one of the listing's own design/mockup URLs).
+    const headerContentType = (imageRes.headers.get("content-type") ?? "").toLowerCase();
+    const inferredContentType = inferImageMimeFromUrl(imageUrl);
+    const contentType = headerContentType.startsWith("image/")
+      ? headerContentType
+      : inferredContentType;
+    if (!contentType) {
       throw new EtsyApiError(
-        `Image download from ${imageUrl} returned non-image content-type: ${contentType || "(missing)"}`
+        `Image download from ${imageUrl} returned non-image content-type: ${headerContentType || "(missing)"} and the URL has no recognized image extension`
       );
     }
 
@@ -378,8 +413,13 @@ export async function uploadListingImage(
     clearTimeout(timer);
   }
 
+  // Filename extension matches the resolved content-type so the multipart part
+  // is self-consistent (Etsy sniffs the bytes, but a matching name avoids any
+  // edge-case mismatch). contentType is "image/<subtype>"; jpeg → .jpg.
+  const subtype = contentType.split("/")[1] ?? "png";
+  const ext = subtype === "jpeg" ? "jpg" : subtype;
   const form = new FormData();
-  form.append("image", imageBlob, "design.png");
+  form.append("image", imageBlob, `design.${ext}`);
   form.append("rank", String(rank));
   if (altText) {
     form.append("alt_text", altText);
