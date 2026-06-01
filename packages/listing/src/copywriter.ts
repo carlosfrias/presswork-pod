@@ -6,6 +6,7 @@ import {
   ListingCopySchema,
   ensureAiDisclosure,
   ensureValidTags,
+  stripEmDashes,
   getSettings,
   estimateAnthropicCostUsd,
   recordUsage,
@@ -29,7 +30,20 @@ Respond ONLY with valid JSON:
   "description": string, // 150-300 words, conversational, keyword-rich
   "tags": string[]       // exactly 13 tags, mix of exact-match and long-tail
 }
-Do not use all-caps. Do not use excessive punctuation. Sound human.
+VOICE — write like a real person, not an AI. This copy must NOT read as
+machine-generated:
+- NEVER use an em dash (—) or en dash (–). This is the single most important
+  stylistic rule. Use commas, periods, or parentheses instead. Only the plain
+  hyphen (-) is allowed, and only inside words like "made-to-order".
+- Avoid LLM tells and filler: "elevate", "dive in", "in today's world", "look
+  no further", "whether you're a ... or a ...", "perfect for those who",
+  "nestled", "boasts", "a testament to", "unleash", "curated", "game-changer".
+- Vary sentence length and opening structure. Mix short, punchy lines with
+  longer ones. Do not start every sentence the same way.
+- Skip breathless hype and rule-of-three lists written for their own sake. Be
+  concrete about the design and who would actually wear it.
+- Do not use all-caps. Do not use excessive punctuation. Plain, warm,
+  confident English.
 
 DO NOT mention AI, generative tools, machine learning, "AI-generated", or how the
 design was made. Etsy requires an AI disclosure in the description, but we append
@@ -65,7 +79,10 @@ actually see — the subject, style, mood, and key visual details. Ground the
 title, description, and tags in the real image, not in the brief alone. The
 brief data is secondary context for niche, SEO signals, and pricing only.`;
 
-const DEFAULT_MODEL = "claude-sonnet-4-20250514";
+// Copy is always written by the best, latest Claude model — there is
+// deliberately no per-run / runtime-flag model selection for copy generation.
+// Bump this one constant when a newer flagship ships.
+const COPYWRITER_MODEL = "claude-opus-4-8";
 
 /**
  * Rewrite a Supabase Storage object URL to the image transform endpoint so
@@ -95,9 +112,9 @@ function toVisionUrl(url: string | null): string | null {
 export async function writeCopy(
   brief: TrendBrief,
   design: DesignPackage,
-  options: { model?: string; imageUrl?: string | null } = {}
+  options: { imageUrl?: string | null } = {}
 ): Promise<ListingCopy> {
-  const model = options.model ?? DEFAULT_MODEL;
+  const model = COPYWRITER_MODEL;
   const rawImageUrl = options.imageUrl ?? design.image_url ?? null;
   // Downscale to 1024px before sending to Claude — print PNGs are 4500×5400
   // and Claude Vision doesn't need that resolution to read a t-shirt design.
@@ -207,14 +224,19 @@ export async function writeCopy(
   // Auto-fix common Claude misses server-side, same defense-in-depth pattern
   // as the dashboard save actions: the LLM can write whatever, we own the
   // shape that actually reaches Etsy.
+  //   - title/description: strip em/en dashes (no AI-tell punctuation goes live).
   //   - description: ensure verbatim AI_DISCLOSURE_TEXT is present (Etsy
-  //     requires the disclosure; we own the wording).
+  //     requires the disclosure; we own the wording). Strip dashes BEFORE
+  //     appending the disclosure so the verbatim disclosure stays intact.
   //   - tags: trim each to ≤20 chars (word-boundary aware), cap to 13,
   //     drop dups + empties. Etsy enforces both limits hard.
   if (parsed && typeof parsed === "object") {
     const obj = parsed as Record<string, unknown>;
+    if (typeof obj.title === "string") {
+      obj.title = stripEmDashes(obj.title);
+    }
     if (typeof obj.description === "string") {
-      obj.description = ensureAiDisclosure(obj.description);
+      obj.description = ensureAiDisclosure(stripEmDashes(obj.description));
     }
     if (Array.isArray(obj.tags)) {
       obj.tags = ensureValidTags(obj.tags as string[]);

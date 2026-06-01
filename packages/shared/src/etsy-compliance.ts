@@ -24,6 +24,67 @@ function escapeRegex(s: string): string {
   return s.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
 }
 
+// The em dash (—, U+2014) and its typographic lookalikes are a well-known
+// "written by an LLM" tell. Live listing copy must never contain them. We strip
+// them at every copy write/save and re-sanitize at the publish chokepoint, with
+// validateNoEmDash as the final assertion. The ordinary hyphen-minus ("-") is
+// intentionally left alone ("made-to-order", "hand-selected").
+//   U+2012 figure dash · U+2013 en dash · U+2014 em dash · U+2015 horizontal bar
+const LONG_DASH_CLASS = "‒–—―";
+const LONG_DASH_TEST = new RegExp(`[${LONG_DASH_CLASS}]`);
+
+/**
+ * Replace em/en dashes (and their lookalikes) with plain, keyboard-typable
+ * punctuation so copy reads as human-written and never trips the em-dash gate:
+ *   - a dash between digits ("2–4 weeks") becomes a hyphen ("2-4 weeks");
+ *   - any other long dash used as a clause break becomes ", ";
+ * then the comma artifacts that substitution can create are tidied up.
+ */
+export function stripEmDashes(text: string): string {
+  return text
+    .replace(new RegExp(`(\\d)\\s*[${LONG_DASH_CLASS}]\\s*(\\d)`, "g"), "$1-$2")
+    .replace(new RegExp(`\\s*[${LONG_DASH_CLASS}]\\s*`, "g"), ", ")
+    .replace(/\s+([,.;:!?])/g, "$1") // stray space before punctuation
+    .replace(/,\s*,/g, ", ") // doubled commas
+    .replace(/,\s*([.;:!?])/g, "$1") // comma butted against end punctuation
+    .replace(/\s{2,}/g, " ")
+    .replace(/^\s*,\s*/, "") // leading comma
+    .replace(/\s*,\s*$/, "") // trailing comma
+    .trim();
+}
+
+/**
+ * Hard gate: throws if any em/en dash survives in live copy. In normal flow it
+ * never fires — every write path runs stripEmDashes first — but it guarantees
+ * the invariant if a future code path ever builds copy without sanitizing.
+ */
+export function validateNoEmDash(text: string): void {
+  if (LONG_DASH_TEST.test(text)) {
+    throw new ComplianceError(
+      "Listing copy contains an em/en dash (— or –). Live copy must use plain punctuation; re-save to auto-clean."
+    );
+  }
+}
+
+/**
+ * Normalize a copy triple to the exact shape that may go live: em dashes
+ * stripped from title + description, AI disclosure guaranteed present, tags
+ * cleaned. Idempotent — safe to run at write time, save time, and again at the
+ * publish chokepoint. Mirrors the ensureAiDisclosure / ensureValidTags pattern:
+ * the LLM and the operator can write whatever they want; we own the final shape.
+ */
+export function sanitizeListingCopy(copy: {
+  title: string;
+  description: string;
+  tags: string[];
+}): { title: string; description: string; tags: string[] } {
+  return {
+    title: stripEmDashes(copy.title),
+    description: ensureAiDisclosure(stripEmDashes(copy.description)),
+    tags: ensureValidTags(copy.tags),
+  };
+}
+
 export function validateAiDisclosure(description: string): void {
   if (!description.includes(AI_DISCLOSURE_TEXT)) {
     throw new ComplianceError(
@@ -55,7 +116,12 @@ export function ensureValidTags(tags: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of tags) {
-    const trimmed = raw.trim();
+    // Drop em/en dashes from tags too (→ space) so the em-dash gate can't trip
+    // on a stray keyword dash; collapse the resulting whitespace.
+    const trimmed = raw
+      .replace(new RegExp(`[${LONG_DASH_CLASS}]`, "g"), " ")
+      .replace(/\s{2,}/g, " ")
+      .trim();
     if (trimmed.length === 0) continue;
     let tag = trimmed;
     if (tag.length > TAG_LEN_MAX) {
@@ -178,4 +244,5 @@ export function validateCopyCompliance(args: {
   const allCopy = [args.title, args.description, ...args.tags].join("\n");
   validateNoForbiddenTerms(allCopy);
   validateNoOffPlatform(allCopy);
+  validateNoEmDash(allCopy);
 }

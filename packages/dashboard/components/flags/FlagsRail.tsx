@@ -11,13 +11,10 @@ interface FlagsRailProps {
 }
 
 const NUMERIC = new Set(["margin_warning_threshold_usd"]);
-const ENUMS: Record<string, string[]> = {
-  copywriter_model: [
-    "claude-sonnet-4-20250514",
-    "claude-opus-4-7",
-    "claude-haiku-4-5-20251001",
-  ],
-};
+// Copy generation no longer has a selectable model — it always uses the latest
+// flagship Claude (see COPYWRITER_MODEL in packages/listing/src/copywriter.ts),
+// so there is intentionally no copywriter_model enum here.
+const ENUMS: Record<string, string[]> = {};
 
 export async function FlagsRail({ keys, title = "Flags", emptyHint }: FlagsRailProps) {
   const flags = await getRuntimeFlags();

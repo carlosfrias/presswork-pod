@@ -21,6 +21,7 @@ export type LlmAgent = "scout" | "builder" | "design" | "listing" | "ledger";
 const ANTHROPIC_PRICING_USD_PER_MTOK: Record<string, [number, number]> = {
   "claude-sonnet-4-20250514": [3.0, 15.0],
   "claude-sonnet-4-6": [3.0, 15.0],
+  "claude-opus-4-8": [15.0, 75.0],
   "claude-opus-4-7": [15.0, 75.0],
   "claude-haiku-4-5-20251001": [1.0, 5.0],
 };

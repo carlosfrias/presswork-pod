@@ -1,5 +1,4 @@
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
-import { FlagsRail } from "@/components/flags/FlagsRail";
 import { CollapsibleErrorCard } from "@/components/listings/CollapsibleErrorCard";
 import { ReviewCard } from "@/components/listings/ReviewCard";
 import { ListingRow } from "@/components/listings/ListingRow";
@@ -134,10 +133,6 @@ export default async function ListingsPage() {
             </div>
           )}
         </SurfaceCard>
-        <FlagsRail
-          keys={["copywriter_model"]}
-          title="Listing flags"
-        />
       </div>
     </div>
   );

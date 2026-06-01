@@ -13,10 +13,11 @@ import {
   ComplianceError,
   ensureAiDisclosure,
   ensureValidTags,
+  stripEmDashes,
+  sanitizeListingCopy,
   validateCopyCompliance,
   updateActiveListing as updateActiveListingOnEtsy,
   deactivateEtsyListing,
-  dynamicMockupsTemplate,
   dynamicMockupsTemplates,
   renderMockup,
   DynamicMockupsApiError,
@@ -119,10 +120,10 @@ export async function approveListingWithCopy(formData: FormData) {
     throw new Error(`Cannot approve from status='${row.status}'`);
   }
 
-  const descriptionWithDisclosure = ensureAiDisclosure(description);
+  const descriptionWithDisclosure = ensureAiDisclosure(stripEmDashes(description));
   const cleanedTags = ensureValidTags(tags);
   const parsed = ListingCopySchema.safeParse({
-    title,
+    title: stripEmDashes(title),
     description: descriptionWithDisclosure,
     tags: cleanedTags,
   });
@@ -315,10 +316,10 @@ export async function updateListingCopy(formData: FormData) {
   //     word-boundary, drop dups + empties, cap to 13).
   // Same helpers the copywriter runs after a Claude call. ListingCopySchema's
   // refines remain as a final-invariant check but should never fire now.
-  const descriptionWithDisclosure = ensureAiDisclosure(description);
+  const descriptionWithDisclosure = ensureAiDisclosure(stripEmDashes(description));
   const cleanedTags = ensureValidTags(tags);
   const parsed = ListingCopySchema.safeParse({
-    title,
+    title: stripEmDashes(title),
     description: descriptionWithDisclosure,
     tags: cleanedTags,
   });
@@ -410,10 +411,10 @@ export async function updateActiveListingCopy(formData: FormData) {
   //     word-boundary, drop dups + empties, cap to 13).
   // Same helpers the copywriter runs after a Claude call. ListingCopySchema's
   // refines remain as a final-invariant check but should never fire now.
-  const descriptionWithDisclosure = ensureAiDisclosure(description);
+  const descriptionWithDisclosure = ensureAiDisclosure(stripEmDashes(description));
   const cleanedTags = ensureValidTags(tags);
   const parsed = ListingCopySchema.safeParse({
-    title,
+    title: stripEmDashes(title),
     description: descriptionWithDisclosure,
     tags: cleanedTags,
   });
@@ -486,11 +487,13 @@ export async function pushListingToEtsy(formData: FormData) {
     throw new Error("Listing is missing copy fields — save edits first.");
   }
 
-  const copy = {
+  // Sanitize before the live update so em dashes never reach Etsy, even for
+  // legacy rows saved before em-dash stripping landed.
+  const copy = sanitizeListingCopy({
     title: row.title as string,
     description: row.description as string,
     tags: row.tags as string[],
-  };
+  });
   // Defense-in-depth: re-run the compliance gates immediately before the
   // Etsy call. Mirrors the publisher's executeEtsyPublish pattern.
   try {
@@ -518,9 +521,16 @@ export async function pushListingToEtsy(formData: FormData) {
     throw new Error(`Etsy push failed: ${message}`);
   }
 
+  // Persist the sanitized copy so the DB row matches what is now live on Etsy.
   await db
     .from("listings")
-    .update({ last_pushed_at: new Date().toISOString(), error_message: null })
+    .update({
+      title: copy.title,
+      description: copy.description,
+      tags: copy.tags,
+      last_pushed_at: new Date().toISOString(),
+      error_message: null,
+    })
     .eq("id", id);
 
   revalidatePath("/listings");

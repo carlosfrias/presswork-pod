@@ -11,8 +11,8 @@ import {
   getTaxonomyId,
   getLogger,
   getSettings,
-  getRuntimeFlag,
   notifySlack,
+  sanitizeListingCopy,
   POD_VARIANT_QUANTITY,
   validateVariantIds,
 } from "@presswork/shared";
@@ -129,17 +129,29 @@ export async function publishOne(
     );
     let copy: ListingCopy;
     if (canResumeCopy) {
-      copy = {
+      // Re-sanitize stored copy on the resume path so a row written before
+      // em-dash stripping landed gets cleaned rather than blocked at publish.
+      const stored = {
         title: existing.title as string,
         description: existing.description as string,
         tags: existing.tags as string[],
       };
+      copy = sanitizeListingCopy(stored);
       validateCopyCompliance(copy);
-      log.info({ action: "resume_existing_copy", record_id: listingId, status: existing.status });
+      if (copy.title !== stored.title || copy.description !== stored.description) {
+        await db
+          .from("listings")
+          .update({ title: copy.title, description: copy.description, tags: copy.tags })
+          .eq("id", listingId);
+        log.info({ action: "sanitized_existing_copy", record_id: listingId, status: existing.status });
+      } else {
+        log.info({ action: "resume_existing_copy", record_id: listingId, status: existing.status });
+      }
     } else {
+      // No model selection: copy is always written by the latest flagship Claude
+      // (COPYWRITER_MODEL in copywriter.ts). writeCopy strips em dashes itself.
       log.info({ action: "generate_copy", record_id: listingId, status: "started" });
-      const copyModel = await getRuntimeFlag("copywriter_model", "claude-sonnet-4-20250514");
-      copy = await writeCopy(brief, design, { model: copyModel });
+      copy = await writeCopy(brief, design);
       validateCopyCompliance(copy);
       await db
         .from("listings")
@@ -326,7 +338,7 @@ async function executeEtsyPublish(
   db: Db,
   listingId: string,
   productId: string,
-  copy: ListingCopy,
+  rawCopy: ListingCopy,
   priceUsd: number,
   mockupUrls: string[],
   mockupsFromActualDesign: boolean,
@@ -338,6 +350,10 @@ async function executeEtsyPublish(
   // Last-line compliance gates immediately before talking to Etsy. These guard
   // against any state where the DB row drifted (e.g. resumePublish picking up
   // stale data) or a config change between the queue insert and the publish.
+  // Re-sanitize copy here too — this is the single chokepoint every publish
+  // path funnels through, so stripping em dashes once more guarantees none can
+  // reach a live listing regardless of how the copy was produced upstream.
+  const copy = sanitizeListingCopy(rawCopy);
   validateProductionPartnerId(ETSY_PRODUCTION_PARTNER_ID);
   validateMockupProvenance(mockupsFromActualDesign);
   validateCopyCompliance(copy);

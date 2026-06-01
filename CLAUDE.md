@@ -59,7 +59,8 @@ npm workspaces; Python packages own their `requirements.txt`.
 |---|---|
 | Scout + Design | Python 3.12 (`httpx`, `pydantic`, `structlog`) |
 | Listing + Ledger | TypeScript / Node 20 (strict mode, `zod`, `bottleneck`) |
-| AI reasoning | Claude Sonnet 4 (`claude-sonnet-4-20250514`) |
+| AI reasoning | Claude Sonnet 4 (`claude-sonnet-4-20250514`) for Scout/Design/Builder prompts |
+| Listing copy | **Always the latest flagship Claude — currently Opus 4.8 (`claude-opus-4-8`). No model selection.** Bump `COPYWRITER_MODEL` in `packages/listing/src/copywriter.ts` when a newer flagship ships |
 | Image gen | fal.ai / OpenAI via fal.ai (`fal_gpt_image_2` default; `fal_flux_pro`, `fal_nano_banana_2` also supported — per-brief `image_model` field) |
 | Database | Supabase (Postgres) — agent handoff state |
 | Storage | Supabase Storage — design PNGs, mockups |
@@ -145,7 +146,7 @@ Polls every 15 min for `design_packages.status='done'`.
 1. Fetch row + joined `trend_briefs`.
 2. `validatePricingFloor`: reject if `price_usd < print_cost × 2.5`.
 3. `validateProductionPartnerId`: fail fast if `ETSY_PRODUCTION_PARTNER_ID` missing.
-4. Claude Sonnet → `{title, description, tags}` JSON. System prompt in `copywriter.ts` enforces the 4 seller-policy rules — keep prompt and validators in sync.
+4. Claude (latest flagship, currently Opus 4.8 — set by `COPYWRITER_MODEL`, no runtime/per-listing model selection) → `{title, description, tags}` JSON. System prompt in `copywriter.ts` enforces the seller-policy rules AND a human-voice / anti-AI-tell style, including a hard ban on em/en dashes — keep prompt and validators in sync.
 5. `validateCopyCompliance`: AI disclosure verbatim, no forbidden terms, no external URLs/handles/off-platform phrasing.
 6. Create Printify product (`is_visible=false`) using `image_url` + blueprint/variant IDs. Read returned mockup URLs → write to `design_packages.mockup_urls` AND set `mockups_from_actual_design=true` in the same write.
 7. Always pause at `needs_review`. Owner approves on the dashboard → status flips to `pending_publish`; the next listing run picks the row up and drives the Etsy publish via `resumePublish` / `executeEtsyPublish`. No auto-publish path.
@@ -211,6 +212,12 @@ Six hard gates. All validators in `packages/listing/src/compliance.ts`, throw `C
 | 6 | **No off-platform** — no URLs, `@handles`, no "DM me" / "visit our site" | Copywriter prompt + `validateNoOffPlatform()` (regex `EXTERNAL_URL_PATTERN`, `SOCIAL_HANDLE_PATTERN`, `OFF_PLATFORM_PHRASES`) |
 
 When changing the Listing Agent, copywriter prompt, or publish pipeline, re-verify every rule end to end. Copywriter prompt and validators are a coupled enforcement pair — update both together.
+
+### Copy style rules (beyond seller policy)
+
+- **No em dashes in live copy.** The em dash (—) and en dash (–) are banned from any title/description/tag that goes live — they read as AI-generated. Enforced three ways: (1) the copywriter system prompt forbids them, (2) `stripEmDashes()` (in `packages/shared/src/etsy-compliance.ts`) rewrites them to plain punctuation at every copy write/save and again at the publish chokepoint via `sanitizeListingCopy()`, and (3) `validateNoEmDash()` (folded into `validateCopyCompliance`) is the final hard assertion. The plain hyphen (`-`) stays allowed (`made-to-order`).
+- **Copy must read human, not AI.** The system prompt bans common LLM tells/filler and pushes varied sentence rhythm. This is a quality rule, not a hard gate.
+- **One model, always the latest.** Copy generation has no model picker — `COPYWRITER_MODEL` in `copywriter.ts` is the single source of truth (Opus 4.8 now). The old `copywriter_model` runtime flag and its dashboard selector were removed.
 
 ---
 

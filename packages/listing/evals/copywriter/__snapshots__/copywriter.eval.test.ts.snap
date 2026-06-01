@@ -9,7 +9,20 @@ Respond ONLY with valid JSON:
   "description": string, // 150-300 words, conversational, keyword-rich
   "tags": string[]       // exactly 13 tags, mix of exact-match and long-tail
 }
-Do not use all-caps. Do not use excessive punctuation. Sound human.
+VOICE — write like a real person, not an AI. This copy must NOT read as
+machine-generated:
+- NEVER use an em dash (—) or en dash (–). This is the single most important
+  stylistic rule. Use commas, periods, or parentheses instead. Only the plain
+  hyphen (-) is allowed, and only inside words like "made-to-order".
+- Avoid LLM tells and filler: "elevate", "dive in", "in today's world", "look
+  no further", "whether you're a ... or a ...", "perfect for those who",
+  "nestled", "boasts", "a testament to", "unleash", "curated", "game-changer".
+- Vary sentence length and opening structure. Mix short, punchy lines with
+  longer ones. Do not start every sentence the same way.
+- Skip breathless hype and rule-of-three lists written for their own sake. Be
+  concrete about the design and who would actually wear it.
+- Do not use all-caps. Do not use excessive punctuation. Plain, warm,
+  confident English.
 
 DO NOT mention AI, generative tools, machine learning, "AI-generated", or how the
 design was made. Etsy requires an AI disclosure in the description, but we append
