@@ -17,6 +17,24 @@ Order fulfillment itself is handled by **Etsy's native Printify integration**, n
 
 Agents are **loosely coupled via Supabase**. No direct agent-to-agent calls — each reads inputs and writes outputs through DB tables.
 
+> **"Autonomous" describes the design goal, not the current runtime.**
+
+---
+
+## Automation Status — MANUAL ONLY (no auto-firing)
+
+**Nothing in this system runs on a schedule. No cron jobs are deployed or active. No agent action fires on its own — ever — under the current configuration.**
+
+We are *building toward* an automated pipeline, but every agent runs only when the operator invokes it:
+
+- **Every agent is a one-shot, drain-and-exit process.** Scout, Design, Listing, and Ledger each claim queued work, process it, and **exit**. None of them self-loop or self-schedule. (The `while` loops in `packages/listing/src/index.ts` and `packages/design/main.py` break the moment the queue is empty — they drain, they don't poll forever.) Any "polls every 15 min" / "nightly cron" language elsewhere in this doc describes the *intended* deployed cadence, i.e. how often an external scheduler *would* re-invoke the one-shot process — **not** behavior that is currently live.
+- **No external scheduler is connected.** `infra/railway.toml` is the only place cron schedules exist, and its service blocks are **commented out**. Railway is not deployed. Re-enabling automation is a single, deliberate edit to that file — do not make it without explicit instruction.
+- **No GitHub Actions schedule fires agents.** The only workflows are `ci.yml` and `integration.yml`, triggered by PR/push for quality gates — never on a timer, never running agent business logic.
+- **Dashboard "Run agent" buttons are manual and gated.** They spawn a local subprocess only when `DASHBOARD_LOCAL_TRIGGERS_ENABLED=true` (default `false`), and only on an explicit operator click. That is a manual trigger, not automation.
+- **Human gates remain mandatory regardless.** Every agent's output is human-reviewed before the next stage; see the status-flow rules below.
+
+**When changing anything in this repo, do not introduce a cron, timer, `setInterval`, scheduled GitHub Action, process manager (pm2/systemd), or self-looping agent that would cause an agent action to fire without a manual operator trigger. If a task seems to require unattended scheduling, stop and confirm first.**
+
 ---
 
 ## Monorepo Structure
@@ -45,7 +63,7 @@ npm workspaces; Python packages own their `requirements.txt`.
 | Image gen | fal.ai / OpenAI via fal.ai (`fal_gpt_image_2` default; `fal_flux_pro`, `fal_nano_banana_2` also supported — per-brief `image_model` field) |
 | Database | Supabase (Postgres) — agent handoff state |
 | Storage | Supabase Storage — design PNGs, mockups |
-| Hosting / cron | Local CLI for now (Railway TBD). Dashboard can spawn agents locally via `DASHBOARD_LOCAL_TRIGGERS_ENABLED=true` |
+| Hosting / cron | **Manual local CLI only — no cron deployed or active** (see "Automation Status" above). Railway TBD; its `railway.toml` crons are commented out. Dashboard can spawn agents locally only via `DASHBOARD_LOCAL_TRIGGERS_ENABLED=true` on an explicit click |
 | Print fulfillment | Etsy's native Printify integration (out of band) |
 | Alerts | Resend (email) + Slack webhooks |
 | Secrets | Railway env vars only — never in code |
@@ -289,7 +307,9 @@ Use `paths:` filters per job (TS-only / Python-only / both for shared + migratio
 
 ## Railway Deployment
 
-| Service | Type | Schedule |
+> **PLANNED — NOT ACTIVE.** This is the *future* deployment topology, not the current state. Railway is not deployed and these schedules are **not running**. The schedules in `infra/railway.toml` are commented out; the table below is the target layout for if/when unattended automation is deliberately turned on. See "Automation Status" near the top. Until then, run agents manually via CLI.
+
+| Service | Type | Schedule (planned) |
 |---|---|---|
 | `scout` | Cron | `0 2 * * *` |
 | `design` | Cron | `*/15 * * * *` |

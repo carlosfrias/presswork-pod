@@ -1,15 +1,28 @@
 # Railway service definitions for the presswork Ledger Agent.
 # Fulfillment is handled by Etsy's native Printify integration — this agent
 # only logs metrics and emits financial digests.
+#
+# ─────────────────────────────────────────────────────────────────────────
+# AUTOMATION STATUS: DISABLED — NOTHING AUTO-FIRES.
+#
+# The cron service definitions below are INTENTIONALLY COMMENTED OUT. The
+# project is being *built toward* automation, but no agent action runs on a
+# schedule right now. Every agent (Scout, Design, Listing, Ledger) is a
+# one-shot, drain-and-exit CLI process invoked MANUALLY by the operator.
+#
+# Do NOT uncomment these without a deliberate decision to turn on unattended
+# scheduling. Re-enabling them here is the single switch that would make the
+# Ledger crons fire on their own.
+# ─────────────────────────────────────────────────────────────────────────
 
-[services.ledger-cron-receipts]
-type = "cron"
-source = "."
-schedule = "*/30 * * * *"
-command = "npm run poll-receipts --workspace=packages/ledger"
+# [services.ledger-cron-receipts]
+# type = "cron"
+# source = "."
+# schedule = "*/30 * * * *"
+# command = "npm run poll-receipts --workspace=packages/ledger"
 
-[services.ledger-cron-daily-digest]
-type = "cron"
-source = "."
-schedule = "0 13 * * *"
-command = "npm run daily-digest --workspace=packages/ledger"
+# [services.ledger-cron-daily-digest]
+# type = "cron"
+# source = "."
+# schedule = "0 13 * * *"
+# command = "npm run daily-digest --workspace=packages/ledger"
