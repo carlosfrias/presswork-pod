@@ -100,7 +100,7 @@ Full DDL lives in `infra/supabase/migrations/`. Four core tables drive agent han
 
 | Table | Owner | Status flow |
 |---|---|---|
-| `trend_briefs` | Scout writes, Builder/Design read | `needs_review` → `needs_description` → `approved` → `processing` → `done` \| `error` |
+| `trend_briefs` | Scout writes, Builder/Design read | `needs_review` → `needs_description` → `approved` → `processing` → `done` \| `error`; operator-only parking state: `needs_description` ↔ `archived` (Builder page only; excluded from Ledger watchdog) |
 | `design_packages` | Design writes, Listing reads | `needs_review` → `touch_up` → `needs_review` → `approved` → `processing` → `done` \| `error` |
 | `listings` | Listing | `pending` → `needs_review` → `pending_publish` → `publishing` → `active` \| `error` |
 | `orders` | Ledger | `logged` \| `error` (terminal — fulfillment lives outside this codebase) |

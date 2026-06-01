@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { validatePricingFloor, PricingFloorError } from "./pricing.js";
+import { defaultEtsyPriceUsd } from "./constants.js";
 
 const PRINT_COST = 10.09;
 
@@ -30,5 +31,21 @@ describe("validatePricingFloor", () => {
     expect(() => validatePricingFloor(price, PRINT_COST)).not.toThrow();
     // margin works out to ~$9.60 once all three fee components are included
     expect(margin).toBeCloseTo(9.60, 1);
+  });
+});
+
+describe("defaultEtsyPriceUsd", () => {
+  it("returns 25.99 for blueprint 145", () => {
+    expect(defaultEtsyPriceUsd(145)).toBe(25.99);
+  });
+
+  it("bp145 default clears the pricing floor ($10.09 × 2.5 = $25.23)", () => {
+    expect(() => validatePricingFloor(defaultEtsyPriceUsd(145), PRINT_COST)).not.toThrow();
+  });
+
+  it("returns 0 for an unrecognised blueprint so validatePricingFloor still rejects it", () => {
+    const unknownBlueprint = 9999;
+    expect(defaultEtsyPriceUsd(unknownBlueprint)).toBe(0);
+    expect(() => validatePricingFloor(0, PRINT_COST)).toThrow(PricingFloorError);
   });
 });

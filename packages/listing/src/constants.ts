@@ -30,6 +30,27 @@ const PRINTIFY_VARIANT_PRICE_CENTS_BY_BLUEPRINT: Record<number, number> = {
 // will still accept it because it's > 0, but the value is clearly placeholder.
 export const PRINTIFY_VARIANT_PRICE_FALLBACK_CENTS = 100;
 
+// Default buyer-facing Etsy listing price (USD) by blueprint, used when neither
+// the listings row nor the trend_brief carries a price_target_usd. Each value
+// must stay at or above the pricing floor (print_cost × 2.5):
+//   - blueprint 145: floor = $10.09 × 2.5 = $25.23; $25.99 clears it (~2.58×)
+//
+// NOTE: This is the *Etsy* price the buyer sees. It is distinct from
+// PRINTIFY_VARIANT_PRICE_CENTS_BY_BLUEPRINT, which is the internal Printify
+// variant price (in cents) required by their product-create API.
+const DEFAULT_ETSY_PRICE_USD_BY_BLUEPRINT: Record<number, number> = {
+  // Gildan 64000 Softstyle Unisex T-Shirt → $25.99
+  145: 25.99,
+};
+
+/** Returns the default Etsy buyer price for a blueprint.
+ *  Falls back to 0 (unknown blueprint) so the existing validatePricingFloor
+ *  call in publisher.ts still catches unconfigured blueprints rather than
+ *  silently publishing at some arbitrary fallback price. */
+export function defaultEtsyPriceUsd(blueprintId: number): number {
+  return DEFAULT_ETSY_PRICE_USD_BY_BLUEPRINT[blueprintId] ?? 0;
+}
+
 export function printifyVariantPriceCents(blueprintId: number): number {
   return (
     PRINTIFY_VARIANT_PRICE_CENTS_BY_BLUEPRINT[blueprintId] ??

@@ -9,6 +9,9 @@ export interface TrendBriefRow {
   updated_at: string;
   // 'needs_description' is the Builder gate: Scout-approved, awaiting an
   // operator-authored image description before Design will claim.
+  // 'archived' is an operator-only parking state: the brief was at
+  // 'needs_description' and was deferred without deletion. Restorable to
+  // 'needs_description' from the Builder page's Archived section.
   status:
     | "needs_review"
     | "needs_description"
@@ -16,7 +19,8 @@ export interface TrendBriefRow {
     | "processing"
     | "done"
     | "error"
-    | "pending";
+    | "pending"
+    | "archived";
   niche: string;
   style_keywords: string[] | null;
   top_tags: string[] | null;

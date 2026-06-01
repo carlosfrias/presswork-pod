@@ -308,6 +308,56 @@ export async function sendToDesign(formData: FormData): Promise<void> {
   revalidatePath("/");
 }
 
+/**
+ * Archive a brief that is waiting at 'needs_description'.
+ *
+ * Moves the brief out of the active Builder queue without deleting it.
+ * Archived briefs are excluded from the Ledger watchdog's stale-brief counts
+ * and from getBuilderQueue. The operator can restore or delete from the
+ * Builder page's Archived section.
+ *
+ * Status guard: only transitions from 'needs_description' → 'archived'.
+ * The optimistic `.eq('status','needs_description')` prevents archiving a
+ * brief that has concurrently moved to another state.
+ */
+export async function archiveBrief(formData: FormData): Promise<void> {
+  await assertOwner();
+  const id = idSchema.parse(formData.get("id"));
+  const db = serviceClient();
+
+  const { error } = await db
+    .from("trend_briefs")
+    .update({ status: "archived", error_message: null })
+    .eq("id", id)
+    .eq("status", "needs_description"); // optimistic concurrency
+  if (error) throw new Error(`Archive failed: ${error.message}`);
+
+  revalidatePath("/builder");
+  revalidatePath("/");
+}
+
+/**
+ * Restore an archived brief back to the Builder queue.
+ *
+ * Flips status 'archived' → 'needs_description' so it reappears in
+ * getBuilderQueue and the operator can continue fleshing it out.
+ */
+export async function unarchiveBrief(formData: FormData): Promise<void> {
+  await assertOwner();
+  const id = idSchema.parse(formData.get("id"));
+  const db = serviceClient();
+
+  const { error } = await db
+    .from("trend_briefs")
+    .update({ status: "needs_description", error_message: null })
+    .eq("id", id)
+    .eq("status", "archived"); // optimistic concurrency
+  if (error) throw new Error(`Restore failed: ${error.message}`);
+
+  revalidatePath("/builder");
+  revalidatePath("/");
+}
+
 export async function createManualBrief(formData: FormData): Promise<void> {
   await assertOwner();
   const description = descriptionSchema.parse(formData.get("description"));

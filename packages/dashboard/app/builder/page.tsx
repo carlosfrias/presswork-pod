@@ -2,15 +2,20 @@ import { SurfaceCard } from "@/components/ui/SurfaceCard";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { FromScoutCard } from "@/components/builder/FromScoutCard";
 import { ManualEntryForm } from "@/components/builder/ManualEntryForm";
+import { ArchivedBriefRow } from "@/components/builder/ArchivedBriefRow";
 import { RealtimeRefresh } from "@/components/realtime/RealtimeRefresh";
-import { getBuilderQueue } from "@/lib/queries/builder";
+import { getBuilderQueue, getArchivedBriefs } from "@/lib/queries/builder";
 import { getRuntimeFlags } from "@/lib/queries/overview";
 import { deriveDefaultImageModel } from "@/lib/models/image-models";
 
 export const revalidate = 30;
 
 export default async function BuilderPage() {
-  const [queue, flags] = await Promise.all([getBuilderQueue(), getRuntimeFlags()]);
+  const [queue, archived, flags] = await Promise.all([
+    getBuilderQueue(),
+    getArchivedBriefs(),
+    getRuntimeFlags(),
+  ]);
   const defaultImageModel = deriveDefaultImageModel(flags);
 
   return (
@@ -57,6 +62,24 @@ export default async function BuilderPage() {
         subtitle="No upstream brief — you pick the niche and seed the prompt"
       >
         <ManualEntryForm defaultImageModel={defaultImageModel} />
+      </SurfaceCard>
+
+      <SurfaceCard
+        title={`Archived — ${archived.length}`}
+        subtitle="Parked briefs. Restore to return one to the active queue, or delete to remove it permanently."
+      >
+        {archived.length === 0 ? (
+          <EmptyState
+            title="Nothing archived."
+            hint="Click Archive on any From Scout card to park it here."
+          />
+        ) : (
+          <div className="flex flex-col divide-y divide-(--surface-line)">
+            {archived.map((b) => (
+              <ArchivedBriefRow key={b.id} brief={b} />
+            ))}
+          </div>
+        )}
       </SurfaceCard>
     </div>
   );

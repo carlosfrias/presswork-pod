@@ -170,3 +170,60 @@ describe("createManualBrief", () => {
     expect(capture.inserts[0].data).toMatchObject({ niche: "original design" });
   });
 });
+
+describe("archiveBrief", () => {
+  it("flips status to 'archived' with an optimistic needs_description guard", async () => {
+    const { mod, capture, revalidatePath } = await loadModule({ trend_briefs: {} });
+
+    await mod.archiveBrief(makeFormData({ id: VALID_ID }));
+
+    expect(capture.updates).toHaveLength(1);
+    const u = capture.updates[0];
+    expect(u.table).toBe("trend_briefs");
+    expect(u.data).toEqual({ status: "archived", error_message: null });
+    // Optimistic concurrency filter — must include both id and status guard
+    expect(u.filters).toContainEqual(["id", VALID_ID]);
+    expect(u.filters).toContainEqual(["status", "needs_description"]);
+
+    expect(revalidatePath).toHaveBeenCalledWith("/builder");
+    expect(revalidatePath).toHaveBeenCalledWith("/");
+  });
+
+  it("throws when the DB update fails", async () => {
+    const { mod } = await loadModule({
+      trend_briefs: { updateError: { message: "conflict" } },
+    });
+
+    await expect(
+      mod.archiveBrief(makeFormData({ id: VALID_ID })),
+    ).rejects.toThrow(/Archive failed: conflict/);
+  });
+});
+
+describe("unarchiveBrief", () => {
+  it("flips status back to 'needs_description' with an optimistic archived guard", async () => {
+    const { mod, capture, revalidatePath } = await loadModule({ trend_briefs: {} });
+
+    await mod.unarchiveBrief(makeFormData({ id: VALID_ID }));
+
+    expect(capture.updates).toHaveLength(1);
+    const u = capture.updates[0];
+    expect(u.table).toBe("trend_briefs");
+    expect(u.data).toEqual({ status: "needs_description", error_message: null });
+    expect(u.filters).toContainEqual(["id", VALID_ID]);
+    expect(u.filters).toContainEqual(["status", "archived"]);
+
+    expect(revalidatePath).toHaveBeenCalledWith("/builder");
+    expect(revalidatePath).toHaveBeenCalledWith("/");
+  });
+
+  it("throws when the DB update fails", async () => {
+    const { mod } = await loadModule({
+      trend_briefs: { updateError: { message: "not found" } },
+    });
+
+    await expect(
+      mod.unarchiveBrief(makeFormData({ id: VALID_ID })),
+    ).rejects.toThrow(/Restore failed: not found/);
+  });
+});

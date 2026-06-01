@@ -23,3 +23,24 @@ export async function getBuilderQueue(): Promise<TrendBriefRow[]> {
   }
   return (data ?? []) as TrendBriefRow[];
 }
+
+/**
+ * Returns briefs the operator has parked at 'archived', newest first.
+ *
+ * Archived briefs are excluded from the active Builder queue and from the
+ * Ledger watchdog's stale-brief counts. They remain here until the operator
+ * restores or deletes them.
+ */
+export async function getArchivedBriefs(): Promise<TrendBriefRow[]> {
+  const db = serviceClient();
+  const { data, error } = await db
+    .from("trend_briefs")
+    .select("*")
+    .eq("status", "archived")
+    .order("created_at", { ascending: false }); // newest first — most recently parked
+  if (error) {
+    console.error("getArchivedBriefs failed", error);
+    return [];
+  }
+  return (data ?? []) as TrendBriefRow[];
+}

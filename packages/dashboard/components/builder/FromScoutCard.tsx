@@ -7,6 +7,7 @@ import { ImageModelPicker } from "@/components/models/ImageModelPicker";
 import {
   buildPromptForBrief,
   sendToDesign,
+  archiveBrief,
   type BuildResult,
 } from "@/lib/actions/builder";
 import type { StyleId } from "@/lib/styles/catalog";
@@ -61,6 +62,7 @@ export function FromScoutCard({ brief, defaultImageModel }: Props) {
   // (sendToDesign writes image_description on the spawned child brief). On
   // page reload, every card returns to collapsed.
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isArchiving, startArchive] = useTransition();
 
   const created = new Date(brief.created_at).toISOString().slice(0, 10);
 
@@ -133,58 +135,82 @@ export function FromScoutCard({ brief, defaultImageModel }: Props) {
 
   return (
     <div className="flex flex-col gap-3 rounded-(--radius-md) border border-(--surface-line) bg-(--surface-1) p-4">
-      <button
-        type="button"
-        onClick={() => setIsExpanded((v) => !v)}
-        className="flex w-full flex-wrap items-baseline justify-between gap-3 text-left"
-        aria-expanded={isExpanded}
-      >
-        <div className="flex flex-col gap-0.5">
-          <div className="flex items-center gap-2">
-            <span aria-hidden className="text-(--text-muted) tabular">
-              {isExpanded ? "▾" : "▸"}
-            </span>
-            <span className="text-sm font-medium text-(--text-primary)">{brief.niche}</span>
-            {sentCount > 0 && (
-              <span
-                className="rounded-(--radius-sm) bg-(--accent-good)/15 px-2 py-0.5 text-[11px] font-medium text-(--accent-good)"
-                title="Designs sent from this brief in the current session"
-              >
-                Sent {sentCount} ✓
+      {/* Row: expand-toggle (left) + archive button (right). Siblings — not nested —
+          because a <button> cannot contain another interactive element. */}
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => setIsExpanded((v) => !v)}
+          className="flex min-w-0 flex-1 flex-wrap items-baseline gap-3 text-left"
+          aria-expanded={isExpanded}
+        >
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-2">
+              <span aria-hidden className="text-(--text-muted) tabular">
+                {isExpanded ? "▾" : "▸"}
               </span>
-            )}
-            {!isExpanded && brief.color_palette && brief.color_palette.length > 0 && (
-              <span className="ml-1 flex gap-0.5">
-                {brief.color_palette.slice(0, 5).map((c) => (
-                  <span
-                    key={c}
-                    title={c}
-                    className="inline-block h-3 w-3 rounded-(--radius-sm) border border-(--surface-line)"
-                    style={{ background: c }}
-                  />
-                ))}
-              </span>
-            )}
-          </div>
-          <span className="font-mono text-[11px] text-(--text-muted)">
-            {brief.id.slice(0, 8)} · {created}
-          </span>
-        </div>
-        {brief.style_keywords && brief.style_keywords.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {brief.style_keywords
-              .slice(0, isExpanded ? 6 : 3)
-              .map((kw) => (
+              <span className="text-sm font-medium text-(--text-primary)">{brief.niche}</span>
+              {sentCount > 0 && (
                 <span
-                  key={kw}
-                  className="rounded-(--radius-sm) bg-(--surface-2) px-2 py-0.5 text-[11px] text-(--text-secondary)"
+                  className="rounded-(--radius-sm) bg-(--accent-good)/15 px-2 py-0.5 text-[11px] font-medium text-(--accent-good)"
+                  title="Designs sent from this brief in the current session"
                 >
-                  {kw}
+                  Sent {sentCount} ✓
                 </span>
-              ))}
+              )}
+              {!isExpanded && brief.color_palette && brief.color_palette.length > 0 && (
+                <span className="ml-1 flex gap-0.5">
+                  {brief.color_palette.slice(0, 5).map((c) => (
+                    <span
+                      key={c}
+                      title={c}
+                      className="inline-block h-3 w-3 rounded-(--radius-sm) border border-(--surface-line)"
+                      style={{ background: c }}
+                    />
+                  ))}
+                </span>
+              )}
+            </div>
+            <span className="font-mono text-[11px] text-(--text-muted)">
+              {brief.id.slice(0, 8)} · {created}
+            </span>
           </div>
-        )}
-      </button>
+          {brief.style_keywords && brief.style_keywords.length > 0 && (
+            <div className="flex flex-wrap gap-1">
+              {brief.style_keywords
+                .slice(0, isExpanded ? 6 : 3)
+                .map((kw) => (
+                  <span
+                    key={kw}
+                    className="rounded-(--radius-sm) bg-(--surface-2) px-2 py-0.5 text-[11px] text-(--text-secondary)"
+                  >
+                    {kw}
+                  </span>
+                ))}
+            </div>
+          )}
+        </button>
+
+        {/* Archive — moves this brief out of the active queue without deleting it */}
+        <form
+          action={(fd) => {
+            startArchive(async () => {
+              await archiveBrief(fd);
+            });
+          }}
+        >
+          <input type="hidden" name="id" value={brief.id} />
+          <Button
+            type="submit"
+            variant="ghost"
+            size="sm"
+            disabled={isArchiving || isBuilding || isSending}
+            title="Park this brief without deleting — restore it from the Archived section below"
+          >
+            {isArchiving ? "Archiving…" : "Archive"}
+          </Button>
+        </form>
+      </div>
 
       {!isExpanded ? null : (
         <>

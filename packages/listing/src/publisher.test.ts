@@ -1336,6 +1336,103 @@ describe("publishOne", () => {
     );
   });
 
+  // ── Default price fallback tests ─────────────────────────────────────────────
+  //
+  // When a bp145 design has no price on the listings row (seeded to 0 by the
+  // claim RPC when brief.price_target_usd is NULL) and the brief also has no
+  // price_target_usd, publishOne must fall back to the per-blueprint default
+  // ($25.99 for bp145) instead of passing $0 to validatePricingFloor and
+  // failing with a PricingFloorError.
+
+  it("publishOne uses per-blueprint default price when listing.price_usd=0 and brief has no price_target_usd", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    mockSharedAndEtsy();
+
+    // Simulate the $0-price scenario: claim RPC seeded price_usd=0 because
+    // brief.price_target_usd was NULL. Neither source carries a usable price.
+    const updates: CaptureEntry[] = [];
+    const db = makeDb(updates, {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending",
+        title: null,
+        description: null,
+        tags: null,
+        price_usd: 0,           // seeded by claim RPC via COALESCE(tb.price_target_usd, 0)
+        printify_product_id: null,
+        is_active: false,
+        retry_count: 0,
+      },
+    });
+
+    const briefWithoutPrice: TrendBrief = {
+      ...brief,
+      price_target_usd: null,
+    };
+
+    const { publishOne } = await import("./publisher.js");
+    // Must NOT throw PricingFloorError — the blueprint-default ($25.99) clears the floor.
+    await expect(publishOne(db, design, briefWithoutPrice, LISTING_ID)).resolves.toBeDefined();
+
+    // The copy-write update should stamp the resolved price (25.99) on the listings row.
+    const copyWrite = updates.find(
+      (u) => u.table === "listings" && "price_usd" in u.data
+    );
+    expect(copyWrite?.data.price_usd).toBe(25.99);
+  });
+
+  it("publishOne still rejects $0 price for an unrecognised blueprint (floor guard is not bypassed)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    mockPrintify();
+    mockSharedAndEtsy();
+
+    const db = makeDb([], {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending",
+        title: null,
+        description: null,
+        tags: null,
+        price_usd: 0,
+        printify_product_id: null,
+        is_active: false,
+        retry_count: 0,
+      },
+    });
+
+    const briefWithoutPrice: TrendBrief = {
+      ...brief,
+      price_target_usd: null,
+    };
+
+    // Blueprint 9999 is not in DEFAULT_ETSY_PRICE_USD_BY_BLUEPRINT → falls back to 0
+    // → validatePricingFloor must still throw.
+    const { PricingFloorError: MockPricingFloorError } = await import("./pricing.js");
+    const unknownBlueprintDesign: DesignPackage = {
+      ...design,
+      printify_blueprint_id: 9999,
+      printify_print_provider_id: 39,
+    };
+
+    const { publishOne } = await import("./publisher.js");
+    await expect(
+      publishOne(db, unknownBlueprintDesign, briefWithoutPrice, LISTING_ID)
+    ).rejects.toThrow(MockPricingFloorError);
+  });
+
   it("resumePublish filters printify_variants to selected_variant_ids before building inventory", async () => {
     mockPrintify();
     const updateListingInventory = vi.fn().mockResolvedValue(undefined);

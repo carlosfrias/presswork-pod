@@ -46,3 +46,50 @@ describe("getBuilderQueue", () => {
     expect(result).toEqual([]);
   });
 });
+
+describe("getArchivedBriefs", () => {
+  it("returns trend_briefs rows in status='archived', newest first", async () => {
+    const briefs = [
+      { id: "a1", niche: "vintage dogs", status: "archived", created_at: "2026-05-10" },
+      { id: "a2", niche: "retro cats", status: "archived", created_at: "2026-05-08" },
+    ];
+    const { client: c, capture: cap } = makeSupabaseMock({
+      trend_briefs: { rows: briefs },
+    });
+    vi.doMock("@/lib/supabase/server", () => ({ serviceClient: () => c }));
+    vi.resetModules();
+    const { getArchivedBriefs } = await import("./builder");
+
+    const result = await getArchivedBriefs();
+
+    expect(result).toEqual(briefs);
+    expect(cap.selects[0].table).toBe("trend_briefs");
+  });
+
+  it("returns [] on DB error (graceful degradation)", async () => {
+    const { client: c } = makeSupabaseMock({
+      trend_briefs: { rows: [], selectError: { message: "timeout" } },
+    });
+    vi.doMock("@/lib/supabase/server", () => ({ serviceClient: () => c }));
+    vi.resetModules();
+    const { getArchivedBriefs } = await import("./builder");
+
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const result = await getArchivedBriefs();
+    spy.mockRestore();
+
+    expect(result).toEqual([]);
+  });
+
+  it("returns an empty array when no archived briefs exist", async () => {
+    const { client: c } = makeSupabaseMock({
+      trend_briefs: { rows: [] },
+    });
+    vi.doMock("@/lib/supabase/server", () => ({ serviceClient: () => c }));
+    vi.resetModules();
+    const { getArchivedBriefs } = await import("./builder");
+
+    const result = await getArchivedBriefs();
+    expect(result).toEqual([]);
+  });
+});

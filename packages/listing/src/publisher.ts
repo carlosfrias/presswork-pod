@@ -34,6 +34,7 @@ import {
   blueprintMaterials,
   blueprintProcessingDays,
   blueprintItemSpecs,
+  defaultEtsyPriceUsd,
 } from "./constants.js";
 import { buildInventoryFromDesign } from "./inventory.js";
 
@@ -113,11 +114,16 @@ export async function publishOne(
     // lets the operator edit listings.price_usd via the dashboard CopyEditor
     // and have that override stick on retry, without having to mutate the
     // upstream brief. Falls back to brief.price_target_usd when the listings
-    // row's price_usd hasn't been set (legacy rows from before migration 046).
+    // row's price_usd hasn't been set (legacy rows from before migration 046),
+    // and further falls back to the per-blueprint default when neither source
+    // carries a price (e.g. brief.price_target_usd = NULL and the claim RPC
+    // seeded 0 via COALESCE(tb.price_target_usd, 0)).
     const priceUsd =
       existing.price_usd && existing.price_usd > 0
         ? existing.price_usd
-        : brief.price_target_usd ?? 0;
+        : (brief.price_target_usd ?? 0) > 0
+          ? brief.price_target_usd!
+          : defaultEtsyPriceUsd(design.printify_blueprint_id ?? 145);
     validatePricingFloor(priceUsd, GILDAN_64000_PRINT_COST_USD);
     const { ETSY_PRODUCTION_PARTNER_ID } = getSettings();
     validateProductionPartnerId(ETSY_PRODUCTION_PARTNER_ID);
