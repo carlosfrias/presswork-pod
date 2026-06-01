@@ -138,6 +138,161 @@ describe("getRecentErrors", () => {
   });
 });
 
+describe("getAllErrors", () => {
+  it("returns rows from all four tables with correct shape", async () => {
+    const { mod } = await loadModule({
+      trend_briefs: {
+        rows: [
+          {
+            id: "b1",
+            updated_at: "2026-05-10T00:00:00Z",
+            error_message: "scout err",
+            retry_count: 1,
+            niche: "dog portraits",
+          },
+        ],
+      },
+      design_packages: {
+        rows: [
+          {
+            id: "d1",
+            updated_at: "2026-05-12T00:00:00Z",
+            error_message: "design err",
+            retry_count: 2,
+          },
+        ],
+      },
+      listings: {
+        rows: [
+          {
+            id: "l1",
+            updated_at: "2026-05-11T00:00:00Z",
+            error_message: "listing err",
+            retry_count: 0,
+            title: "Cool Dog Tee",
+          },
+        ],
+      },
+      orders: {
+        rows: [
+          {
+            id: "o1",
+            updated_at: "2026-05-09T00:00:00Z",
+            error_message: "ledger err",
+            retry_count: 0,
+          },
+        ],
+      },
+    });
+
+    const errs = await mod.getAllErrors();
+
+    // Should have one row per source (4 total), sorted newest-first.
+    expect(errs).toHaveLength(4);
+    expect(errs.map((e) => e.source)).toEqual([
+      "design_packages",
+      "listings",
+      "trend_briefs",
+      "orders",
+    ]);
+  });
+
+  it("marks orders as requeueable:false and the rest as requeueable:true", async () => {
+    const { mod } = await loadModule({
+      trend_briefs: {
+        rows: [
+          { id: "b1", updated_at: "2026-05-10T00:00:00Z", error_message: null, retry_count: 0, niche: "cats" },
+        ],
+      },
+      design_packages: {
+        rows: [
+          { id: "d1", updated_at: "2026-05-11T00:00:00Z", error_message: null, retry_count: 0 },
+        ],
+      },
+      listings: {
+        rows: [
+          { id: "l1", updated_at: "2026-05-09T00:00:00Z", error_message: null, retry_count: 0, title: "Tee" },
+        ],
+      },
+      orders: {
+        rows: [
+          { id: "o1", updated_at: "2026-05-08T00:00:00Z", error_message: null, retry_count: 0 },
+        ],
+      },
+    });
+
+    const errs = await mod.getAllErrors();
+
+    expect(errs.find((e) => e.source === "orders")?.requeueable).toBe(false);
+    expect(errs.find((e) => e.source === "trend_briefs")?.requeueable).toBe(true);
+    expect(errs.find((e) => e.source === "design_packages")?.requeueable).toBe(true);
+    expect(errs.find((e) => e.source === "listings")?.requeueable).toBe(true);
+  });
+
+  it("extracts context from niche (trend_briefs) and title (listings)", async () => {
+    const { mod } = await loadModule({
+      trend_briefs: {
+        rows: [
+          { id: "b1", updated_at: "2026-05-10T00:00:00Z", error_message: null, retry_count: 0, niche: "dog portraits" },
+        ],
+      },
+      design_packages: { rows: [] },
+      listings: {
+        rows: [
+          { id: "l1", updated_at: "2026-05-09T00:00:00Z", error_message: null, retry_count: 0, title: "Cool Dog Tee" },
+        ],
+      },
+      orders: { rows: [] },
+    });
+
+    const errs = await mod.getAllErrors();
+
+    expect(errs.find((e) => e.source === "trend_briefs")?.context).toBe("dog portraits");
+    expect(errs.find((e) => e.source === "listings")?.context).toBe("Cool Dog Tee");
+  });
+
+  it("leaves context null for design_packages and orders", async () => {
+    const { mod } = await loadModule({
+      trend_briefs: { rows: [] },
+      design_packages: {
+        rows: [
+          { id: "d1", updated_at: "2026-05-11T00:00:00Z", error_message: null, retry_count: 0 },
+        ],
+      },
+      listings: { rows: [] },
+      orders: {
+        rows: [
+          { id: "o1", updated_at: "2026-05-10T00:00:00Z", error_message: null, retry_count: 0 },
+        ],
+      },
+    });
+
+    const errs = await mod.getAllErrors();
+
+    expect(errs.find((e) => e.source === "design_packages")?.context).toBeNull();
+    expect(errs.find((e) => e.source === "orders")?.context).toBeNull();
+  });
+
+  it("tolerates a per-table query error and still returns rows from healthy tables", async () => {
+    const { mod } = await loadModule({
+      trend_briefs: { selectError: { message: "DB offline" } },
+      design_packages: {
+        rows: [
+          { id: "d1", updated_at: "2026-05-11T00:00:00Z", error_message: "oops", retry_count: 1 },
+        ],
+      },
+      listings: { rows: [] },
+      orders: { rows: [] },
+    });
+
+    const errs = await mod.getAllErrors();
+
+    // trend_briefs errored out — should still get the design_packages row.
+    expect(errs.some((e) => e.source === "design_packages")).toBe(true);
+    expect(errs.every((e) => e.source !== "trend_briefs")).toBe(true);
+  });
+});
+
 describe("getRuntimeFlags", () => {
   it("returns rows from runtime_flags ordered by key", async () => {
     const flags = [

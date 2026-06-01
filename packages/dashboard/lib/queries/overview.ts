@@ -187,6 +187,97 @@ export async function getRecentErrors(limit = 10): Promise<RecentError[]> {
   return rows.slice(0, limit);
 }
 
+/** A single error row from any pipeline table, enriched for the triage view. */
+export interface ErrorTriageRow extends RecentError {
+  /** Human-readable context string, e.g. the niche for a brief or the title for a listing. */
+  context: string | null;
+  /** How many times this row has already been retried. */
+  retry_count: number;
+  /** Whether a one-click requeue is available (false for orders — Ledger re-polls automatically). */
+  requeueable: boolean;
+}
+
+/**
+ * Fetch every error row (up to 200 per table) across all four pipeline tables,
+ * sorted newest-first. Per-table errors are logged and skipped rather than
+ * aborting the whole query.
+ */
+export async function getAllErrors(): Promise<ErrorTriageRow[]> {
+  const db = serviceClient();
+
+  type SourceConfig = {
+    table: RecentError["source"];
+    href: (id: string) => string;
+    /** Extra columns to select beyond the shared set. */
+    extraCols: string;
+    /** Extract a human-readable label from the raw row. */
+    contextLabel: (row: Record<string, unknown>) => string | null;
+    requeueable: boolean;
+  };
+
+  const sources: SourceConfig[] = [
+    {
+      table: "trend_briefs",
+      href: () => "/scout",
+      extraCols: ", niche",
+      contextLabel: (r) => (typeof r.niche === "string" ? r.niche : null),
+      requeueable: true,
+    },
+    {
+      table: "design_packages",
+      href: () => "/design",
+      extraCols: "",
+      contextLabel: () => null,
+      requeueable: true,
+    },
+    {
+      table: "listings",
+      href: (id) => `/listings/${id}`,
+      extraCols: ", title",
+      contextLabel: (r) => (typeof r.title === "string" ? r.title : null),
+      requeueable: true,
+    },
+    {
+      table: "orders",
+      href: () => "/ledger",
+      extraCols: "",
+      contextLabel: () => null,
+      requeueable: false,
+    },
+  ];
+
+  const rowSets = await Promise.all(
+    sources.map(async ({ table, href, extraCols, contextLabel, requeueable }) => {
+      const { data, error } = await db
+        .from(table)
+        .select(`id, updated_at, error_message, retry_count${extraCols}`)
+        .eq("status", "error")
+        .order("updated_at", { ascending: false })
+        .limit(200);
+
+      if (error || !data) {
+        console.error(`getAllErrors: query failed for ${table}`, error);
+        return [] as ErrorTriageRow[];
+      }
+
+      return (data as unknown as Record<string, unknown>[]).map((r): ErrorTriageRow => ({
+        source: table,
+        id: r.id as string,
+        updated_at: r.updated_at as string,
+        error_message: typeof r.error_message === "string" ? r.error_message : null,
+        href: href(r.id as string),
+        context: contextLabel(r),
+        retry_count: typeof r.retry_count === "number" ? r.retry_count : 0,
+        requeueable,
+      }));
+    }),
+  );
+
+  const all = rowSets.flat();
+  all.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  return all;
+}
+
 export async function getRuntimeFlags(): Promise<RuntimeFlagRow[]> {
   const db = serviceClient();
   const { data, error } = await db

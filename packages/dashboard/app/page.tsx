@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { SurfaceCard } from "@/components/ui/SurfaceCard";
 import { KpiTile } from "@/components/ui/KpiTile";
 import { SpendChart } from "@/components/overview/SpendChart";
@@ -88,7 +89,18 @@ export default async function OverviewPage() {
         >
           <SpendChart data={daily} />
         </SurfaceCard>
-        <SurfaceCard title="Recent errors" subtitle="Last 10 across all agents">
+        <SurfaceCard
+          title="Recent errors"
+          subtitle="Last 10 across all agents"
+          action={
+            <Link
+              href="/errors"
+              className="text-xs text-(--text-muted) hover:text-(--text-primary) transition-colors"
+            >
+              View all →
+            </Link>
+          }
+        >
           <RecentErrors errors={errors} />
         </SurfaceCard>
       </section>

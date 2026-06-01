@@ -11,6 +11,7 @@ const ITEMS = [
   { href: "/design", label: "Design" },
   { href: "/listings", label: "Listings" },
   { href: "/ledger", label: "Ledger" },
+  { href: "/errors", label: "Errors" },
 ] as const;
 
 export function Nav({ email }: { email: string }) {

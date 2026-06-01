@@ -1,0 +1,23 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`sanitizeListingCopy snapshot — messy input > produces a deterministic, compliant output from MESSY_LISTING_COPY 1`] = `
+{
+  "description": "Soft and comfortable, a great everyday wear option. Our tees are made to order. This design was created using AI image generation tools, hand-selected and quality-reviewed by our team before printing.",
+  "tags": [
+    "basset hound",
+    "dog lover gift",
+    "nature print shirt",
+    "graphic tee",
+    "unisex tee",
+    "wildflower design",
+    "cottagecore style",
+    "dog mom gift",
+    "casual shirt",
+    "nature lover tee",
+    "illustrated shirt",
+    "gift for her",
+    "everyday tee",
+  ],
+  "title": "Basset Hound Graphic Tee, Nature Print",
+}
+`;

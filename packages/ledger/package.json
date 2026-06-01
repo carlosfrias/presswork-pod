@@ -6,6 +6,7 @@
     "build": "tsc -b",
     "poll-receipts": "node --import tsx/esm src/poll-receipts-entry.ts",
     "daily-digest": "node --import tsx/esm src/daily-digest-entry.ts",
+    "watchdog": "node --import tsx/esm src/watchdog-entry.ts",
     "lint": "eslint src",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run"
