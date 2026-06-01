@@ -1,14 +1,16 @@
 "use client";
 
+import { ColorSwatchSelect } from "./ColorSwatchSelect";
+
 /**
- * Multi-select chip rows for picking shirt colors and sizes to include in the
- * Printify product for this brief. Modeled on BgRemovalPicker — same Chip
- * sub-component, same token classes, same operator mental model: pick options,
- * persist on regen.
+ * Picks shirt colors and sizes to include in the Printify product for this
+ * brief, then persists them on regen.
  *
- * Chips are MULTI-select: clicking a selected chip removes it from the set;
- * clicking an unselected chip adds it. Each chip carries aria-pressed so
- * keyboard / screen-reader users know the current state.
+ * Colors use a compact swatch popover (ColorSwatchSelect) — collapsed to a
+ * single trigger row so the 60+ Gildan colors don't dominate the card; opens
+ * into a searchable swatch grid. Sizes stay as MULTI-select chips: clicking a
+ * selected chip removes it, clicking an unselected one adds it. Each chip
+ * carries aria-pressed so keyboard / screen-reader users know the state.
  *
  * No "at least one" enforcement here — empty means "let the agent fall back
  * to its defaults". The parent can add a hint if desired.
@@ -49,14 +51,6 @@ export function VariantPicker({
   onSizesChange,
   disabled = false,
 }: Props) {
-  function toggleColor(color: string) {
-    if (selectedColors.includes(color)) {
-      onColorsChange(selectedColors.filter((c) => c !== color));
-    } else {
-      onColorsChange([...selectedColors, color]);
-    }
-  }
-
   function toggleSize(size: string) {
     if (selectedSizes.includes(size)) {
       onSizesChange(selectedSizes.filter((s) => s !== size));
@@ -69,24 +63,12 @@ export function VariantPicker({
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-col gap-1.5">
-        <span className="text-xs uppercase tracking-wider text-(--text-muted)">
-          Shirt colors
-        </span>
-        <div className="flex flex-wrap gap-1.5">
-          {colorOptions.map((color) => (
-            <Chip
-              key={color}
-              active={selectedColors.includes(color)}
-              disabled={disabled}
-              onClick={() => toggleColor(color)}
-              title={color}
-            >
-              {color}
-            </Chip>
-          ))}
-        </div>
-      </div>
+      <ColorSwatchSelect
+        options={colorOptions}
+        selected={selectedColors}
+        onChange={onColorsChange}
+        disabled={disabled}
+      />
       <div className="flex flex-col gap-1.5">
         <span className="text-xs uppercase tracking-wider text-(--text-muted)">
           Shirt sizes
