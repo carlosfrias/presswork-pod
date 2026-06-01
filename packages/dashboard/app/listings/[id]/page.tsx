@@ -267,9 +267,12 @@ export default async function ListingDetailPage({ params }: Params) {
               </form>
               <form action={recreatePrintifyProduct}>
                 <input type="hidden" name="id" value={listing.id} />
-                <Button type="submit" variant="secondary" className="w-full">
-                  Recreate Printify product
-                </Button>
+                <SubmitButton
+                  variant="secondary"
+                  className="w-full"
+                  idleLabel="Recreate Printify product"
+                  pendingLabel="Recreating…"
+                />
               </form>
               {listing.status === "error" && (
                 <form action={retryListing}>

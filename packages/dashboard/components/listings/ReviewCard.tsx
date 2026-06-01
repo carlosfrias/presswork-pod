@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/Button";
+import { SubmitButton } from "@/components/ui/SubmitButton";
 import { MockupCarousel } from "./MockupCarousel";
 import { ComplianceChecks } from "./ComplianceChecks";
 import { CopyEditor } from "./CopyEditor";
@@ -119,14 +120,13 @@ export function ReviewCard({ listing }: { listing: ListingWithDesign }) {
             {!isError && (
               <form action={recreatePrintifyProduct}>
                 <input type="hidden" name="id" value={listing.id} />
-                <Button
-                  type="submit"
+                <SubmitButton
                   variant="secondary"
                   size="sm"
                   title="Clears printify_product_id and re-runs the Printify product creation + mockup fetch on the next Listing agent run."
-                >
-                  Recreate Printify product
-                </Button>
+                  idleLabel="Recreate Printify product"
+                  pendingLabel="Recreating…"
+                />
               </form>
             )}
             <details className="ml-auto">
