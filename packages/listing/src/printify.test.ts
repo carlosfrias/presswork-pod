@@ -118,11 +118,11 @@ describe("createHiddenProduct (two-step upload then create)", () => {
       })
     );
     const { createHiddenProduct } = await import("./printify.js");
-    await createHiddenProduct(INPUT); // blueprintId 145 → 2499¢
+    await createHiddenProduct(INPUT); // blueprintId 145 → 2599¢ (above the $25.23 floor)
 
     const body = capturedProduct as { variants: Array<{ id: number; price: number }> };
     for (const v of body.variants) {
-      expect(v.price).toBe(2499);
+      expect(v.price).toBe(2599);
     }
   });
 

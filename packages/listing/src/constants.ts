@@ -18,8 +18,11 @@ export const GILDAN_64000_PRINT_COST_USD = 10.09;
 // blueprints don't get rejected by Printify validation. Add a row when supporting
 // a new blueprint. Verify in Printify Dashboard or via a smoke product create.
 const PRINTIFY_VARIANT_PRICE_CENTS_BY_BLUEPRINT: Record<number, number> = {
-  // Gildan 64000 Softstyle Unisex T-Shirt (matches GILDAN_64000_PRINT_COST_USD * ~3)
-  145: 2499,
+  // Gildan 64000 Softstyle Unisex T-Shirt. Must stay at or above the pricing
+  // floor (GILDAN_64000_PRINT_COST_USD $10.09 × 2.5 = $25.23). The old 2499
+  // ($24.99) was 24¢ below that floor, so every default-priced 145 listing
+  // tripped validatePricingFloor. 2599 ($25.99) clears it (~2.58×).
+  145: 2599,
 };
 
 // Fallback used only if a blueprint isn't in the table above. Kept low so a typo

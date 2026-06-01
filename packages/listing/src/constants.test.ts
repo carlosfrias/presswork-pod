@@ -23,7 +23,14 @@ describe("assertBlueprintSupported (audit #53)", () => {
 
 describe("printifyVariantPriceCents", () => {
   it("returns the table value for registered blueprints", () => {
-    expect(printifyVariantPriceCents(145)).toBe(2499);
+    expect(printifyVariantPriceCents(145)).toBe(2599);
+  });
+
+  it("keeps the registered default at or above the pricing floor", () => {
+    // Guards against regressing 145 below GILDAN_64000_PRINT_COST_USD × 2.5.
+    expect(printifyVariantPriceCents(145)).toBeGreaterThanOrEqual(
+      Math.ceil(10.09 * 2.5 * 100)
+    );
   });
 
   it("falls back to the placeholder cents for unknown blueprints", () => {
