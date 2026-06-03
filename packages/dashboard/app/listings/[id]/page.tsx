@@ -22,6 +22,7 @@ import {
   retryListing,
 } from "@/lib/actions/listings";
 import { getListing, type ListingWithDesign } from "@/lib/queries/listings";
+import { getCatalogVariants } from "@/lib/queries/variants";
 import { getEtsyPayloadPreview } from "@/lib/queries/etsy-preview";
 import { getIsListingAgentRunning } from "@/lib/actions/triggers";
 import { formatRelative, formatUsd } from "@/lib/format";
@@ -41,6 +42,17 @@ export default async function ListingDetailPage({ params }: Params) {
     getIsListingAgentRunning(),
   ]);
   if (!listing) notFound();
+
+  // The per-listing variant editor offers the full catalog for the design's
+  // blueprint/provider. Only fetch it when the editor is actually shown.
+  const showVariantEditor =
+    listing.status === "needs_review" || listing.status === "pending_publish";
+  const dpBlueprintId = listing.design_packages?.printify_blueprint_id ?? null;
+  const dpProviderId = listing.design_packages?.printify_print_provider_id ?? null;
+  const catalogVariants =
+    showVariantEditor && dpBlueprintId !== null && dpProviderId !== null
+      ? await getCatalogVariants(dpBlueprintId, dpProviderId)
+      : [];
 
   const etsyHref = listing.etsy_listing_id
     ? `https://www.etsy.com/listing/${listing.etsy_listing_id}`
@@ -196,19 +208,16 @@ export default async function ListingDetailPage({ params }: Params) {
             </SurfaceCard>
           )}
 
-          {(listing.status === "needs_review" ||
-            listing.status === "pending_publish") && (
+          {showVariantEditor && (
             <SurfaceCard
-              title="Variant override"
-              subtitle="Narrow which colors and sizes are offered on this listing. Leave all checked to use the full design set."
+              title="Colors & sizes"
+              subtitle="Choose which colors and sizes this listing offers — including colors beyond the design's defaults. Changes apply after you Recreate the Printify product."
             >
               <VariantOverrideEditor
                 listingId={listing.id}
-                availableVariantIds={
+                catalogVariants={catalogVariants}
+                designVariantIds={
                   listing.design_packages?.printify_variant_ids ?? []
-                }
-                printifyVariants={
-                  listing.design_packages?.printify_variants ?? null
                 }
                 selectedVariantIds={listing.selected_variant_ids ?? null}
               />
@@ -217,7 +226,11 @@ export default async function ListingDetailPage({ params }: Params) {
 
           <SurfaceCard
             title="Etsy payload preview"
-            subtitle="What would be sent to Etsy on approve"
+            subtitle={
+              showVariantEditor
+                ? "What would be sent to Etsy on approve. Reflects the current Printify product — added colors appear after Recreate."
+                : "What would be sent to Etsy on approve"
+            }
           >
             <EtsyPayloadPreview preview={etsyPreview} />
           </SurfaceCard>

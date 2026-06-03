@@ -585,3 +585,76 @@ describe("publishListingNow", () => {
     );
   });
 });
+
+describe("updateListingVariants", () => {
+  /** Listing row joined with its design's blueprint/provider. */
+  const LISTING_WITH_DESIGN = {
+    id: VALID_ID,
+    design_packages: {
+      printify_blueprint_id: 145,
+      printify_print_provider_id: 39,
+    },
+  };
+
+  /** Catalog universe: a design-default White id plus a non-default Black id. */
+  const CATALOG = {
+    rows: [
+      { variant_id: 38163, color: "White", size: "S" },
+      { variant_id: 40000, color: "Black", size: "M" },
+    ],
+  };
+
+  function makeVariantFormData(id: string, variantIds: number[]): FormData {
+    const fd = new FormData();
+    fd.set("id", id);
+    for (const v of variantIds) fd.append("selectedVariantIds", String(v));
+    return fd;
+  }
+
+  it("accepts a catalog id outside the design's shipped set (add-color)", async () => {
+    const { mod, capture } = await loadModule({
+      listings: { maybeSingle: LISTING_WITH_DESIGN },
+      printify_variant_catalog: CATALOG,
+    });
+
+    // 40000 (Black/M) is NOT a design default but IS in the catalog.
+    await mod.updateListingVariants(makeVariantFormData(VALID_ID, [38163, 40000]));
+
+    const update = capture.updates.find((u) => u.table === "listings");
+    expect(update?.data).toEqual({ selected_variant_ids: [38163, 40000] });
+  });
+
+  it("rejects an id that is not in the catalog at all", async () => {
+    const { mod } = await loadModule({
+      listings: { maybeSingle: LISTING_WITH_DESIGN },
+      printify_variant_catalog: CATALOG,
+    });
+
+    await expect(
+      mod.updateListingVariants(makeVariantFormData(VALID_ID, [99999])),
+    ).rejects.toThrow(/not present in/i);
+  });
+
+  it("stores NULL when the selection is empty (inherit design set)", async () => {
+    const { mod, capture } = await loadModule({
+      listings: { maybeSingle: LISTING_WITH_DESIGN },
+      printify_variant_catalog: CATALOG,
+    });
+
+    await mod.updateListingVariants(makeVariantFormData(VALID_ID, []));
+
+    const update = capture.updates.find((u) => u.table === "listings");
+    expect(update?.data).toEqual({ selected_variant_ids: null });
+  });
+
+  it("throws when the listing is not found", async () => {
+    const { mod } = await loadModule({
+      listings: { maybeSingle: null },
+      printify_variant_catalog: CATALOG,
+    });
+
+    await expect(
+      mod.updateListingVariants(makeVariantFormData(VALID_ID, [38163])),
+    ).rejects.toThrow(/Listing not found/);
+  });
+});

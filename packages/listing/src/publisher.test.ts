@@ -76,6 +76,10 @@ type DbMockOpts = {
   mockupUrls?: string[];
   /** Override for the selected_variant_ids single-column query in publishOne. */
   selectedVariantIds?: number[] | null;
+  /** Catalog variant ids returned for the printify_variant_catalog read in publishOne. */
+  catalogVariantIds?: number[];
+  /** Surface an error on the printify_variant_catalog read. */
+  catalogReadError?: string;
 };
 
 type CaptureEntry = { table: string; data: Record<string, unknown> };
@@ -93,6 +97,11 @@ function makeDb(updates: CaptureEntry[], opts: DbMockOpts = {}) {
     limit: vi.fn(),
     single: vi.fn(),
     maybeSingle: vi.fn(),
+    // Thenable: only publishOne's printify_variant_catalog read awaits the
+    // chain directly (every other select ends in .single()/.maybeSingle()).
+    // Returns catalog rows for that table; a harmless {data:null} default for
+    // terminal update/insert awaits.
+    then: vi.fn(),
   };
 
   builder.insert.mockImplementation(() => builder);
@@ -107,6 +116,21 @@ function makeDb(updates: CaptureEntry[], opts: DbMockOpts = {}) {
   builder.eq.mockImplementation(() => builder);
   builder.order.mockImplementation(() => builder);
   builder.limit.mockImplementation(() => builder);
+
+  builder.then.mockImplementation((resolve: (v: unknown) => unknown) => {
+    let result: { data: unknown; error: unknown };
+    if (currentTable === "printify_variant_catalog") {
+      result = opts.catalogReadError
+        ? { data: null, error: { message: opts.catalogReadError } }
+        : {
+            data: (opts.catalogVariantIds ?? []).map((variant_id) => ({ variant_id })),
+            error: null,
+          };
+    } else {
+      result = { data: null, error: null };
+    }
+    return Promise.resolve(result).then(resolve);
+  });
 
   builder.maybeSingle.mockImplementation(async () => {
     // loadListingState() loads the row whose id was passed into publishOne.
@@ -1334,6 +1358,51 @@ describe("publishOne", () => {
     await expect(publishOne(db, design, brief, LISTING_ID)).rejects.toThrow(
       "variant 99999 not in design"
     );
+  });
+
+  it("publishOne accepts an added catalog color outside the design's shipped set (real validateVariantIds)", async () => {
+    vi.doMock("./copywriter.js", () => ({
+      writeCopy: vi.fn().mockResolvedValue({
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+      }),
+    }));
+    const { createHiddenProduct } = mockPrintify();
+    // Note: validateVariantIds is intentionally NOT mocked — we use the real
+    // implementation to prove the catalog-union path actually permits an id the
+    // design package never shipped.
+    vi.doMock("@presswork/shared", async () => {
+      const actual = await vi.importActual<typeof import("@presswork/shared")>("@presswork/shared");
+      return {
+        ...actual,
+        createDraftListing: vi.fn().mockResolvedValue({ listing_id: 777 }),
+        uploadListingImage: vi.fn().mockResolvedValue(undefined),
+        getListingImageCount: vi.fn().mockResolvedValue(0),
+        activateListing: vi.fn().mockResolvedValue(undefined),
+        updateListingInventory: vi.fn().mockResolvedValue(undefined),
+        getTaxonomyId: vi.fn().mockResolvedValue(68887043),
+        getSettings: vi.fn().mockReturnValue({
+          ETSY_SHIPPING_PROFILE_ID: 99,
+          ETSY_READINESS_STATE_ID: 42,
+          ETSY_PRODUCTION_PARTNER_ID: PARTNER_ID,
+        }),
+        getLogger: vi.fn().mockReturnValue({ info: vi.fn(), error: vi.fn(), warn: vi.fn() }),
+        notifySlack: vi.fn().mockResolvedValue(undefined),
+      };
+    });
+
+    // 40000 is NOT a design default ([38163, 38177, 38191]) but IS in the catalog.
+    const db = makeDb([], {
+      selectedVariantIds: [38163, 40000],
+      catalogVariantIds: [38163, 38177, 38191, 40000],
+    });
+    const { publishOne } = await import("./publisher.js");
+    await publishOne(db, design, brief, LISTING_ID);
+
+    expect(createHiddenProduct).toHaveBeenCalledTimes(1);
+    const arg = createHiddenProduct.mock.calls[0]?.[0] as { variantIds: number[] };
+    expect(arg.variantIds).toEqual([38163, 40000]);
   });
 
   // ── Default price fallback tests ─────────────────────────────────────────────

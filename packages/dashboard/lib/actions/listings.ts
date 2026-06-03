@@ -24,6 +24,7 @@ import {
 } from "@presswork/shared";
 import { resumePublish } from "@presswork/listing/publish";
 import { serviceClient } from "@/lib/supabase/server";
+import { getCatalogVariantIds } from "@/lib/queries/variants";
 import { requireOwnerEmail } from "@/lib/auth";
 
 async function assertOwner() {
@@ -678,8 +679,11 @@ export async function recreatePrintifyProduct(formData: FormData) {
  * Save the operator's per-listing variant-ID override. An empty selection
  * (all unchecked) is stored as NULL, meaning "inherit the full design set".
  *
- * Validates the selected IDs against the design package's available set
- * before writing — mirrors the validateCopyCompliance catch pattern.
+ * Validates the selected IDs against the FULL catalog for the design's
+ * blueprint/provider — not just the design package's shipped set — so the
+ * operator can ADD catalog colors the design didn't include, not only narrow.
+ * Any change (add or narrow) only takes effect once the Printify product is
+ * recreated; the publisher applies the override on recreate.
  */
 export async function updateListingVariants(formData: FormData) {
   await assertOwner();
@@ -692,12 +696,13 @@ export async function updateListingVariants(formData: FormData) {
 
   const db = serviceClient();
 
-  // Read the authoritative available IDs from the design package.
+  // Read the design's blueprint + provider — the catalog universe is keyed on
+  // these, and they define which variant ids are offerable for this listing.
   const { data: row } = await db
     .from("listings")
     .select(
       `id, design_packages:design_packages!listings_design_package_id_fkey(
-        printify_variant_ids
+        printify_blueprint_id, printify_print_provider_id
       )`
     )
     .eq("id", id)
@@ -705,11 +710,22 @@ export async function updateListingVariants(formData: FormData) {
   if (!row) throw new Error("Listing not found");
 
   const dp = (row as unknown as {
-    design_packages?: { printify_variant_ids: number[] | null } | null;
+    design_packages?: {
+      printify_blueprint_id: number | null;
+      printify_print_provider_id: number | null;
+    } | null;
   }).design_packages;
-  const available: number[] = dp?.printify_variant_ids ?? [];
 
   if (selected.length > 0) {
+    const blueprintId = dp?.printify_blueprint_id;
+    const providerId = dp?.printify_print_provider_id;
+    if (blueprintId == null || providerId == null) {
+      throw new Error(
+        "Listing's design package is missing a Printify blueprint/provider — cannot validate variants."
+      );
+    }
+
+    const available = await getCatalogVariantIds(blueprintId, providerId);
     const { validateVariantIds, VariantSelectionError } = await import(
       "@presswork/shared"
     );

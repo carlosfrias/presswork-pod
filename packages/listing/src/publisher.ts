@@ -49,6 +49,28 @@ export class PublisherError extends Error {
   }
 }
 
+/**
+ * Available variant ids the catalog offers for a blueprint + provider. Used to
+ * validate a per-listing override that may add colors beyond the design's set.
+ * Returns [] on a null blueprint/provider or query error — callers union this
+ * with the design's own ids so an empty result never rejects the baseline.
+ */
+async function fetchCatalogVariantIds(
+  db: Db,
+  blueprintId: number | null,
+  printProviderId: number | null
+): Promise<number[]> {
+  if (blueprintId == null || printProviderId == null) return [];
+  const { data, error } = await db
+    .from("printify_variant_catalog")
+    .select("variant_id")
+    .eq("blueprint_id", blueprintId)
+    .eq("print_provider_id", printProviderId)
+    .eq("is_available", true);
+  if (error) return [];
+  return (data ?? []).map((r) => (r as { variant_id: number }).variant_id);
+}
+
 type ExistingListingRow = {
   id: string;
   status: string;
@@ -206,7 +228,20 @@ export async function publishOne(
 
       const designVariantIds = design.printify_variant_ids ?? [];
       if (selectedVariantIds !== null && selectedVariantIds.length > 0) {
-        validateVariantIds(selectedVariantIds, designVariantIds);
+        // Validate against the FULL catalog for this blueprint/provider, not
+        // just the design's shipped set — the operator may have ADDED catalog
+        // colors on the listing detail page before recreating. Union with the
+        // design's own ids so a missing/empty catalog read never rejects the
+        // design's baseline (those ids came from the catalog originally).
+        const catalogIds = await fetchCatalogVariantIds(
+          db,
+          design.printify_blueprint_id,
+          design.printify_print_provider_id
+        );
+        const available = Array.from(
+          new Set([...catalogIds, ...designVariantIds])
+        );
+        validateVariantIds(selectedVariantIds, available);
       }
       const variantIds =
         selectedVariantIds !== null && selectedVariantIds.length > 0
