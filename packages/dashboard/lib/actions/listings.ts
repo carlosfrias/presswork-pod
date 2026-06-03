@@ -8,6 +8,9 @@ import { z } from "zod";
 const PRINT_COST_USD = 10.09;
 const PRICING_FLOOR_MULTIPLIER = 2.5;
 const PRICE_FLOOR_USD = PRINT_COST_USD * PRICING_FLOOR_MULTIPLIER; // $25.23
+// Cap per-color Dynamic Mockups renders: each is a paid API call, and Etsy only
+// uploads the first 10 images anyway. Extra colors are dropped (and logged).
+const MAX_DM_COLOR_RENDERS = 8;
 import {
   ListingCopySchema,
   ComplianceError,
@@ -21,10 +24,12 @@ import {
   dynamicMockupsTemplates,
   renderMockup,
   DynamicMockupsApiError,
+  getLogger,
 } from "@presswork/shared";
 import { resumePublish } from "@presswork/listing/publish";
 import { serviceClient } from "@/lib/supabase/server";
-import { getCatalogVariantIds } from "@/lib/queries/variants";
+import { getCatalogVariantIds, getCatalogVariants } from "@/lib/queries/variants";
+import { colorHex } from "@/lib/variants/gildan-colors";
 import { requireOwnerEmail } from "@/lib/auth";
 
 async function assertOwner() {
@@ -563,22 +568,28 @@ export async function generateDynamicMockups(formData: FormData) {
   const { data: row } = await db
     .from("listings")
     .select(
-      `id, status, design_packages:design_packages!listings_design_package_id_fkey(
-        id, image_url, printify_blueprint_id, mockup_urls
+      `id, status, selected_variant_ids,
+       design_packages:design_packages!listings_design_package_id_fkey(
+        id, image_url, printify_blueprint_id, printify_print_provider_id,
+        printify_variant_ids, mockup_urls
       )`
     )
     .eq("id", id)
     .maybeSingle();
   if (!row) throw new Error("Listing not found");
 
-  const dp = (row as unknown as {
+  const listing = row as unknown as {
+    selected_variant_ids: number[] | null;
     design_packages?: {
       id: string;
       image_url: string | null;
       printify_blueprint_id: number | null;
+      printify_print_provider_id: number | null;
+      printify_variant_ids: number[] | null;
       mockup_urls: string[] | null;
     } | null;
-  }).design_packages;
+  };
+  const dp = listing.design_packages;
 
   if (!dp) throw new Error("Listing has no joined design_package");
   if (!dp.image_url) {
@@ -596,19 +607,84 @@ export async function generateDynamicMockups(formData: FormData) {
     );
   }
 
-  // Render all registered templates in parallel — each produces one export_path.
+  // Resolve the colors this listing offers: the override if set, else the
+  // design's shipped variant ids → distinct catalog colors (alphabetical).
+  const offeredIds = listing.selected_variant_ids ?? dp.printify_variant_ids ?? [];
+  let colors: string[] = [];
+  if (offeredIds.length > 0 && dp.printify_print_provider_id !== null) {
+    const catalog = await getCatalogVariants(
+      dp.printify_blueprint_id,
+      dp.printify_print_provider_id
+    );
+    const offered = new Set(offeredIds);
+    const seen = new Set<string>();
+    for (const v of catalog) {
+      if (offered.has(v.id) && !seen.has(v.color)) {
+        seen.add(v.color);
+        colors.push(v.color);
+      }
+    }
+  }
+
+  // Cap the number of per-color renders (paid API calls; Etsy uploads ≤10).
+  let droppedColors: string[] = [];
+  if (colors.length > MAX_DM_COLOR_RENDERS) {
+    droppedColors = colors.slice(MAX_DM_COLOR_RENDERS);
+    colors = colors.slice(0, MAX_DM_COLOR_RENDERS);
+  }
+
+  // Build the render jobs. A template renders one mockup per offered color ONLY
+  // when it declares a garment smart object to paint; otherwise it renders a
+  // single colorless mockup (legacy behavior) regardless of offered colors.
+  const jobs: Array<{
+    mockupUuid: string;
+    smartObjectUuid: string;
+    garmentSmartObjectUuid?: string;
+    color?: string;
+  }> = [];
+  for (const t of templates) {
+    if (t.garmentSmartObjectUuid && colors.length > 0) {
+      for (const color of colors) {
+        jobs.push({
+          mockupUuid: t.mockupUuid,
+          smartObjectUuid: t.smartObjectUuid,
+          garmentSmartObjectUuid: t.garmentSmartObjectUuid,
+          color,
+        });
+      }
+    } else {
+      jobs.push({ mockupUuid: t.mockupUuid, smartObjectUuid: t.smartObjectUuid });
+    }
+  }
+
+  if (droppedColors.length > 0) {
+    getLogger("dynamic-mockups").warn({
+      action: "generate_dynamic_mockups",
+      record_id: id,
+      status: "color_cap_truncated",
+      rendered_colors: colors,
+      dropped_colors: droppedColors,
+      cap: MAX_DM_COLOR_RENDERS,
+    });
+  }
+
+  // Render all jobs in parallel — each produces one export_path.
   let newPaths: string[];
   try {
     newPaths = await Promise.all(
-      templates.map((t, i) =>
+      jobs.map((job, i) =>
         renderMockup({
-          mockupUuid: t.mockupUuid,
-          smartObjectUuid: t.smartObjectUuid,
+          mockupUuid: job.mockupUuid,
+          smartObjectUuid: job.smartObjectUuid,
           designUrl: dp.image_url!,
+          color: job.color ? colorHex(job.color) : undefined,
+          colorSmartObjectUuid: job.color ? job.garmentSmartObjectUuid : undefined,
           options: {
             imageFormat: "jpg",
             imageSize: 2000,
-            label: `listing-${id}-t${i}`,
+            label: `listing-${id}-t${i}${
+              job.color ? `-${job.color.replace(/\s+/g, "-").toLowerCase()}` : ""
+            }`,
           },
         })
       )

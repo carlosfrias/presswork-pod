@@ -46,6 +46,17 @@ export interface RenderMockupArgs {
   smartObjectUuid: string;
   /** Public URL of the design PNG to composite into the smart object. */
   designUrl: string;
+  /**
+   * Optional garment color, as a hex string ("#1B1B1B") or CSS color name.
+   * Dynamic Mockups "paints the whole smart object" with this value, so it
+   * must target the GARMENT smart object — pass `colorSmartObjectUuid` for the
+   * shirt body. When `colorSmartObjectUuid` is omitted the color is applied to
+   * `smartObjectUuid` (only correct when that slot itself is the colorable
+   * garment).
+   */
+  color?: string;
+  /** Smart object the `color` is painted onto (the garment body). */
+  colorSmartObjectUuid?: string;
   /** Optional rendering controls. */
   options?: {
     imageFormat?: "jpg" | "png" | "webp";
@@ -72,14 +83,31 @@ export async function renderMockup(args: RenderMockupArgs): Promise<string> {
   }
 
   const log = getLogger("dynamic-mockups");
+
+  // The design always composites into smartObjectUuid. A garment color, when
+  // requested, is painted onto a SEPARATE smart object (the shirt body) so the
+  // design itself isn't tinted. If no dedicated garment slot is given, the
+  // color falls back onto the design slot — only correct when that slot is the
+  // colorable garment.
+  const designSmartObject: Record<string, unknown> = {
+    uuid: args.smartObjectUuid,
+    asset: { url: args.designUrl },
+  };
+  const smartObjects: Record<string, unknown>[] = [designSmartObject];
+  if (args.color) {
+    if (
+      args.colorSmartObjectUuid &&
+      args.colorSmartObjectUuid !== args.smartObjectUuid
+    ) {
+      smartObjects.push({ uuid: args.colorSmartObjectUuid, color: args.color });
+    } else {
+      designSmartObject.color = args.color;
+    }
+  }
+
   const body = {
     mockup_uuid: args.mockupUuid,
-    smart_objects: [
-      {
-        uuid: args.smartObjectUuid,
-        asset: { url: args.designUrl },
-      },
-    ],
+    smart_objects: smartObjects,
     ...(args.options?.label ? { export_label: args.options.label } : {}),
     ...(args.options?.imageFormat || args.options?.imageSize
       ? {
@@ -139,6 +167,7 @@ export async function renderMockup(args: RenderMockupArgs): Promise<string> {
     action: "render",
     mockup_uuid: args.mockupUuid,
     smart_object_uuid: args.smartObjectUuid,
+    color: args.color ?? null,
     duration_ms: Date.now() - t0,
   });
 
@@ -165,6 +194,19 @@ export async function renderMockup(args: RenderMockupArgs): Promise<string> {
 export interface DynamicMockupsTemplate {
   mockupUuid: string;
   smartObjectUuid: string;
+  /**
+   * Optional UUID of the smart object representing the GARMENT body (the shirt),
+   * distinct from `smartObjectUuid` (the print area the design composites into).
+   * When set, "Generate Dynamic Mockups" renders one mockup per offered color,
+   * painting THIS smart object with each color while leaving the design clean.
+   * When absent, the template renders a single colorless mockup (legacy
+   * behavior) regardless of the colors the listing offers.
+   *
+   * Operator step to enable color-aware renders: in the Dynamic Mockups Library,
+   * find the garment/shirt smart object's UUID for this template and paste it
+   * here. (The existing `smartObjectUuid` stays the design print area.)
+   */
+  garmentSmartObjectUuid?: string;
 }
 
 // Multiple templates per blueprint — the action renders ALL of them and
@@ -176,9 +218,13 @@ const DYNAMIC_MOCKUPS_TEMPLATES_BY_BLUEPRINT: Record<number, DynamicMockupsTempl
     {
       mockupUuid: "0e6cb32a-8602-49ae-937d-620b6d928744",
       smartObjectUuid: "bf4fdfa9-2957-4a51-9c29-bc3034f3df06",
+      // To render one mockup per offered color, paste the GARMENT (shirt body)
+      // smart object UUID here, e.g.:
+      //   garmentSmartObjectUuid: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+      // Until then this template renders a single colorless mockup.
     },
     // Add more Gildan 64000 templates here as you find good ones:
-    // { mockupUuid: "...", smartObjectUuid: "..." },
+    // { mockupUuid: "...", smartObjectUuid: "...", garmentSmartObjectUuid: "..." },
   ],
 };
 

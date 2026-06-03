@@ -29,7 +29,9 @@ interface LoadShared {
    * A single object → both lookups return it (plural wraps in a 1-element
    * array), mimicking the common single-template registration.
    */
-  template?: { mockupUuid: string; smartObjectUuid: string } | undefined;
+  template?:
+    | { mockupUuid: string; smartObjectUuid: string; garmentSmartObjectUuid?: string }
+    | undefined;
 }
 
 async function loadModule(opts: LoadOpts, shared: LoadShared = {}) {
@@ -485,6 +487,95 @@ describe("generateDynamicMockups", () => {
     // Compliance flag stays true — the rendered image still composites the
     // actual design into a smart-object slot.
     expect(dpUpdate?.data["mockups_from_actual_design"]).toBe(true);
+  });
+
+  it("renders one mockup per offered color when the template has a garment slot", async () => {
+    const { mod, renderMockupSpy } = await loadModule(
+      {
+        listings: {
+          maybeSingle: {
+            id: VALID_ID,
+            status: "needs_review",
+            selected_variant_ids: null,
+            design_packages: {
+              id: "00000000-0000-0000-0000-000000000099",
+              image_url: "https://cdn.example/design.png",
+              printify_blueprint_id: 145,
+              printify_print_provider_id: 39,
+              // Offered set spans two colors.
+              printify_variant_ids: [38163, 40000],
+              mockup_urls: [],
+            },
+          },
+        },
+        printify_variant_catalog: {
+          rows: [
+            { variant_id: 38163, color: "White", size: "S" },
+            { variant_id: 40000, color: "Black", size: "M" },
+          ],
+        },
+      },
+      {
+        template: {
+          mockupUuid: "m-uuid",
+          smartObjectUuid: "s-uuid",
+          garmentSmartObjectUuid: "g-uuid",
+        },
+      },
+    );
+
+    await mod.generateDynamicMockups(makeFormData({ id: VALID_ID }));
+
+    // One render per offered color (catalog sort → Black, then White).
+    expect(renderMockupSpy).toHaveBeenCalledTimes(2);
+    const calls = renderMockupSpy.mock.calls.map((c) => c[0] as Record<string, unknown>);
+    const byColor = new Map(calls.map((a) => [a.color as string, a]));
+
+    expect(byColor.get("#1B1B1B")).toMatchObject({
+      smartObjectUuid: "s-uuid",
+      colorSmartObjectUuid: "g-uuid",
+      designUrl: "https://cdn.example/design.png",
+    });
+    expect(byColor.get("#FFFFFF")).toMatchObject({
+      colorSmartObjectUuid: "g-uuid",
+    });
+  });
+
+  it("renders a single colorless mockup when the template has no garment slot", async () => {
+    const { mod, renderMockupSpy } = await loadModule(
+      {
+        listings: {
+          maybeSingle: {
+            id: VALID_ID,
+            status: "needs_review",
+            selected_variant_ids: null,
+            design_packages: {
+              id: "00000000-0000-0000-0000-000000000099",
+              image_url: "https://cdn.example/design.png",
+              printify_blueprint_id: 145,
+              printify_print_provider_id: 39,
+              printify_variant_ids: [38163, 40000],
+              mockup_urls: [],
+            },
+          },
+        },
+        printify_variant_catalog: {
+          rows: [
+            { variant_id: 38163, color: "White", size: "S" },
+            { variant_id: 40000, color: "Black", size: "M" },
+          ],
+        },
+      },
+      // No garmentSmartObjectUuid → legacy single colorless render.
+      { template: { mockupUuid: "m-uuid", smartObjectUuid: "s-uuid" } },
+    );
+
+    await mod.generateDynamicMockups(makeFormData({ id: VALID_ID }));
+
+    expect(renderMockupSpy).toHaveBeenCalledTimes(1);
+    const arg = renderMockupSpy.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.color).toBeUndefined();
+    expect(arg.colorSmartObjectUuid).toBeUndefined();
   });
 });
 
