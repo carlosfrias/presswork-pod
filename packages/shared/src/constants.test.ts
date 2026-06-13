@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { normalizeEtsyCarrierName } from "./constants.js";
+import {
+  BLUEPRINT_PRINT_COST_USD,
+  normalizeEtsyCarrierName,
+  printCostForBlueprint,
+} from "./constants.js";
 
 describe("normalizeEtsyCarrierName", () => {
   it("normalizes USPS variants", () => {
@@ -49,5 +53,19 @@ describe("normalizeEtsyCarrierName", () => {
     expect(normalizeEtsyCarrierName("SkyNet Express")).toBeNull();
     expect(normalizeEtsyCarrierName("Mystery Carrier LLC")).toBeNull();
     expect(normalizeEtsyCarrierName("random string")).toBeNull();
+  });
+});
+
+describe("printCostForBlueprint", () => {
+  it("returns $10.09 for blueprint 145 (Gildan 64000)", () => {
+    expect(printCostForBlueprint(145)).toBe(10.09);
+  });
+
+  it("reads from the canonical BLUEPRINT_PRINT_COST_USD map", () => {
+    expect(printCostForBlueprint(145)).toBe(BLUEPRINT_PRINT_COST_USD[145]);
+  });
+
+  it("throws a clear Error naming the unknown blueprint id", () => {
+    expect(() => printCostForBlueprint(99999)).toThrow("99999");
   });
 });

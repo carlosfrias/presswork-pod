@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { BLUEPRINT_PRINT_COST_USD } from "@presswork/shared";
 import {
   computeEtsyFees,
   lookupPrintCost,
@@ -29,6 +30,12 @@ describe("computeEtsyFees", () => {
 describe("lookupPrintCost", () => {
   it("returns $10.09 for blueprint 145 (Gildan 64000)", () => {
     expect(lookupPrintCost(145)).toBe(10.09);
+  });
+
+  it("sources the cost from the shared canonical map", () => {
+    // Consolidated in AUDIT_5 M2: the map lives in @presswork/shared, so
+    // lookupPrintCost must agree with it rather than a ledger-local copy.
+    expect(lookupPrintCost(145)).toBe(BLUEPRINT_PRINT_COST_USD[145]);
   });
 
   it("throws UnknownBlueprintError for an unknown blueprint ID", () => {

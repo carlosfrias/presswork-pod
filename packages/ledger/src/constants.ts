@@ -9,10 +9,10 @@ export const RECEIPT_POLL_PAGE_LIMIT = 100;
 // fires a per-order warning; the daily digest still summarises totals.
 export const MARGIN_WARNING_THRESHOLD_USD = 5.0;
 
-// Per-blueprint flat print cost (USD). Update when adding new blueprints.
-export const BLUEPRINT_PRINT_COST_USD: Record<number, number> = {
-  145: 10.09, // SwiftPOD Gildan 64000 t-shirt — must match printify_blueprint_id written by Design (packages/design/constants.py)
-};
+// Per-blueprint flat print cost (USD). Canonical map now lives in
+// @presswork/shared (consolidated in AUDIT_5 M2); re-exported here so existing
+// ledger importers keep resolving it from this module.
+export { BLUEPRINT_PRINT_COST_USD } from "@presswork/shared";
 
 // Per-blueprint Printify shipping cost (USD) the shop pays on fulfillment. We
 // absorb this on every order regardless of the buyer-facing Etsy shipping

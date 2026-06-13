@@ -9,6 +9,27 @@ export const MAX_TAGS = 13;
 export const MAX_TITLE_LEN = 140;
 export const MAX_TAG_LEN = 20;
 
+// Per-blueprint flat print cost (USD). Canonical source of truth shared by the
+// Ledger (margin economics) and Listing (pricing floor). Update when adding new
+// blueprints. Keep keys aligned with printify_blueprint_id written by Design
+// (packages/design/constants.py).
+export const BLUEPRINT_PRINT_COST_USD: Record<number, number> = {
+  145: 10.09, // SwiftPOD Gildan 64000 t-shirt — must match printify_blueprint_id written by Design (packages/design/constants.py)
+};
+
+// Returns the flat print cost (USD) for a blueprint, or throws a clear Error
+// naming the unregistered blueprint id so callers fail loudly rather than
+// silently treating an unknown blueprint as free.
+export function printCostForBlueprint(blueprintId: number): number {
+  const cost = BLUEPRINT_PRINT_COST_USD[blueprintId];
+  if (cost === undefined) {
+    throw new Error(
+      `No print cost configured for blueprint ID ${blueprintId}. Add it to BLUEPRINT_PRINT_COST_USD.`,
+    );
+  }
+  return cost;
+}
+
 // Image-download guards for uploadListingImage. A hung mockup URL would
 // otherwise stall the single-concurrency Etsy limiter; an oversize file would
 // OOM the process via res.blob().
