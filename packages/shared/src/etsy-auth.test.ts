@@ -176,4 +176,194 @@ describe("getValidAccessToken", () => {
     expect(notifySlackMock.mock.calls[0]?.[0]).toMatch(/invalid_grant/);
     expect(notifySlackMock.mock.calls[0]?.[1]).toEqual({ severity: "error" });
   });
+
+  it("retries the token write and fires CRITICAL Slack alert when persistence keeps failing after a successful POST (audit H3)", async () => {
+    const setTokensMock = vi.fn().mockRejectedValue(new Error("supabase down"));
+    vi.doMock("./etsy-tokens.js", () => ({
+      getEtsyTokens: vi.fn().mockResolvedValue({
+        accessToken: "old-token",
+        refreshToken: "my-refresh",
+        expiresAt: EXPIRED,
+      }),
+      setEtsyTokens: setTokensMock,
+    }));
+    const notifySlackMock = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("./notifier.js", () => ({
+      notifySlack: notifySlackMock,
+      notifyEmail: vi.fn(),
+    }));
+
+    let refreshCalls = 0;
+    server.use(
+      http.post(REFRESH_URL, () => {
+        refreshCalls++;
+        return HttpResponse.json({
+          access_token: "new-access-token",
+          refresh_token: "rotated-refresh-token",
+          expires_in: 3600,
+        });
+      })
+    );
+
+    const { getValidAccessToken, EtsyAuthError } = await import("./etsy-auth.js");
+    // db without .rpc → cross-process lock falls back to best-effort POST.
+    await expect(getValidAccessToken({} as never)).rejects.toThrow(EtsyAuthError);
+    // Bounded retry: write attempted TOKEN_WRITE_MAX_ATTEMPTS (3) times.
+    expect(setTokensMock).toHaveBeenCalledTimes(3);
+    // Only one POST: the rotation happened, but persistence is what failed.
+    expect(refreshCalls).toBe(1);
+    expect(notifySlackMock).toHaveBeenCalledTimes(1);
+    expect(notifySlackMock.mock.calls[0]?.[0]).toMatch(/could NOT be persisted/);
+    expect(notifySlackMock.mock.calls[0]?.[1]).toEqual({ severity: "error" });
+  });
+
+  it("skips the Etsy POST when the cross-process lock re-read shows a fresh token (audit H3 lock-loser)", async () => {
+    const setTokensMock = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("./etsy-tokens.js", () => ({
+      // Our process saw a near-expiry token and entered the refresh path.
+      getEtsyTokens: vi.fn().mockResolvedValue({
+        accessToken: "our-stale-token",
+        refreshToken: "our-refresh",
+        expiresAt: EXPIRED,
+      }),
+      setEtsyTokens: setTokensMock,
+    }));
+
+    // After acquiring the advisory lock, the RPC re-read reveals a token a
+    // peer process already rotated: needs_refresh=false, wait=false.
+    const rpcMock = vi.fn().mockResolvedValue({
+      data: [
+        {
+          access_token: "peer-fresh-token",
+          refresh_token: "peer-rotated-refresh",
+          expires_at: FUTURE,
+          needs_refresh: false,
+          wait: false,
+          has_row: true,
+        },
+      ],
+      error: null,
+    });
+
+    let refreshCalls = 0;
+    server.use(
+      http.post(REFRESH_URL, () => {
+        refreshCalls++;
+        return HttpResponse.json({
+          access_token: "should-not-be-used",
+          refresh_token: "should-not-be-used",
+          expires_in: 3600,
+        });
+      })
+    );
+
+    const { getValidAccessToken } = await import("./etsy-auth.js");
+    const token = await getValidAccessToken({ rpc: rpcMock } as never);
+
+    expect(token).toBe("peer-fresh-token");
+    // No Etsy POST: another process already refreshed; a second POST would have
+    // bricked the rotated refresh token.
+    expect(refreshCalls).toBe(0);
+    // We did not write tokens ourselves — the peer already persisted them.
+    expect(setTokensMock).not.toHaveBeenCalled();
+    expect(rpcMock).toHaveBeenCalledWith("etsy_refresh_lock", {
+      p_buffer_seconds: 60,
+      p_lease_seconds: 30,
+    });
+  });
+
+  it("lease loser backs off then returns the peer's freshly-persisted token with ZERO Etsy POSTs (audit H3 lease)", async () => {
+    const setTokensMock = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("./etsy-tokens.js", () => ({
+      getEtsyTokens: vi.fn().mockResolvedValue({
+        accessToken: "our-stale-token",
+        refreshToken: "our-refresh",
+        expiresAt: EXPIRED,
+      }),
+      setEtsyTokens: setTokensMock,
+    }));
+
+    // First RPC call: a peer holds the lease mid-refresh -> wait=true, no token
+    // yet. Second call (after our back-off): the peer has persisted, so the
+    // re-read returns a fresh token with wait=false.
+    const rpcMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        data: [
+          {
+            access_token: null,
+            refresh_token: null,
+            expires_at: null,
+            needs_refresh: false,
+            wait: true,
+            has_row: true,
+          },
+        ],
+        error: null,
+      })
+      .mockResolvedValueOnce({
+        data: [
+          {
+            access_token: "peer-fresh-token",
+            refresh_token: "peer-rotated-refresh",
+            expires_at: FUTURE,
+            needs_refresh: false,
+            wait: false,
+            has_row: true,
+          },
+        ],
+        error: null,
+      });
+
+    let refreshCalls = 0;
+    server.use(
+      http.post(REFRESH_URL, () => {
+        refreshCalls++;
+        return HttpResponse.json({
+          access_token: "should-not-be-used",
+          refresh_token: "should-not-be-used",
+          expires_in: 3600,
+        });
+      })
+    );
+
+    const { getValidAccessToken } = await import("./etsy-auth.js");
+    const token = await getValidAccessToken({ rpc: rpcMock } as never);
+
+    expect(token).toBe("peer-fresh-token");
+    // We backed off and re-polled the RPC instead of POSTing.
+    expect(rpcMock).toHaveBeenCalledTimes(2);
+    // Zero Etsy POSTs: the peer rotated the token; a competing POST would brick it.
+    expect(refreshCalls).toBe(0);
+    // We never persisted — the peer's setEtsyTokens already did.
+    expect(setTokensMock).not.toHaveBeenCalled();
+  });
+
+  it("throws EtsyAuthError and does NOT persist when Etsy success body has a non-numeric expires_in (zod)", async () => {
+    const setTokensMock = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("./etsy-tokens.js", () => ({
+      getEtsyTokens: vi.fn().mockResolvedValue({
+        accessToken: "old-token",
+        refreshToken: "my-refresh",
+        expiresAt: EXPIRED,
+      }),
+      setEtsyTokens: setTokensMock,
+    }));
+
+    server.use(
+      http.post(REFRESH_URL, () =>
+        // Malformed: expires_in is missing. A NaN-epoch token must never be
+        // minted — zod must reject and the write must not happen.
+        HttpResponse.json({
+          access_token: "new-access-token",
+          refresh_token: "new-refresh-token",
+        })
+      )
+    );
+
+    const { getValidAccessToken, EtsyAuthError } = await import("./etsy-auth.js");
+    await expect(getValidAccessToken({} as never)).rejects.toThrow(EtsyAuthError);
+    await expect(getValidAccessToken({} as never)).rejects.toThrow(/malformed/i);
+    expect(setTokensMock).not.toHaveBeenCalled();
+  });
 });

@@ -36,9 +36,15 @@ export async function getEtsyTokens(db: Db): Promise<EtsyTokens> {
 }
 
 export async function setEtsyTokens(db: Db, tokens: EtsyTokens): Promise<void> {
+  // Clear the refresh lease (`refreshingUntil`, stamped by the etsy_refresh_lock
+  // RPC on the winning caller) in the SAME write that lands the rotated token.
+  // This releases the cross-process lease the instant the new token is durable,
+  // so a peer waiting on the lease re-reads a fresh token immediately instead of
+  // waiting out the full lease window.
+  const value = { ...tokens, refreshingUntil: null };
   const { error } = await db
     .from("config")
-    .upsert({ key: CONFIG_KEY, value: tokens }, { onConflict: "key" });
+    .upsert({ key: CONFIG_KEY, value }, { onConflict: "key" });
 
   if (error) throw new Error(`Failed to save Etsy tokens: ${error.message}`);
 }
