@@ -120,6 +120,11 @@ export async function triggerAgent(formData: FormData): Promise<void> {
  * row queued for the next manual / cron-driven run rather than crashing
  * the action.
  *
+ * Auth-gated like every other export in this "use server" module (M5): an
+ * exported server action is a POST-able endpoint, so it must verify the owner
+ * itself rather than trusting callers. All current callers are already in
+ * authed contexts, so the check is harmless for them and closes the hole.
+ *
  * Fire-and-forget: returns the agent_runs id (or null) but callers
  * typically ignore it — the row is already queued in the DB, so a spawn
  * failure just means the operator can click the Run button to drain.
@@ -128,6 +133,9 @@ export async function spawnAgentForOperatorAction(
   agent: Agent,
   triggeredBy: string,
 ): Promise<string | null> {
+  const email = await requireOwnerEmail();
+  if (!email) throw new Error("Unauthorized");
+
   return spawnAgent(agent, triggeredBy);
 }
 

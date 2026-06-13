@@ -294,3 +294,83 @@ describe("run() — H1 null-FK pending row starvation", () => {
     expect(mockClaimNextDesignPackage).toHaveBeenCalled();
   });
 });
+
+describe("run() — M4 fetch failures error-park instead of crashing the run", () => {
+  it("error-parks a pending row whose design FK is missing, then publishes the next claimable one", async () => {
+    const missingDesignId = "deadbeef-dead-dead-dead-deaddeaddead";
+    const goodDesignId = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+    const badListingId = "11111111-1111-1111-1111-111111111111";
+    const goodListingId = "22222222-2222-2222-2222-222222222222";
+    dbHandle = makeDb({
+      listings: [
+        // Oldest pending row points at a design that doesn't exist — the row
+        // that, pre-M4, threw out of run() and starved everything behind it.
+        {
+          id: badListingId,
+          status: "pending",
+          design_package_id: missingDesignId,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+        {
+          id: goodListingId,
+          status: "pending",
+          design_package_id: goodDesignId,
+          created_at: "2026-01-02T00:00:00Z",
+        },
+      ],
+      // missingDesignId is deliberately absent from designs.
+      designs: {
+        [goodDesignId]: { id: goodDesignId, trend_brief_id: "bbbb", status: "done" },
+      },
+      briefs: { bbbb: { id: "bbbb", niche: "cats" } },
+    });
+
+    mockPublishOne.mockImplementation(async (...args: unknown[]) => {
+      const listingId = args[3] as string;
+      const row = dbHandle.listings.find((r) => r.id === listingId);
+      if (row) row.status = "active";
+      return undefined;
+    });
+
+    const { run } = await import("./index");
+    await expect(run()).resolves.toBeUndefined(); // must not throw
+
+    const parked = dbHandle.listings.find((r) => r.id === badListingId);
+    expect(parked?.status).toBe("error");
+    expect(String(parked?.error_message)).toMatch(/Failed to load design\/brief/i);
+
+    // The claimable row behind the bad one was published, not starved.
+    expect(mockPublishOne).toHaveBeenCalledTimes(1);
+    expect(mockPublishOne.mock.calls[0]?.[3]).toBe(goodListingId);
+  });
+
+  it("error-parks a pending row whose design has a null trend_brief_id with a precise message", async () => {
+    const designId = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+    const listingId = "11111111-1111-1111-1111-111111111111";
+    dbHandle = makeDb({
+      listings: [
+        {
+          id: listingId,
+          status: "pending",
+          design_package_id: designId,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      designs: {
+        [designId]: { id: designId, trend_brief_id: null, status: "done" },
+      },
+      briefs: {},
+    });
+
+    const { run } = await import("./index");
+    await expect(run()).resolves.toBeUndefined();
+
+    const parked = dbHandle.listings.find((r) => r.id === listingId);
+    expect(parked?.status).toBe("error");
+    expect(String(parked?.error_message)).toMatch(/null trend_brief_id/i);
+    // Never handed to publishOne — there's no brief to publish against.
+    expect(mockPublishOne).not.toHaveBeenCalled();
+    // Loop drained cleanly to Phase 3 idle exit.
+    expect(mockClaimNextDesignPackage).toHaveBeenCalled();
+  });
+});

@@ -158,7 +158,7 @@ validation take the blueprint-resolved cost.
 
 ---
 
-### [ ] M3 — Receipt poller has no pagination; can permanently miss orders
+### [x] M3 — Receipt poller has no pagination; can permanently miss orders
 
 **Where:** `packages/ledger/src/receipt-poller.ts:36-39`; `listReceipts` in
 `packages/shared/src/etsy-api.ts:146` already supports `offset`.
@@ -174,7 +174,7 @@ full page of duplicates is seen, as a cheap early-exit). Keep a max-pages ceilin
 
 ---
 
-### [ ] M4 — One bad row crashes the whole Listing run (fetch helpers outside try)
+### [x] M4 — One bad row crashes the whole Listing run (fetch helpers outside try)
 
 **Where:** `packages/listing/src/index.ts:95-96`.
 
@@ -190,7 +190,7 @@ misleading "trend_brief  not found" error.
 
 ---
 
-### [ ] M5 — `spawnAgentForOperatorAction` is an exported server action without an auth check
+### [x] M5 — `spawnAgentForOperatorAction` is an exported server action without an auth check
 
 **Where:** `packages/dashboard/lib/actions/triggers.ts:127-132`.
 
@@ -206,7 +206,7 @@ already in authed contexts, so the extra check is harmless).
 
 ---
 
-### [ ] M6 — `retry_count` increments are read-then-write (race-prone)
+### [x] M6 — `retry_count` increments are read-then-write (race-prone)
 
 **Where:** `packages/listing/src/publisher.ts` — `publishOne` catch (~311-335) re-reads
 `retry_count` then writes `+1`; `resumePublish` catch (~655) uses `listing.retry_count`

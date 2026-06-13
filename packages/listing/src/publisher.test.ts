@@ -69,9 +69,16 @@ type DbMockOpts = {
     retry_count: number | null;
     selected_variant_ids: number[] | null;
   }> | null;
+  /**
+   * Pre-existing retry_count the increment_listing_retry RPC bumps from. The
+   * mock RPC returns this + 1 (falling back to existingListing.retry_count).
+   */
   retryCount?: number;
   existingEtsyListingId?: number | null;
-  retryCountReadError?: string;
+  /** Surface an error from the increment_listing_retry RPC (M6 error path). */
+  retryRpcError?: string;
+  /** Make the increment_listing_retry RPC resolve { data: null } (row vanished). */
+  retryRpcReturnsNull?: boolean;
   /** Mockup URLs on the joined design_packages row (resumePublish image upload). */
   mockupUrls?: string[];
   /** Override for the selected_variant_ids single-column query in publishOne. */
@@ -175,12 +182,6 @@ function makeDb(updates: CaptureEntry[], opts: DbMockOpts = {}) {
     if (currentSelectCols === "id") {
       return { data: { id: LISTING_ID }, error: null };
     }
-    if (currentSelectCols === "retry_count") {
-      if (opts.retryCountReadError) {
-        return { data: null, error: { message: opts.retryCountReadError } };
-      }
-      return { data: { retry_count: opts.retryCount ?? 0 }, error: null };
-    }
     if (currentSelectCols === "etsy_listing_id") {
       return { data: { etsy_listing_id: opts.existingEtsyListingId ?? null }, error: null };
     }
@@ -229,6 +230,24 @@ function makeDb(updates: CaptureEntry[], opts: DbMockOpts = {}) {
       currentTable = table;
       currentSelectCols = "";
       return builder;
+    }),
+    // increment_listing_retry (M6): atomic increment + status decision. The mock
+    // returns the new (post-increment) count = base + 1 so terminal-vs-retry
+    // branching in the catch is exercised. RPC calls are captured into `updates`
+    // under a synthetic "rpc:<fn>" table so tests can assert on the args.
+    rpc: vi.fn(async (fn: string, args: Record<string, unknown>) => {
+      if (fn === "increment_listing_retry") {
+        updates.push({ table: `rpc:${fn}`, data: args });
+        if (opts.retryRpcError) {
+          return { data: null, error: { message: opts.retryRpcError } };
+        }
+        if (opts.retryRpcReturnsNull) {
+          return { data: null, error: null };
+        }
+        const base = opts.retryCount ?? opts.existingListing?.retry_count ?? 0;
+        return { data: base + 1, error: null };
+      }
+      return { data: null, error: null };
     }),
   } as unknown as Db;
 }
@@ -583,13 +602,16 @@ describe("publishOne", () => {
     );
     expect(dpErrorWrites).toEqual([]);
 
-    const listingRetryWrite = updates.find(
-      (u) =>
-        u.table === "listings" &&
-        u.data["status"] === "pending" &&
-        "retry_count" in u.data
+    // M6: the increment + status decision is one atomic RPC, not a captured
+    // listings UPDATE. publishOne asks for the 'pending' retry status; the RPC
+    // parks at 'error' itself only once the count reaches MAX_RETRIES.
+    const retryRpc = updates.find(
+      (u) => u.table === "rpc:increment_listing_retry"
     );
-    expect(listingRetryWrite).toBeDefined();
+    expect(retryRpc).toBeDefined();
+    expect(retryRpc!.data.p_retry_status).toBe("pending");
+    expect(retryRpc!.data.p_max_retries).toBe(3);
+    expect(retryRpc!.data.p_listing_id).toBe(LISTING_ID);
   });
 
   it("on terminal failure: error lives on listings; design always lands at 'done' (pipeline contract)", async () => {
@@ -622,14 +644,18 @@ describe("publishOne", () => {
     );
     expect(dpErrorMessageWrites).toEqual([]);
 
-    // The listings row carries the terminal-failure state.
-    const listingStatusWrites = updates
-      .filter((u) => u.table === "listings" && "status" in u.data && "retry_count" in u.data)
-      .map((u) => u.data["status"]);
-    expect(listingStatusWrites).toContain("error");
+    // M6: the increment + terminal decision happen atomically in the RPC. We
+    // assert the RPC was invoked with the right args (it sets 'error' itself at
+    // the cap); the returned count (3 here) is what drives the terminal alert.
+    const retryRpc = updates.find(
+      (u) => u.table === "rpc:increment_listing_retry"
+    );
+    expect(retryRpc).toBeDefined();
+    expect(retryRpc!.data.p_retry_status).toBe("pending");
+    expect(retryRpc!.data.p_max_retries).toBe(3);
   });
 
-  it("treats retry_count read failure as terminal (audit #39)", async () => {
+  it("M6: when the retry-increment RPC fails, fires a 'may be stuck' alert and still rethrows", async () => {
     vi.doMock("./copywriter.js", () => ({
       writeCopy: vi.fn().mockResolvedValue({
         title: COMPLIANT_TITLE,
@@ -638,27 +664,24 @@ describe("publishOne", () => {
       }),
     }));
     mockPrintifyFailure();
-    mockSharedAndEtsy();
+    const { notifySlack } = mockSharedWithSlack();
 
     const updates: CaptureEntry[] = [];
-    const db = makeDb(updates, { retryCountReadError: "db connection lost" });
+    // RPC surfaces an error → bumpRetryOrAlert must alert and return null,
+    // never throw (throwing would mask the original printify failure).
+    const db = makeDb(updates, { retryRpcError: "db connection lost" });
 
     const { publishOne } = await import("./publisher.js");
-    await expect(publishOne(db, design, brief, LISTING_ID)).rejects.toThrow();
+    // The ORIGINAL failure (printify 500) is what propagates, not the RPC error.
+    await expect(publishOne(db, design, brief, LISTING_ID)).rejects.toThrow(/printify 500/);
 
-    const listingTerminalWrite = updates.find(
-      (u) => u.table === "listings" && u.data.status === "error" && "retry_count" in u.data
-    );
-    expect(listingTerminalWrite).toBeDefined();
-    // retry_count is forced to MAX_RETRIES (3) when the read fails.
-    expect(listingTerminalWrite!.data.retry_count).toBe(3);
-    expect(String(listingTerminalWrite!.data.error_message)).toContain(
-      "retry_count read failed"
-    );
+    // "row may be stuck" alert fired (H4 protection preserved through M6).
+    expect(notifySlack).toHaveBeenCalledTimes(1);
+    const [message, slackOpts] = notifySlack.mock.calls[0] as [string, { severity?: string }];
+    expect(slackOpts?.severity).toBe("error");
+    expect(message).toMatch(/may be stuck/i);
 
-    // Pipeline contract: even when the retry-count read fails and we force
-    // a terminal listing failure, design.status / .error_message must NOT
-    // be written. Design's columns are owned by Design only.
+    // Pipeline contract holds: no design_packages status/error writes.
     const dpWrites = updates.filter((u) => u.table === "design_packages" && "status" in u.data);
     expect(dpWrites).toEqual([]);
   });

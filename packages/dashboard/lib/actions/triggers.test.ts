@@ -65,6 +65,35 @@ describe("triggerAgent", () => {
   });
 });
 
+describe("spawnAgentForOperatorAction (M5 auth gate)", () => {
+  it("throws Unauthorized when the caller is not the owner", async () => {
+    process.env.DASHBOARD_LOCAL_TRIGGERS_ENABLED = "true";
+    const { mod } = await loadModule({});
+    const { requireOwnerEmail } = await import("@/lib/auth");
+    vi.mocked(requireOwnerEmail).mockResolvedValueOnce(null);
+
+    await expect(
+      mod.spawnAgentForOperatorAction("design", "owner@test.com"),
+    ).rejects.toThrow(/Unauthorized/);
+  });
+
+  it("spawns and records an agent_runs row when authed and local triggers enabled", async () => {
+    process.env.DASHBOARD_LOCAL_TRIGGERS_ENABLED = "true";
+    const { mod, capture } = await loadModule({
+      agent_runs: { single: { id: "run-9" } },
+    });
+
+    const runId = await mod.spawnAgentForOperatorAction("design", "owner@test.com");
+
+    expect(runId).toBe("run-9");
+    expect(capture.inserts[0].table).toBe("agent_runs");
+    expect(capture.inserts[0].data).toMatchObject({
+      agent: "design",
+      triggered_by: "owner@test.com",
+    });
+  });
+});
+
 describe("getPendingWorkCount", () => {
   it("returns count of trend_briefs at status='approved' for the design agent", async () => {
     const { mod } = await loadModule({ trend_briefs: { count: 4 } });

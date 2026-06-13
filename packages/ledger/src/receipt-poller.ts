@@ -15,6 +15,7 @@ import {
 } from "./economics.js";
 import {
   MARGIN_WARNING_THRESHOLD_USD,
+  RECEIPT_POLL_MAX_PAGES,
   RECEIPT_POLL_PAGE_LIMIT,
 } from "./constants.js";
 
@@ -32,31 +33,63 @@ export async function pollReceipts(db: Db): Promise<PollReceiptsResult> {
   // Poll all paid receipts. We don't filter on was_shipped — Etsy↔Printify
   // handles fulfillment, so we want every paid order in our metrics. The
   // unique constraint on orders.etsy_order_id gives us free dedup, so
-  // re-scanning the same window every cron tick is safe and cheap.
-  const receipts = await listReceipts(db, {
-    was_paid: true,
-    limit: RECEIPT_POLL_PAGE_LIMIT,
-  });
-  result.scanned = receipts.length;
+  // re-scanning the same window every run is safe and cheap.
+  //
+  // Page through with increasing offset until the queue is drained. Runs are
+  // manual today, so a >100-receipt backlog between runs is realistic; a single
+  // page would silently drop the oldest orders forever (M3). The short-page stop
+  // is the correctness guarantee (with the RECEIPT_POLL_MAX_PAGES ceiling); the
+  // all-duplicate-page early-exit below is a cheap optimization that relies on
+  // Etsy's documented most-recent-first ordering.
+  for (let page = 0; page < RECEIPT_POLL_MAX_PAGES; page++) {
+    const offset = page * RECEIPT_POLL_PAGE_LIMIT;
+    const receipts = await listReceipts(db, {
+      was_paid: true,
+      limit: RECEIPT_POLL_PAGE_LIMIT,
+      offset,
+    });
+    result.scanned += receipts.length;
 
-  for (const receipt of receipts) {
-    try {
-      const outcome = await logReceipt(db, receipt);
-      if (outcome === "duplicate") {
-        result.duplicate++;
-      } else if (outcome === "error") {
+    let pageDuplicates = 0;
+    for (const receipt of receipts) {
+      try {
+        const outcome = await logReceipt(db, receipt);
+        if (outcome === "duplicate") {
+          result.duplicate++;
+          pageDuplicates++;
+        } else if (outcome === "error") {
+          result.errored++;
+        } else {
+          result.logged++;
+        }
+      } catch (err) {
         result.errored++;
-      } else {
-        result.logged++;
+        log.error({
+          agent: "ledger",
+          action: "receipt_poll_item_error",
+          receipt_id: receipt.receipt_id,
+          error: String(err),
+        });
       }
-    } catch (err) {
-      result.errored++;
-      log.error({
-        agent: "ledger",
-        action: "receipt_poll_item_error",
-        receipt_id: receipt.receipt_id,
-        error: String(err),
-      });
+    }
+
+    log.info({
+      agent: "ledger",
+      action: "receipt_poll_page",
+      page,
+      offset,
+      page_size: receipts.length,
+    });
+
+    // Last page reached — fewer than a full page means there's nothing beyond.
+    if (receipts.length < RECEIPT_POLL_PAGE_LIMIT) break;
+
+    // Early-exit: an entire page we've already logged means we've caught up to
+    // previously-seen orders. Safe because Etsy returns receipts newest-first,
+    // so everything past this page is older and already logged too.
+    if (pageDuplicates === receipts.length) {
+      log.info({ agent: "ledger", action: "receipt_poll_caught_up", page, offset });
+      break;
     }
   }
 

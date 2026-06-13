@@ -207,4 +207,90 @@ describe("pollReceipts (ledger)", () => {
     );
   });
 
+  // ── M3: pagination ────────────────────────────────────────────────────────
+
+  // Build `count` distinct receipts whose ids start at `startId` so dedup never
+  // collapses them across pages.
+  function makeReceipts(count: number, startId: number) {
+    return Array.from({ length: count }, (_, i) => ({
+      ...BASE_RECEIPT,
+      receipt_id: startId + i,
+    }));
+  }
+
+  it("pages through with increasing offset until a short page ends the scan", async () => {
+    const PAGE = 100;
+    // offset 0 → full page, offset 100 → full page, offset 200 → short page.
+    const listReceiptsSpy = vi
+      .fn()
+      .mockImplementation(async (_db: unknown, params: { offset?: number }) => {
+        const offset = params.offset ?? 0;
+        if (offset === 0) return makeReceipts(PAGE, 0);
+        if (offset === PAGE) return makeReceipts(PAGE, 1000);
+        if (offset === 2 * PAGE) return makeReceipts(50, 2000);
+        return [];
+      });
+    vi.doMock("@presswork/shared", async () => ({
+      ...(await import("@presswork/shared")),
+      listReceipts: listReceiptsSpy,
+      notifySlack: vi.fn(),
+    }));
+
+    const { pollReceipts } = await import("./receipt-poller.js");
+    const db = makeDbMock();
+    const result = await pollReceipts({ from: db.from } as never);
+
+    // 100 + 100 + 50 all logged; scan stops at the short page (3 calls total).
+    expect(result.scanned).toBe(250);
+    expect(result.logged).toBe(250);
+    expect(listReceiptsSpy).toHaveBeenCalledTimes(3);
+    expect(listReceiptsSpy.mock.calls.map((c) => c[1].offset)).toEqual([0, 100, 200]);
+    expect(db.insertCalls).toHaveLength(250);
+  });
+
+  it("stops early when an entire page is already-logged duplicates", async () => {
+    const PAGE = 100;
+    const listReceiptsSpy = vi
+      .fn()
+      .mockImplementation(async (_db: unknown, params: { offset?: number }) =>
+        // Always a full page — only the all-duplicate early-exit can stop this.
+        makeReceipts(PAGE, (params.offset ?? 0) * 10)
+      );
+    vi.doMock("@presswork/shared", async () => ({
+      ...(await import("@presswork/shared")),
+      listReceipts: listReceiptsSpy,
+      notifySlack: vi.fn(),
+    }));
+
+    const { pollReceipts } = await import("./receipt-poller.js");
+    // Every insert collides → every receipt is a duplicate.
+    const db = makeDbMock({ insertError: { code: "23505", message: "duplicate key" } });
+    const result = await pollReceipts({ from: db.from } as never);
+
+    // First full page is all duplicates → caught up, stop after one fetch.
+    expect(result.duplicate).toBe(PAGE);
+    expect(listReceiptsSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds a pathological stream of full pages at RECEIPT_POLL_MAX_PAGES", async () => {
+    const { RECEIPT_POLL_MAX_PAGES, RECEIPT_POLL_PAGE_LIMIT } = await import("./constants.js");
+    // Always a full page of fresh receipts: never short, never all-duplicate.
+    const listReceiptsSpy = vi
+      .fn()
+      .mockImplementation(async (_db: unknown, params: { offset?: number }) =>
+        makeReceipts(RECEIPT_POLL_PAGE_LIMIT, params.offset ?? 0)
+      );
+    vi.doMock("@presswork/shared", async () => ({
+      ...(await import("@presswork/shared")),
+      listReceipts: listReceiptsSpy,
+      notifySlack: vi.fn(),
+    }));
+
+    const { pollReceipts } = await import("./receipt-poller.js");
+    const db = makeDbMock();
+    await pollReceipts({ from: db.from } as never);
+
+    expect(listReceiptsSpy).toHaveBeenCalledTimes(RECEIPT_POLL_MAX_PAGES);
+  });
+
 });

@@ -5,6 +5,11 @@ export const RECEIPT_POLL_INTERVAL_MS = 30 * 60 * 1000;
 // the unique constraint on orders.etsy_order_id makes re-scanning safe.
 export const RECEIPT_POLL_PAGE_LIMIT = 100;
 
+// Defensive ceiling on how many pages pollReceipts will fetch in one run. With
+// the 100/page limit this covers 5000 receipts — far beyond any realistic
+// between-run backlog — while guaranteeing a paging bug can't loop forever.
+export const RECEIPT_POLL_MAX_PAGES = 50;
+
 // Slack alert threshold (USD). Margin below this on a freshly-logged order
 // fires a per-order warning; the daily digest still summarises totals.
 export const MARGIN_WARNING_THRESHOLD_USD = 5.0;

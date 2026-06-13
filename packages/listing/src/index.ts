@@ -125,6 +125,35 @@ async function fetchDesign(db: ReturnType<typeof getDb>, designId: string) {
   return data;
 }
 
+/**
+ * Park a listings row at status='error' with an explanatory message. Used when
+ * a pending row can't be turned into publishable work (e.g. its design FK is
+ * missing or its design has a null trend_brief_id). Mirrors the null-FK park in
+ * fetchPendingListing: error stays ON the listings row — Listing NEVER writes
+ * design_packages.status/error_message (pipeline contract). A failed park is
+ * logged (not thrown) so it can't crash the drain loop it exists to protect.
+ */
+async function parkListingError(
+  db: ReturnType<typeof getDb>,
+  listingId: string,
+  message: string
+): Promise<void> {
+  const log = getLogger("listing");
+  const { error } = await db
+    .from("listings")
+    .update({ status: "error", error_message: message })
+    .eq("id", listingId);
+  if (error) {
+    log.error({
+      action: "park_listing_error_write_failed",
+      record_id: listingId,
+      error: error.message,
+    });
+    return;
+  }
+  log.error({ action: "listing_parked_error", record_id: listingId, status: "error" });
+}
+
 export async function run(): Promise<void> {
   const log = getLogger("listing");
   const db = getDb();
@@ -154,8 +183,35 @@ export async function run(): Promise<void> {
     // residue from prior agent runs that left listings at 'pending'.
     const pending = await fetchPendingListing(db);
     if (pending) {
-      const design = await fetchDesign(db, pending.design_package_id);
-      const brief = await fetchTrendBrief(db, design.trend_brief_id ?? "");
+      // Resolve the design + brief INSIDE a try (M4): a missing/corrupt design
+      // FK or a design with a null trend_brief_id must error-park THIS listing
+      // and let the drain loop continue — not throw out of run() and starve
+      // every row behind it. The listings row is the unit of work; the error
+      // lands there (pipeline contract: never on design_packages).
+      let design: Awaited<ReturnType<typeof fetchDesign>>;
+      let brief: Awaited<ReturnType<typeof fetchTrendBrief>>;
+      try {
+        design = await fetchDesign(db, pending.design_package_id);
+        if (!design.trend_brief_id) {
+          await parkListingError(
+            db,
+            pending.id,
+            `design ${pending.design_package_id} has a null trend_brief_id — cannot resolve the brief needed to publish.`
+          );
+          continue;
+        }
+        brief = await fetchTrendBrief(db, design.trend_brief_id);
+      } catch (e) {
+        // A fetch failure means there's no work to hand publishOne. publishOne
+        // never ran, so it didn't write any failure state — park the row here.
+        await parkListingError(
+          db,
+          pending.id,
+          `Failed to load design/brief for listing: ${e instanceof Error ? e.message : String(e)}`
+        );
+        continue;
+      }
+
       try {
         await publishOne(
           db,

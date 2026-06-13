@@ -66,30 +66,50 @@ async function mustWrite(q: PromiseLike<WriteResult>, ctx: string): Promise<void
 }
 
 /**
- * Awaits a secondary DB write on the error path. Unlike mustWrite, this NEVER
- * throws — throwing here would mask the original failure that put us on the catch
- * path. On a dropped write it logs and fires a Slack alert that the row may be
- * stuck. Mirrors packages/design/main.py's error handler, where each secondary
- * write is individually guarded so the alert always fires.
+ * Atomically increments retry_count and sets the row's next status via the
+ * increment_listing_retry RPC (M6 — replaces the race-prone read-then-write).
+ * `retryStatus` is the status to set while retries remain ('pending' for
+ * publishOne, 'pending_publish' for resumePublish); at MAX_RETRIES the RPC
+ * parks the row at 'error' instead. Returns the new (post-increment)
+ * retry_count, or null when the write failed or the row vanished.
+ *
+ * On failure it preserves the H4 protection: logs + fires a Slack alert that
+ * the row may be stuck, and NEVER throws — the caller is already on the error
+ * path and must re-raise the original failure. Mirrors packages/design/main.py's
+ * error handler, where each secondary write is individually guarded so the
+ * alert always fires.
  */
-async function tryWriteOrAlert(
-  q: PromiseLike<WriteResult>,
+async function bumpRetryOrAlert(
+  db: Db,
   listingId: string,
+  message: string,
+  retryStatus: "pending" | "pending_publish",
   ctx: string
-): Promise<void> {
-  const result = await q;
-  if (!result.error) return;
+): Promise<number | null> {
+  const { data, error } = await db.rpc("increment_listing_retry", {
+    p_listing_id: listingId,
+    p_error_message: message,
+    p_retry_status: retryStatus,
+    p_max_retries: MAX_RETRIES,
+  });
+  if (!error && data != null) {
+    return data as number;
+  }
+  const reason = error
+    ? error.message
+    : "no row updated (listing may have been deleted)";
   getLogger("listing").error({
     action: "error_path_write_failed",
     record_id: listingId,
-    error: result.error.message,
+    error: reason,
   });
   // notifySlack absorbs its own errors, so a Slack outage can't re-mask the
   // original failure that we're still about to propagate.
   await notifySlack(
-    `Listing ${listingId} may be stuck: ${ctx} failed (${result.error.message}). The row was not updated to its terminal/retry state.`,
+    `Listing ${listingId} may be stuck: ${ctx} failed (${reason}). The row was not updated to its terminal/retry state.`,
     { severity: "error" }
   );
+  return null;
 }
 
 /**
@@ -352,53 +372,25 @@ export async function publishOne(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
 
-    // Update only the listings row. design.status/error_message are
-    // off-limits per the pipeline contract (see header).
-    const { data: current, error: readErr } = await db
-      .from("listings")
-      .select("retry_count")
-      .eq("id", listingId)
-      .single();
+    // Atomic increment + status decision (M6). The RPC sets status='pending'
+    // while retries remain or parks at 'error' at the cap, all in one UPDATE,
+    // and returns the new count — no read-then-write race. Updates only the
+    // listings row; design.status/error_message are off-limits per the
+    // pipeline contract (see header). On a dropped write bumpRetryOrAlert
+    // alerts (H4) and returns null without throwing, so we re-raise `err`.
+    const newRetryCount = await bumpRetryOrAlert(
+      db,
+      listingId,
+      message,
+      "pending",
+      "publishOne retry increment"
+    );
 
-    let retryCount: number;
-    let recordedMessage = message;
-    if (readErr) {
-      log.error({
-        action: "retry_count_read_failed",
-        record_id: listingId,
-        error: readErr.message,
-      });
-      recordedMessage = `${message} (retry_count read failed: ${readErr.message}; forcing terminal)`;
-      retryCount = MAX_RETRIES;
-    } else {
-      retryCount = ((current as { retry_count?: number } | null)?.retry_count ?? 0) + 1;
-    }
-
-    if (retryCount < MAX_RETRIES) {
-      // tryWriteOrAlert: if this write is dropped the row is stranded at
-      // 'processing' with no terminal/retry state (H4). Alert, never throw —
-      // throwing would mask the original `err` we re-raise below.
-      await tryWriteOrAlert(
-        db
-          .from("listings")
-          .update({ status: "pending", error_message: recordedMessage, retry_count: retryCount })
-          .eq("id", listingId),
-        listingId,
-        "publishOne error-path write (status=pending)"
-      );
-    } else {
-      await tryWriteOrAlert(
-        db
-          .from("listings")
-          .update({ status: "error", error_message: recordedMessage, retry_count: retryCount })
-          .eq("id", listingId),
-        listingId,
-        "publishOne error-path write (status=error)"
-      );
+    if (newRetryCount !== null && newRetryCount >= MAX_RETRIES) {
       // Terminal-error alert (AUDIT_4 H2). notifySlack absorbs its own
       // errors so a Slack outage can't mask the original failure.
       await notifySlack(
-        `Listing terminal error (id=${listingId}, retry_count=${retryCount}): ${recordedMessage}`,
+        `Listing terminal error (id=${listingId}, retry_count=${newRetryCount}): ${message}`,
         { severity: "error" }
       );
     }
@@ -406,7 +398,7 @@ export async function publishOne(
     log.error({
       action: "publish_failed",
       record_id: listingId,
-      status: "error",
+      status: newRetryCount !== null && newRetryCount < MAX_RETRIES ? "pending" : "error",
       duration_ms: Date.now() - t0,
       error: message,
     });
@@ -727,38 +719,30 @@ export async function resumePublish(
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const retryCount = listing.retry_count + 1;
 
-    if (retryCount < MAX_RETRIES) {
-      // tryWriteOrAlert: a dropped error here strands the row at 'publishing'
-      // with no retry state (H4). Alert, never throw — throwing would mask the
-      // original `err` re-raised below.
-      await tryWriteOrAlert(
-        db
-          .from("listings")
-          .update({ status: "pending_publish", error_message: message, retry_count: retryCount })
-          .eq("id", listingId),
-        listingId,
-        "resumePublish error-path write (status=pending_publish)"
-      );
-    } else {
-      await tryWriteOrAlert(
-        db
-          .from("listings")
-          .update({ status: "error", error_message: message, retry_count: retryCount })
-          .eq("id", listingId),
-        listingId,
-        "resumePublish error-path write (status=error)"
-      );
-      // Pipeline contract: do NOT propagate the listing's error to
-      // design_packages. The design's job ended when Listing claimed it;
-      // any failure during publish lives entirely on the listings row.
-      // (See header on publishOne for the full contract.)
-      // Terminal-error alert (AUDIT_4 H2). resumePublish shares the retry
-      // budget with publishOne, so the alert fires from whichever function
-      // reaches MAX_RETRIES first.
+    // Atomic increment + status decision (M6): 'pending_publish' while retries
+    // remain, 'error' at the cap. Replaces the stale listing.retry_count read
+    // taken BEFORE the attempt started, which could double-spend a life across
+    // overlapping runs. A dropped write strands the row at 'publishing'; in
+    // that case bumpRetryOrAlert alerts (H4) and returns null without throwing,
+    // so the original `err` is the one re-raised below.
+    //
+    // Pipeline contract: the listing's error is NEVER propagated to
+    // design_packages — any publish failure lives entirely on the listings row.
+    // resumePublish shares the retry budget with publishOne (same MAX_RETRIES),
+    // so the terminal alert fires from whichever reaches the cap first.
+    const newRetryCount = await bumpRetryOrAlert(
+      db,
+      listingId,
+      message,
+      "pending_publish",
+      "resumePublish retry increment"
+    );
+
+    if (newRetryCount !== null && newRetryCount >= MAX_RETRIES) {
+      // Terminal-error alert (AUDIT_4 H2).
       await notifySlack(
-        `Listing terminal error in resume (id=${listingId}, retry_count=${retryCount}): ${message}`,
+        `Listing terminal error in resume (id=${listingId}, retry_count=${newRetryCount}): ${message}`,
         { severity: "error" }
       );
     }
@@ -766,7 +750,7 @@ export async function resumePublish(
     log.error({
       action: "resume_publish_failed",
       record_id: listingId,
-      status: "error",
+      status: newRetryCount !== null && newRetryCount < MAX_RETRIES ? "pending_publish" : "error",
       duration_ms: Date.now() - t0,
       error: message,
     });
