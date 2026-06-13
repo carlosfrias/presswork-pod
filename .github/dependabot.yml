@@ -9,6 +9,14 @@ updates:
     open-pull-requests-limit: 5
     groups:
       minor-and-patch:
+        patterns: ["*"]
+        exclude-patterns:
+          # @anthropic-ai/sdk uses 0.x versioning, so a breaking bump registers
+          # as "minor" (major stays 0) and slips into this group despite the
+          # "majors ungrouped" intent — e.g. 0.30.1→0.100.1 removed the
+          # beta.promptCaching namespace and broke the build. Keep it out of the
+          # group so its bumps land as solo PRs for deliberate review/migration.
+          - "@anthropic-ai/sdk"
         update-types: ["minor", "patch"]
 
   # GitHub Actions used in .github/workflows/.
