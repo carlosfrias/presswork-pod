@@ -1,3 +1,5 @@
+import { printCostForBlueprint } from "@presswork/shared";
+
 export const MAX_ETSY_REQ_PER_SEC = 10;
 export const MAX_ETSY_REQ_PER_DAY = 10000;
 
@@ -8,8 +10,17 @@ export const LISTING_DEFAULTS = {
   state: "draft",
 } as const;
 
-// Gildan 64000 base print cost in USD (v1 single-product scope)
-export const GILDAN_64000_PRINT_COST_USD = 10.09;
+// Gildan 64000 base print cost in USD. Derived from the canonical per-blueprint
+// map in @presswork/shared (BLUEPRINT_PRINT_COST_USD[145]) so this economic fact
+// lives in exactly one place. Kept as a named export for back-compat with any
+// consumer that still imports it from here. New code should prefer
+// printCostForBlueprint(blueprintId) from @presswork/shared.
+//
+// WARNING: this runs at IMPORT TIME. printCostForBlueprint throws for an
+// unregistered blueprint, so if blueprint 145 is ever removed from
+// BLUEPRINT_PRINT_COST_USD in @presswork/shared, merely importing this module
+// will throw and take down every consumer of packages/listing/src/constants.ts.
+export const GILDAN_64000_PRINT_COST_USD = printCostForBlueprint(145);
 
 // Per-blueprint default variant price (in cents) sent to Printify on create-product.
 // Printify requires variants.*.price > 0 even for hidden products. The buyer-facing

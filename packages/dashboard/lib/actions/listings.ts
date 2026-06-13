@@ -3,9 +3,13 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 
-// Print cost for the only currently-supported blueprint (Gildan 64000).
-// Mirrors GILDAN_64000_PRINT_COST_USD in packages/listing/src/constants.ts.
-const PRINT_COST_USD = 10.09;
+// Print cost is resolved from the shared per-blueprint map (single source of
+// truth — also consumed by the Listing publisher and Ledger economics). The
+// dashboard floor is not yet blueprint-aware, so it defaults to blueprint 145
+// (Gildan 64000). Resolve via printCostForBlueprint so a missing entry throws
+// loudly rather than silently treating an unknown blueprint as free.
+const DASHBOARD_FLOOR_BLUEPRINT_ID = 145;
+const PRINT_COST_USD = printCostForBlueprint(DASHBOARD_FLOOR_BLUEPRINT_ID);
 const PRICING_FLOOR_MULTIPLIER = 2.5;
 const PRICE_FLOOR_USD = PRINT_COST_USD * PRICING_FLOOR_MULTIPLIER; // $25.23
 // Cap per-color Dynamic Mockups renders: each is a paid API call, and Etsy only
@@ -25,6 +29,7 @@ import {
   renderMockup,
   DynamicMockupsApiError,
   getLogger,
+  printCostForBlueprint,
 } from "@presswork/shared";
 import { resumePublish } from "@presswork/listing/publish";
 import { serviceClient } from "@/lib/supabase/server";
@@ -719,6 +724,23 @@ export async function regenerateCopy(formData: FormData) {
   await assertOwner();
   const id = idSchema.parse(formData.get("id"));
   const db = serviceClient();
+
+  // Stale-tab guard: only regenerate copy from a pre-publish state. Firing
+  // against an 'active' (or in-flight) listing would null the live copy and
+  // demote it — an illegal transition the value-only CHECK constraint can't
+  // catch. Mirrors the approveListing pre-read + repeated status filter.
+  const { data: row } = await db
+    .from("listings")
+    .select("status")
+    .eq("id", id)
+    .maybeSingle();
+  if (!row) throw new Error("Listing not found");
+  if (row.status !== "needs_review" && row.status !== "error") {
+    throw new Error(
+      `Cannot regenerate copy from status='${row.status}' — allowed statuses are 'needs_review' and 'error'.`
+    );
+  }
+
   const { error } = await db
     .from("listings")
     .update({
@@ -728,7 +750,8 @@ export async function regenerateCopy(formData: FormData) {
       tags: null,
       error_message: null,
     })
-    .eq("id", id);
+    .eq("id", id)
+    .in("status", ["needs_review", "error"]); // optimistic concurrency guard
   if (error) throw new Error(`Regenerate copy failed: ${error.message}`);
   revalidatePath("/listings");
   revalidatePath(`/listings/${id}`);
@@ -738,6 +761,23 @@ export async function recreatePrintifyProduct(formData: FormData) {
   await assertOwner();
   const id = idSchema.parse(formData.get("id"));
   const db = serviceClient();
+
+  // Stale-tab guard: only recreate from a pre-publish state. From 'active' this
+  // would null printify_product_id and re-queue a row whose publish then fails
+  // repeatedly on publishOne's is_active guard. Mirrors the approveListing
+  // pre-read + repeated status filter.
+  const { data: row } = await db
+    .from("listings")
+    .select("status")
+    .eq("id", id)
+    .maybeSingle();
+  if (!row) throw new Error("Listing not found");
+  if (row.status !== "needs_review" && row.status !== "error") {
+    throw new Error(
+      `Cannot recreate Printify product from status='${row.status}' — allowed statuses are 'needs_review' and 'error'.`
+    );
+  }
+
   const { error } = await db
     .from("listings")
     .update({
@@ -745,7 +785,8 @@ export async function recreatePrintifyProduct(formData: FormData) {
       printify_product_id: null,
       error_message: null,
     })
-    .eq("id", id);
+    .eq("id", id)
+    .in("status", ["needs_review", "error"]); // optimistic concurrency guard
   if (error) throw new Error(`Recreate Printify product failed: ${error.message}`);
   revalidatePath("/listings");
   revalidatePath(`/listings/${id}`);
@@ -827,6 +868,30 @@ export async function retryListing(formData: FormData) {
   await assertOwner();
   const id = idSchema.parse(formData.get("id"));
   const db = serviceClient();
+
+  // Stale-tab guard: retry is only meaningful from 'error'. Mirrors the
+  // approveListing pre-read + repeated status filter.
+  const { data: row } = await db
+    .from("listings")
+    .select("status, design_package_id")
+    .eq("id", id)
+    .maybeSingle();
+  if (!row) throw new Error("Listing not found");
+  if (row.status !== "error") {
+    throw new Error(
+      `Cannot retry from status='${row.status}' — retry is only allowed from 'error'.`
+    );
+  }
+  // H1: a row with a null design_package_id (e.g. one whose design was sent
+  // back via rejectListing) has no work to do — flipping it to 'pending' would
+  // stick at the head of the Listing queue forever (fetchPendingListing skips
+  // null-FK rows). Refuse so the operator routes it correctly instead.
+  if (!row.design_package_id) {
+    throw new Error(
+      "Cannot retry: this listing has no linked design — send the design back to review or delete the listing instead."
+    );
+  }
+
   const { error } = await db
     .from("listings")
     .update({
@@ -834,7 +899,8 @@ export async function retryListing(formData: FormData) {
       retry_count: 0,
       error_message: null,
     })
-    .eq("id", id);
+    .eq("id", id)
+    .eq("status", "error"); // optimistic concurrency guard
   if (error) throw new Error(`Retry failed: ${error.message}`);
   revalidatePath("/listings");
   revalidatePath(`/listings/${id}`);

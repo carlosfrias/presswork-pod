@@ -12,6 +12,7 @@ import {
   getLogger,
   getSettings,
   notifySlack,
+  printCostForBlueprint,
   sanitizeListingCopy,
   POD_VARIANT_QUANTITY,
   validateVariantIds,
@@ -29,7 +30,6 @@ import {
   validateProductionPartnerId,
 } from "./compliance.js";
 import {
-  GILDAN_64000_PRINT_COST_USD,
   assertBlueprintSupported,
   blueprintMaterials,
   blueprintProcessingDays,
@@ -47,6 +47,49 @@ export class PublisherError extends Error {
     super(message);
     this.name = "PublisherError";
   }
+}
+
+/** Shape every supabase-js query resolves to: a (possibly null) error object. */
+type WriteResult = { error: { message: string } | null };
+
+/**
+ * Awaits a supabase-js write and throws a PublisherError if it failed.
+ * supabase-js never rejects on a DB error — it resolves with `{ error }` — so an
+ * unawaited `.update(...)` silently drops failures. Use this at checkpoints where
+ * a dropped write would leave the row in an unrecoverable state.
+ */
+async function mustWrite(q: PromiseLike<WriteResult>, ctx: string): Promise<void> {
+  const result = await q;
+  if (result.error) {
+    throw new PublisherError(`${ctx}: ${result.error.message}`);
+  }
+}
+
+/**
+ * Awaits a secondary DB write on the error path. Unlike mustWrite, this NEVER
+ * throws — throwing here would mask the original failure that put us on the catch
+ * path. On a dropped write it logs and fires a Slack alert that the row may be
+ * stuck. Mirrors packages/design/main.py's error handler, where each secondary
+ * write is individually guarded so the alert always fires.
+ */
+async function tryWriteOrAlert(
+  q: PromiseLike<WriteResult>,
+  listingId: string,
+  ctx: string
+): Promise<void> {
+  const result = await q;
+  if (!result.error) return;
+  getLogger("listing").error({
+    action: "error_path_write_failed",
+    record_id: listingId,
+    error: result.error.message,
+  });
+  // notifySlack absorbs its own errors, so a Slack outage can't re-mask the
+  // original failure that we're still about to propagate.
+  await notifySlack(
+    `Listing ${listingId} may be stuck: ${ctx} failed (${result.error.message}). The row was not updated to its terminal/retry state.`,
+    { severity: "error" }
+  );
 }
 
 /**
@@ -146,7 +189,10 @@ export async function publishOne(
         : (brief.price_target_usd ?? 0) > 0
           ? brief.price_target_usd!
           : defaultEtsyPriceUsd(design.printify_blueprint_id ?? 145);
-    validatePricingFloor(priceUsd, GILDAN_64000_PRINT_COST_USD);
+    validatePricingFloor(
+      priceUsd,
+      printCostForBlueprint(design.printify_blueprint_id ?? 145)
+    );
     const { ETSY_PRODUCTION_PARTNER_ID } = getSettings();
     validateProductionPartnerId(ETSY_PRODUCTION_PARTNER_ID);
 
@@ -329,15 +375,26 @@ export async function publishOne(
     }
 
     if (retryCount < MAX_RETRIES) {
-      await db
-        .from("listings")
-        .update({ status: "pending", error_message: recordedMessage, retry_count: retryCount })
-        .eq("id", listingId);
+      // tryWriteOrAlert: if this write is dropped the row is stranded at
+      // 'processing' with no terminal/retry state (H4). Alert, never throw —
+      // throwing would mask the original `err` we re-raise below.
+      await tryWriteOrAlert(
+        db
+          .from("listings")
+          .update({ status: "pending", error_message: recordedMessage, retry_count: retryCount })
+          .eq("id", listingId),
+        listingId,
+        "publishOne error-path write (status=pending)"
+      );
     } else {
-      await db
-        .from("listings")
-        .update({ status: "error", error_message: recordedMessage, retry_count: retryCount })
-        .eq("id", listingId);
+      await tryWriteOrAlert(
+        db
+          .from("listings")
+          .update({ status: "error", error_message: recordedMessage, retry_count: retryCount })
+          .eq("id", listingId),
+        listingId,
+        "publishOne error-path write (status=error)"
+      );
       // Terminal-error alert (AUDIT_4 H2). notifySlack absorbs its own
       // errors so a Slack outage can't mask the original failure.
       await notifySlack(
@@ -398,6 +455,11 @@ async function executeEtsyPublish(
   validateProductionPartnerId(ETSY_PRODUCTION_PARTNER_ID);
   validateMockupProvenance(mockupsFromActualDesign);
   validateCopyCompliance(copy);
+  // M1: re-run the pricing floor at the chokepoint (non-negotiable rule #3).
+  // resumePublish passes `listing.price_usd ?? 0`, so a 0/below-floor row that
+  // drifted past the dashboard guards is caught here before any Etsy call. The
+  // blueprint id travels with the inventory facts.
+  validatePricingFloor(priceUsd, printCostForBlueprint(inventoryFacts.blueprintId));
 
   // Resume guard: if a prior attempt created an Etsy draft, reuse it. Persisting
   // etsy_listing_id immediately after createDraftListing (below) means any later
@@ -440,10 +502,12 @@ async function executeEtsyPublish(
     etsyListingId = listing_id;
     // Persist immediately, BEFORE attempting image upload or activation, so any
     // failure between here and the final 'active' write doesn't strand the draft.
-    await db
-      .from("listings")
-      .update({ etsy_listing_id: etsyListingId })
-      .eq("id", listingId);
+    // mustWrite: a dropped error here would leave the freshly-created Etsy draft's
+    // id unrecorded, so a resume reads null and POSTs a SECOND draft (H4).
+    await mustWrite(
+      db.from("listings").update({ etsy_listing_id: etsyListingId }).eq("id", listingId),
+      "persist etsy_listing_id after createDraftListing"
+    );
   }
 
   // Variant inventory must land before activation — without it the listing
@@ -500,10 +564,14 @@ async function executeEtsyPublish(
   // later failure can't leave a live listing whose DB row still says
   // pending_publish/error (a state the operator can't reconcile).
   await activateListing(db, etsyListingId);
-  await db
-    .from("listings")
-    .update({ status: "active", is_active: true })
-    .eq("id", listingId);
+  // mustWrite: the listing is now LIVE on Etsy. A dropped error here strands the
+  // row at 'publishing' while a buyable listing exists — the exact unreconcilable
+  // state the comment above forbids (H4). Throwing surfaces it to the caller's
+  // catch, which alerts; the watchdog/operator can then reconcile the live row.
+  await mustWrite(
+    db.from("listings").update({ status: "active", is_active: true }).eq("id", listingId),
+    "persist active/is_active after activateListing"
+  );
 
   // Printify visibility is cosmetic relative to the Etsy listing already being
   // live, so it's best-effort — a failure here must NOT throw and roll the row
@@ -631,7 +699,14 @@ export async function resumePublish(
 
   try {
     // Same checkpoint as publishOne: mark 'publishing' before talking to Etsy.
-    await db.from("listings").update({ status: "publishing" }).eq("id", listingId);
+    // mustWrite: throwing here is correct — no Etsy calls have fired yet, the row
+    // is still at 'pending_publish', so surfacing the dropped write keeps the
+    // retry path clean (the catch below re-queues to pending_publish) rather than
+    // silently driving the Etsy publish off a row that never left pending_publish.
+    await mustWrite(
+      db.from("listings").update({ status: "publishing" }).eq("id", listingId),
+      "set status=publishing before executeEtsyPublish"
+    );
 
     await executeEtsyPublish(
       db,
@@ -655,15 +730,26 @@ export async function resumePublish(
     const retryCount = listing.retry_count + 1;
 
     if (retryCount < MAX_RETRIES) {
-      await db
-        .from("listings")
-        .update({ status: "pending_publish", error_message: message, retry_count: retryCount })
-        .eq("id", listingId);
+      // tryWriteOrAlert: a dropped error here strands the row at 'publishing'
+      // with no retry state (H4). Alert, never throw — throwing would mask the
+      // original `err` re-raised below.
+      await tryWriteOrAlert(
+        db
+          .from("listings")
+          .update({ status: "pending_publish", error_message: message, retry_count: retryCount })
+          .eq("id", listingId),
+        listingId,
+        "resumePublish error-path write (status=pending_publish)"
+      );
     } else {
-      await db
-        .from("listings")
-        .update({ status: "error", error_message: message, retry_count: retryCount })
-        .eq("id", listingId);
+      await tryWriteOrAlert(
+        db
+          .from("listings")
+          .update({ status: "error", error_message: message, retry_count: retryCount })
+          .eq("id", listingId),
+        listingId,
+        "resumePublish error-path write (status=error)"
+      );
       // Pipeline contract: do NOT propagate the listing's error to
       // design_packages. The design's job ended when Listing claimed it;
       // any failure during publish lives entirely on the listings row.

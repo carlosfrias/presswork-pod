@@ -80,6 +80,14 @@ type DbMockOpts = {
   catalogVariantIds?: number[];
   /** Surface an error on the printify_variant_catalog read. */
   catalogReadError?: string;
+  /**
+   * Surface a write error on the first awaited `listings` UPDATE whose data
+   * contains the given field key (e.g. "etsy_listing_id" or "is_active"). Used
+   * to exercise the mustWrite checkpoints (H4) where a dropped write would
+   * leave the row unrecoverable. supabase-js resolves `{ error }` rather than
+   * rejecting, so the mock mirrors that by returning the error on `.then`.
+   */
+  writeErrorOnField?: { field: string; message: string };
 };
 
 type CaptureEntry = { table: string; data: Record<string, unknown> };
@@ -87,6 +95,9 @@ type CaptureEntry = { table: string; data: Record<string, unknown> };
 function makeDb(updates: CaptureEntry[], opts: DbMockOpts = {}) {
   let currentTable = "";
   let currentSelectCols = "";
+  // Tracks the most recent .update() payload so the thenable can decide whether
+  // to surface a write error for it (writeErrorOnField).
+  let lastUpdateData: Record<string, unknown> | null = null;
 
   const builder = {
     insert: vi.fn(),
@@ -107,6 +118,7 @@ function makeDb(updates: CaptureEntry[], opts: DbMockOpts = {}) {
   builder.insert.mockImplementation(() => builder);
   builder.update.mockImplementation((data: Record<string, unknown>) => {
     updates.push({ table: currentTable, data });
+    lastUpdateData = data;
     return builder;
   });
   builder.select.mockImplementation((cols?: string) => {
@@ -126,6 +138,13 @@ function makeDb(updates: CaptureEntry[], opts: DbMockOpts = {}) {
             data: (opts.catalogVariantIds ?? []).map((variant_id) => ({ variant_id })),
             error: null,
           };
+    } else if (
+      currentTable === "listings" &&
+      opts.writeErrorOnField &&
+      lastUpdateData !== null &&
+      opts.writeErrorOnField.field in lastUpdateData
+    ) {
+      result = { data: null, error: { message: opts.writeErrorOnField.message } };
     } else {
       result = { data: null, error: null };
     }
@@ -347,7 +366,7 @@ describe("publishOne", () => {
         title: COMPLIANT_TITLE,
         description: COMPLIANT_DESCRIPTION,
         tags: COMPLIANT_TAGS,
-        price_usd: 24.99,
+        price_usd: 26.99,
         printify_product_id: PRODUCT_ID,
         is_active: false,
         retry_count: 0,
@@ -504,7 +523,7 @@ describe("publishOne", () => {
         title: COMPLIANT_TITLE,
         description: COMPLIANT_DESCRIPTION,
         tags: COMPLIANT_TAGS,
-        price_usd: 24.99,
+        price_usd: 26.99,
         printify_product_id: PRODUCT_ID,
         is_active: false,
         retry_count: 0,
@@ -700,7 +719,7 @@ describe("publishOne", () => {
         title: COMPLIANT_TITLE,
         description: COMPLIANT_DESCRIPTION,
         tags: COMPLIANT_TAGS,
-        price_usd: 24.99,
+        price_usd: 26.99,
         printify_product_id: PRODUCT_ID,
         is_active: false,
         retry_count: 0,
@@ -743,7 +762,7 @@ describe("publishOne", () => {
         title: COMPLIANT_TITLE,
         description: COMPLIANT_DESCRIPTION,
         tags: COMPLIANT_TAGS,
-        price_usd: 24.99,
+        price_usd: 26.99,
         printify_product_id: "existing-product-xyz",
         is_active: false,
         retry_count: 1,
@@ -793,7 +812,7 @@ describe("publishOne", () => {
         title: COMPLIANT_TITLE,
         description: COMPLIANT_DESCRIPTION,
         tags: COMPLIANT_TAGS,
-        price_usd: 24.99,
+        price_usd: 26.99,
         printify_product_id: "existing-product-xyz",
         is_active: false,
         retry_count: 0,
@@ -852,7 +871,7 @@ describe("publishOne", () => {
         title: COMPLIANT_TITLE,
         description: COMPLIANT_DESCRIPTION,
         tags: COMPLIANT_TAGS,
-        price_usd: 24.99,
+        price_usd: 26.99,
         printify_product_id: "existing-product-xyz",
         is_active: false,
         retry_count: 1,
@@ -918,7 +937,7 @@ describe("publishOne", () => {
         title: COMPLIANT_TITLE,
         description: COMPLIANT_DESCRIPTION,
         tags: COMPLIANT_TAGS,
-        price_usd: 24.99,
+        price_usd: 26.99,
         printify_product_id: "existing-product-xyz",
         is_active: false,
         retry_count: 0,
@@ -1062,7 +1081,7 @@ describe("publishOne", () => {
         title: COMPLIANT_TITLE,
         description: COMPLIANT_DESCRIPTION,
         tags: COMPLIANT_TAGS,
-        price_usd: 24.99,
+        price_usd: 26.99,
         printify_product_id: PRODUCT_ID,
         is_active: false,
         retry_count: 2,
@@ -1097,7 +1116,7 @@ describe("publishOne", () => {
         title: COMPLIANT_TITLE,
         description: COMPLIANT_DESCRIPTION,
         tags: COMPLIANT_TAGS,
-        price_usd: 24.99,
+        price_usd: 26.99,
         printify_product_id: "existing-product-xyz",
         is_active: true,
         retry_count: 0,
@@ -1146,7 +1165,7 @@ describe("publishOne", () => {
         title: COMPLIANT_TITLE,
         description: COMPLIANT_DESCRIPTION,
         tags: COMPLIANT_TAGS,
-        price_usd: 24.99,
+        price_usd: 26.99,
         printify_product_id: PRODUCT_ID,
         is_active: false,
         retry_count: 0,
@@ -1457,7 +1476,7 @@ describe("publishOne", () => {
     expect(copyWrite?.data.price_usd).toBe(25.99);
   });
 
-  it("publishOne still rejects $0 price for an unrecognised blueprint (floor guard is not bypassed)", async () => {
+  it("publishOne still rejects an unrecognised blueprint with no usable price (floor guard is not bypassed)", async () => {
     vi.doMock("./copywriter.js", () => ({
       writeCopy: vi.fn().mockResolvedValue({
         title: COMPLIANT_TITLE,
@@ -1487,9 +1506,11 @@ describe("publishOne", () => {
       price_target_usd: null,
     };
 
-    // Blueprint 9999 is not in DEFAULT_ETSY_PRICE_USD_BY_BLUEPRINT → falls back to 0
-    // → validatePricingFloor must still throw.
-    const { PricingFloorError: MockPricingFloorError } = await import("./pricing.js");
+    // Blueprint 9999 has no print cost configured (M2: printCostForBlueprint
+    // throws naming the unknown blueprint). After M2 the publisher resolves the
+    // floor's print cost per blueprint, so an unconfigured blueprint fails loudly
+    // BEFORE the floor comparison rather than being silently checked against the
+    // Gildan cost. The publish is still rejected — the floor guard is not bypassed.
     const unknownBlueprintDesign: DesignPackage = {
       ...design,
       printify_blueprint_id: 9999,
@@ -1499,7 +1520,7 @@ describe("publishOne", () => {
     const { publishOne } = await import("./publisher.js");
     await expect(
       publishOne(db, unknownBlueprintDesign, briefWithoutPrice, LISTING_ID)
-    ).rejects.toThrow(MockPricingFloorError);
+    ).rejects.toThrow(/No print cost configured for blueprint ID 9999/);
   });
 
   it("resumePublish filters printify_variants to selected_variant_ids before building inventory", async () => {
@@ -1535,7 +1556,7 @@ describe("publishOne", () => {
         title: COMPLIANT_TITLE,
         description: COMPLIANT_DESCRIPTION,
         tags: COMPLIANT_TAGS,
-        price_usd: 24.99,
+        price_usd: 26.99,
         printify_product_id: PRODUCT_ID,
         is_active: false,
         retry_count: 0,
@@ -1558,5 +1579,131 @@ describe("publishOne", () => {
     // to one product entry. We just verify the call was made with a truthy payload —
     // the exact shape is covered by inventory.test.ts.
     expect(inventoryArg).toBeDefined();
+  });
+
+  // ── H4 — Unchecked supabase write results at critical checkpoints ────────────
+  //
+  // supabase-js resolves `{ error }` instead of rejecting, so a dropped write at
+  // these chokepoints leaves the row unrecoverable. mustWrite throws on error so
+  // the caller's catch surfaces it; tryWriteOrAlert (error-path) alerts instead
+  // of throwing. These tests assert the critical writes are no longer silent.
+
+  it("throws and does NOT POST a second Etsy draft when the etsy_listing_id write fails (H4)", async () => {
+    mockPrintify();
+    const { createDraftListing } = mockSharedAndEtsy();
+
+    const updates: CaptureEntry[] = [];
+    const db = makeDb(updates, {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending_publish",
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+        price_usd: 26.99,
+        printify_product_id: PRODUCT_ID,
+        is_active: false,
+        retry_count: 0,
+      },
+      // Force the post-createDraftListing persist of etsy_listing_id to fail.
+      writeErrorOnField: { field: "etsy_listing_id", message: "db write timeout" },
+    });
+
+    const { resumePublish, PublisherError } = await import("./publisher.js");
+    await expect(resumePublish(db, LISTING_ID)).rejects.toThrow(PublisherError);
+
+    // The draft was created exactly once; the failed persist must surface as an
+    // error rather than letting a resume silently POST a SECOND draft.
+    expect(createDraftListing).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a failed status=publishing write in resumePublish before any Etsy call (H4)", async () => {
+    const { createDraftListing } = mockSharedAndEtsy();
+    mockPrintify();
+
+    const updates: CaptureEntry[] = [];
+    const db = makeDb(updates, {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending_publish",
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+        price_usd: 26.99,
+        printify_product_id: PRODUCT_ID,
+        is_active: false,
+        retry_count: 0,
+      },
+      // The first awaited `listings` UPDATE in resumePublish is the
+      // { status: "publishing" } checkpoint; force it to fail. No Etsy calls
+      // have fired yet, so mustWrite throwing here keeps the retry path clean.
+      writeErrorOnField: { field: "status", message: "db write timeout" },
+    });
+
+    const { resumePublish, PublisherError } = await import("./publisher.js");
+    await expect(resumePublish(db, LISTING_ID)).rejects.toThrow(PublisherError);
+
+    // The dropped status=publishing write surfaced before executeEtsyPublish,
+    // so no Etsy draft was ever created.
+    expect(createDraftListing).not.toHaveBeenCalled();
+  });
+
+  it("surfaces (does not silently drop) a failed active/is_active write after activation (H4)", async () => {
+    const { setProductVisible } = mockPrintify();
+    setProductVisible.mockResolvedValue(undefined);
+    const { createDraftListing } = mockSharedAndEtsy();
+
+    const updates: CaptureEntry[] = [];
+    const db = makeDb(updates, {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending_publish",
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+        price_usd: 26.99,
+        printify_product_id: PRODUCT_ID,
+        is_active: false,
+        retry_count: 0,
+      },
+      existingEtsyListingId: 5555, // skip draft create; go straight to activation path
+      // Force the post-activateListing 'active' write to fail.
+      writeErrorOnField: { field: "is_active", message: "db write timeout" },
+    });
+
+    const { resumePublish, PublisherError } = await import("./publisher.js");
+    // The listing is live on Etsy but the row couldn't be flipped to active —
+    // mustWrite throws so the catch path can alert rather than leaving it silent.
+    await expect(resumePublish(db, LISTING_ID)).rejects.toThrow(PublisherError);
+    expect(createDraftListing).not.toHaveBeenCalled();
+  });
+
+  // ── M1 — Pricing floor re-validated at the publish chokepoint ────────────────
+
+  it("rejects a below-floor price inside executeEtsyPublish before any Etsy call (M1)", async () => {
+    const { createDraftListing } = mockSharedAndEtsy();
+    mockPrintify();
+
+    const db = makeDb([], {
+      existingListing: {
+        id: LISTING_ID,
+        status: "pending_publish",
+        title: COMPLIANT_TITLE,
+        description: COMPLIANT_DESCRIPTION,
+        tags: COMPLIANT_TAGS,
+        // $15 with blueprint 145 (print cost $10.09 → floor $25.23) is below floor.
+        price_usd: 15,
+        printify_product_id: PRODUCT_ID,
+        is_active: false,
+        retry_count: 0,
+      },
+    });
+
+    const { resumePublish } = await import("./publisher.js");
+    const { PricingFloorError } = await import("./pricing.js");
+
+    await expect(resumePublish(db, LISTING_ID)).rejects.toThrow(PricingFloorError);
+    // The gate fires before Etsy is contacted.
+    expect(createDraftListing).not.toHaveBeenCalled();
   });
 });

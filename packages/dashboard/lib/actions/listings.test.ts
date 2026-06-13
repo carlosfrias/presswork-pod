@@ -226,8 +226,15 @@ describe("rejectListing", () => {
 });
 
 describe("retryListing", () => {
-  it("resets retry_count and flips back to pending", async () => {
-    const { mod, capture } = await loadModule({ listings: {} });
+  it("resets retry_count and flips back to pending (from error, with a linked design)", async () => {
+    const { mod, capture } = await loadModule({
+      listings: {
+        maybeSingle: {
+          status: "error",
+          design_package_id: "00000000-0000-0000-0000-000000000099",
+        },
+      },
+    });
 
     await mod.retryListing(makeFormData({ id: VALID_ID }));
 
@@ -236,6 +243,36 @@ describe("retryListing", () => {
       retry_count: 0,
       error_message: null,
     });
+    // Concurrency guard: only writes when the row is still at 'error'.
+    expect(capture.updates[0].filters).toContainEqual(["status", "error"]);
+  });
+
+  it("throws when status is not 'error' (stale-tab guard)", async () => {
+    const { mod, capture } = await loadModule({
+      listings: {
+        maybeSingle: {
+          status: "active",
+          design_package_id: "00000000-0000-0000-0000-000000000099",
+        },
+      },
+    });
+
+    await expect(mod.retryListing(makeFormData({ id: VALID_ID }))).rejects.toThrow(
+      /Cannot retry from status='active'/,
+    );
+    // No write — the guard fired before the update.
+    expect(capture.updates).toEqual([]);
+  });
+
+  it("refuses (H1) when design_package_id is null — would starve the listing queue", async () => {
+    const { mod, capture } = await loadModule({
+      listings: { maybeSingle: { status: "error", design_package_id: null } },
+    });
+
+    await expect(mod.retryListing(makeFormData({ id: VALID_ID }))).rejects.toThrow(
+      /no linked design/i,
+    );
+    expect(capture.updates).toEqual([]);
   });
 });
 
@@ -580,8 +617,10 @@ describe("generateDynamicMockups", () => {
 });
 
 describe("regenerateCopy", () => {
-  it("clears title/description/tags and flips back to pending", async () => {
-    const { mod, capture } = await loadModule({ listings: {} });
+  it("clears title/description/tags and flips back to pending (from needs_review)", async () => {
+    const { mod, capture } = await loadModule({
+      listings: { maybeSingle: { status: "needs_review" } },
+    });
 
     await mod.regenerateCopy(makeFormData({ id: VALID_ID }));
 
@@ -592,6 +631,44 @@ describe("regenerateCopy", () => {
       tags: null,
       error_message: null,
     });
+  });
+
+  it("rejects from status='active' (stale-tab guard — would null live copy)", async () => {
+    const { mod, capture } = await loadModule({
+      listings: { maybeSingle: { status: "active" } },
+    });
+
+    await expect(
+      mod.regenerateCopy(makeFormData({ id: VALID_ID })),
+    ).rejects.toThrow(/Cannot regenerate copy from status='active'/);
+    expect(capture.updates).toEqual([]);
+  });
+});
+
+describe("recreatePrintifyProduct", () => {
+  it("clears printify_product_id and flips back to pending (from error)", async () => {
+    const { mod, capture } = await loadModule({
+      listings: { maybeSingle: { status: "error" } },
+    });
+
+    await mod.recreatePrintifyProduct(makeFormData({ id: VALID_ID }));
+
+    expect(capture.updates[0].data).toEqual({
+      status: "pending",
+      printify_product_id: null,
+      error_message: null,
+    });
+  });
+
+  it("rejects from status='active' (stale-tab guard — would null product id)", async () => {
+    const { mod, capture } = await loadModule({
+      listings: { maybeSingle: { status: "active" } },
+    });
+
+    await expect(
+      mod.recreatePrintifyProduct(makeFormData({ id: VALID_ID })),
+    ).rejects.toThrow(/Cannot recreate Printify product from status='active'/);
+    expect(capture.updates).toEqual([]);
   });
 });
 
