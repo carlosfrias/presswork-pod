@@ -13,7 +13,7 @@ jobs:
     name: TS integration — Supabase + INTEGRATION=1
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v5
         with:
@@ -48,7 +48,7 @@ jobs:
     name: Python integration — Supabase + INTEGRATION=1
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6
         with:
@@ -86,7 +86,7 @@ jobs:
     # supabase start in the other jobs already exercises them implicitly.
     if: contains(toJSON(github.event.pull_request.changed_files), 'infra/supabase/migrations/')
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - uses: supabase/setup-cli@v1
         with:
