@@ -23,7 +23,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@v3
         with:
           version: latest
 
@@ -61,7 +61,7 @@ jobs:
           pip install -r packages/design/requirements-dev.txt
           pip install -r packages/shared_py/requirements-dev.txt
 
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@v3
         with:
           version: latest
 
@@ -88,7 +88,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: supabase/setup-cli@v1
+      - uses: supabase/setup-cli@v3
         with:
           version: latest
 
