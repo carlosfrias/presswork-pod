@@ -1,0 +1,110 @@
+# Orca configuration for presswork-pod
+# Autonomous print-on-demand pipeline for Etsy — 4-agent system on fleet.
+#
+# Worktree lifecycle:
+#   Setup:  install deps → agent-spec improve → agent dispatch
+#   Archive: close session → commit .frias → push → backup
+
+worktree:
+  sharedDirectories:
+    - node_modules
+
+  setupHooks:
+    # Install Node.js dependencies (Listing + Ledger agents are TypeScript)
+    - command: |
+        if [ -f package.json ]; then
+          npm install --prefix . 2>/dev/null || true
+        fi
+        if [ -f packages/dashboard/package.json ]; then
+          npm install --prefix packages/dashboard 2>/dev/null || true
+        fi
+      description: Install Node.js dependencies for Presswork agents
+
+    # Install Python dependencies (Scout + Design agents are Python)
+    - command: |
+        if [ -f requirements.txt ] || [ -f pyproject.toml ]; then
+          if [ ! -d .venv ]; then
+            python3 -m venv .venv
+          fi
+          source .venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt 2>/dev/null || true
+          pip install -e . 2>/dev/null || true
+          deactivate
+        fi
+      description: Install Python dependencies for Scout and Design agents
+
+    # Create agent startup directive
+    - command: |
+        mkdir -p .pi
+        cat > .pi/STARTUP.md << 'STARTUP_EOF'
+        # Presswork POD — Worktree Agent Startup Directive
+
+        ## Context
+        You are working in the Presswork POD project — an autonomous
+        print-on-demand pipeline that sells t-shirts, mugs, and posters on Etsy.
+
+        ## Before Starting Your Task
+
+        1. **Agent-Spec Improve**: Read AGENTS.md and AGENTS-DEEP.md. Update:
+           - last_rebuilt date to today
+           - Version number (increment by 1)
+           - Current state section
+           - Commit: git add AGENTS.md AGENTS-DEEP.md && git commit -m "agent-spec: improve"
+
+        2. **Read ARCHITECTURE.md**: Understand the 4-agent pipeline
+           (Scout, Design, Listing, Ledger).
+
+        3. **Read _resources/setup-guides.md**: Step-by-step Etsy, Printify,
+           and fal.ai setup instructions.
+
+        4. **Check fleet status**: Fleet nodes (fnet1-fnet7) should be online
+           for deployment tasks. Use fleet-resource-manager status.
+
+        ## Current Phase: 1 — Fork & Configure
+
+        ### Automated tasks:
+        - Configure environment variables
+        - Deploy Supabase on fnet3 via Dokploy
+        - Deploy Windmill on fnet1 via Dokploy
+        - Run local end-to-end test with mock APIs
+
+        ### Human-blocked tasks:
+        - Create Etsy shop account ($15)
+        - Create Printify account (free)
+        - Provision fal.ai API key ($20)
+        - Choose Etsy shop name
+        - Define niche seed list (10-20 niches)
+
+        ## After Completing Your Task
+        1. Close session: commit .frias artifacts, update FOCUS.md
+        2. Push branch: git push origin <branch>
+        STARTUP_EOF
+      description: Create agent startup directive for Presswork POD
+
+  archiveHooks:
+    # Commit .frias artifacts
+    - command: |
+        if [ -d .frias ] && ! git check-ignore .frias/ >/dev/null 2>&1; then
+          git add .frias/ 2>/dev/null || true
+          if ! git diff --cached --quiet .frias/ 2>/dev/null; then
+            git commit -m "close-session: .frias artifacts" 2>/dev/null || true
+          fi
+        fi
+      description: Commit .frias session artifacts
+
+    # Push branch
+    - command: |
+        CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+        if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" != "main" ]; then
+          git push origin "$CURRENT_BRANCH" 2>/dev/null || true
+        fi
+      description: Push worktree branch to GitHub
+
+    # Backup archive
+    - command: |
+        if [ -d .frias ]; then
+          ARCHIVE_NAME="presswork-pod-archive-$(basename $(pwd))-$(date +%Y%m%d-%H%M%S).tar.gz"
+          tar -czf "/tmp/${ARCHIVE_NAME}" .frias/ 2>/dev/null || true
+        fi
+      description: Create /tmp backup archive of .frias session data
