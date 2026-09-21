@@ -20,8 +20,8 @@ const describeIf = RUN ? describe : describe.skip;
 
 const SHOP_ID = process.env["ETSY_SHOP_ID"] ?? "99";
 const PRODUCT_ID = "e2e-printify-product-1";
-const ETSY_LISTING_ID = 777001;
-const RECEIPT_ID = "e2e-receipt-001";
+const ETSY_LISTING_ID = 397238029;
+const RECEIPT_ID = 1001;
 
 // Required for compliance rule 1; tests inject a fake numeric ID.
 process.env["ETSY_PRODUCTION_PARTNER_ID"] =
@@ -65,7 +65,7 @@ describeIf("E2E: full pipeline smoke test", () => {
         status: "done",
         style_keywords: ["minimalist", "bold"],
         top_tags: ["cat shirt", "cat tee"],
-        price_target_usd: 24.99,
+        price_target_usd: 26.00,
         color_palette: ["black", "white"],
       })
       .select("id")
@@ -77,9 +77,10 @@ describeIf("E2E: full pipeline smoke test", () => {
       .from("design_packages")
       .insert({
         trend_brief_id: trendBriefId,
-        status: "done",
+        status: "approved",
         image_url: "https://cdn.supabase.co/designs/e2e-test.png",
         printify_blueprint_id: 145,
+        printify_print_provider_id: 39,
         printify_variant_ids: [38163, 38177],
         fal_prompt: "print on demand design, transparent background, high resolution, vector-style cat",
       })
@@ -115,12 +116,16 @@ describeIf("E2E: full pipeline smoke test", () => {
       .select("status, image_url")
       .eq("id", designPackageId)
       .single();
-    expect((dp as { status: string; image_url: string }).status).toBe("done");
+    expect((dp as { status: string; image_url: string }).status).toBe("approved");
     expect((dp as { status: string; image_url: string }).image_url).toBeTruthy();
   });
 
   it("Step 3: Listing publishes to active via publishOne", async () => {
     server.use(
+      // Printify — upload design image to media library
+      http.post(`https://api.printify.com/v1/uploads/images.json`, () =>
+        HttpResponse.json({ id: "e2e-upload-1" })
+      ),
       // Anthropic — listing copywriter
       http.post("https://api.anthropic.com/v1/messages", () =>
         HttpResponse.json({
@@ -134,6 +139,14 @@ describeIf("E2E: full pipeline smoke test", () => {
           images: [
             { src: "https://printify.com/e2e-mockup1.jpg" },
             { src: "https://printify.com/e2e-mockup2.jpg" },
+          ],
+          variants: [
+            { id: 38163, title: "S / Black", options: [1, 2] },
+            { id: 38177, title: "M / Black", options: [3, 2] },
+          ],
+          options: [
+            { name: "Size", type: "size", values: [{ id: 1, title: "S" }, { id: 3, title: "M" }] },
+            { name: "Color", type: "color", values: [{ id: 2, title: "Black" }] },
           ],
         })
       ),
@@ -192,13 +205,30 @@ describeIf("E2E: full pipeline smoke test", () => {
       .eq("id", trendBriefId)
       .single();
 
-    const { publishOne } = await import("../../packages/listing/src/publisher.js");
-    const result = await publishOne(
+    // Claim the design package via the claim RPC — this atomically creates
+    // a listings row (status='pending') and returns it. publishOne expects
+    // the listing row ID as its 4th argument (migration 046 contract).
+    const { data: claimed } = await supabase.rpc("claim_pending_design_package");
+    const claimedListing = (claimed as Record<string, unknown>[])[0] as { id: string };
+    listingId = claimedListing.id;
+
+    const { publishOne, resumePublish } = await import("../../packages/listing/src/publisher.js");
+    await publishOne(
       supabase,
       dpRow as never,
-      { ...(tbRow as object), price_target_usd: 24.99, retry_count: 0 } as never
+      { ...(tbRow as object), price_target_usd: 26.00, retry_count: 0 } as never,
+      listingId
     );
-    listingId = result.listingId;
+
+    // publishOne creates the Printify product and pauses at 'needs_review'.
+    // Operator approval changes status to 'pending_publish', then resumePublish
+    // creates the Etsy draft, uploads images, activates the listing.
+    await supabase
+      .from("listings")
+      .update({ status: "pending_publish" })
+      .eq("id", listingId);
+
+    await resumePublish(supabase, listingId);
 
     const { data: listing } = await supabase
       .from("listings")
@@ -259,12 +289,9 @@ describeIf("E2E: full pipeline smoke test", () => {
       )
     );
 
-    // Seed a design_package with blueprint 6 (Gildan 64000 → $8.50 print cost)
-    // so the ledger can resolve listing → design → print cost.
-    await supabase
-      .from("design_packages")
-      .update({ printify_blueprint_id: 6 })
-      .eq("id", designPackageId);
+    // Blueprint 145 (Gildan 64000 → $10.09 print cost) is already set
+    // on the design_package from Step 2. The ledger resolves
+    // listing → design → print cost via printCostForBlueprint(145).
 
     const { pollReceipts } = await import("../../packages/ledger/src/receipt-poller.js");
     const result = await pollReceipts(supabase);
@@ -274,7 +301,7 @@ describeIf("E2E: full pipeline smoke test", () => {
     const { data: order } = await supabase
       .from("orders")
       .select("*")
-      .eq("etsy_order_id", RECEIPT_ID)
+      .eq("etsy_order_id", String(RECEIPT_ID))
       .single();
 
     expect(order).toBeDefined();
@@ -283,7 +310,7 @@ describeIf("E2E: full pipeline smoke test", () => {
     expect(o?.["status"]).toBe("logged");
     expect(o?.["sale_price_usd"]).not.toBeNull();
     expect(Number(o?.["sale_price_usd"])).toBeCloseTo(24.99, 2);
-    expect(Number(o?.["print_cost_usd"])).toBe(8.5);
+    expect(Number(o?.["print_cost_usd"])).toBe(10.09);
     expect(o?.["buyer_country"]).toBe("US");
     expect(Number(o?.["margin_usd"])).toBeGreaterThan(0);
   });

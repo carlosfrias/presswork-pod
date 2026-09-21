@@ -337,6 +337,41 @@ const fixtures: FixtureEntry[] = [
     },
   },
 
+  // Receipts list — non-empty fixture for e2e tests. Returns one receipt
+  // with a listing_id matching the deterministic create_draft_listing mock.
+  // Title "Cat Tee for Cat Lovers Soft Cotton Crewneck Shirt" → listing_id 397238029.
+  // Must come BEFORE list_receipts_empty so it takes precedence.
+  {
+    name: "list_receipts_e2e",
+    match: ({ method, path }) =>
+      method === "GET" &&
+      /\/application\/shops\/[^/]+\/receipts(\/|\?|$)/.test(path) &&
+      /was_paid=true/.test(path),
+    build: () => ({
+      count: 1,
+      results: [
+        {
+          receipt_id: 1001,
+          buyer_user_id: 1,
+          buyer_email: "e2e-buyer@example.com",
+          name: "E2E Buyer",
+          first_line: "1 Test Ave",
+          city: "Portland",
+          state: "OR",
+          zip: "97201",
+          country_iso: "US",
+          grandtotal: { amount: 2499, divisor: 100, currency_code: "USD" },
+          transactions: [
+            {
+              listing_id: 397238029,
+              quantity: 1,
+              price: { amount: 2499, divisor: 100, currency_code: "USD" },
+            },
+          ],
+        },
+      ],
+    }),
+  },
   // Receipts list — empty by default. Ledger code paths still execute
   // (limiter, auth, schema parse) without minting fake economics rows.
   // Override per-test by adding a fixture entry above this one.
