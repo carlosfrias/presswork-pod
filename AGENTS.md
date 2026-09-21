@@ -4,7 +4,7 @@ intensity: On
 domain: business
 rank: 3
 version: 2
-last_rebuilt: 2026-09-11
+last_rebuilt: 2026-09-21
 status: active
 repo: false
 submodule: false
@@ -55,19 +55,19 @@ submodule: false
 
 ## Current State
 
-**Phase:** 1 — Fork & Configure · **Updated:** 2026-09-11
+**Phase:** 1 — Fork & Configure (gate passed) · **Updated:** 2026-09-21
 
 | Priority | Task | Status | Agent |
 |----------|------|--------|-------|
-| P0 | Fork Presswork repo to github.com/carlosfrias/presswork-pod | 🔲 Not started | worker |
+| P0 | Fork Presswork repo to github.com/carlosfrias/presswork-pod | ✅ Done | worker |
+| P0 | Deploy Supabase on fnet3 | ✅ Done — 11 containers healthy, 60 migrations applied | fleet-operator |
+| P0 | Configure NFS mounts on fleet nodes | ✅ Done — already configured | fleet-operator |
 | P0 | Create Etsy shop account | 🔲 Not started | human |
 | P0 | Create Printify account and link to Etsy | 🔲 Not started | human |
 | P0 | Provision fal.ai API key | 🔲 Not started | human |
-| P0 | Deploy Supabase on fnet3 | 🔲 Not started | fleet-operator |
-| P0 | Configure NFS mounts on fleet nodes | 🔲 Not started | fleet-operator |
-| P1 | Deploy Windmill on fnet1 via Dokploy | 🔲 Not started | fleet-operator |
-| P1 | Configure environment variables in Dokploy | 🔲 Not started | worker |
-| P1 | Run local end-to-end test with mock APIs | 🔲 Not started | worker |
+| P1 | Deploy Windmill on fnet1 via Dokploy | ✅ Done — already running at windmill.svc.friasc.com | fleet-operator |
+| P1 | Configure environment variables in Dokploy | ✅ Done — Supabase env vars saved in Dokploy | worker |
+| P1 | Run local end-to-end test with mock APIs | ✅ Done — 3/3 tests pass (Scout→Design→Listing→Ledger) | worker |
 | P2 | Deploy agents to fnet1 via Dokploy | 🔲 Not started | fleet-operator |
 
 ### Phase Plan
