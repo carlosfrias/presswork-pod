@@ -44,53 +44,8 @@ worktree:
         fi
       description: Install Python dependencies for Scout and Design agents
 
-    # Create agent startup directive
-    - command: |
-        mkdir -p .pi
-        cat > .pi/STARTUP.md << 'STARTUP_EOF'
-        # Presswork POD — Worktree Agent Startup Directive
-
-        ## Context
-        You are working in the Presswork POD project — an autonomous
-        print-on-demand pipeline that sells t-shirts, mugs, and posters on Etsy.
-
-        ## Before Starting Your Task
-
-        1. **Agent-Spec Improve**: Read AGENTS.md and AGENTS-DEEP.md. Update:
-           - last_rebuilt date to today
-           - Version number (increment by 1)
-           - Current state section
-           - Commit: git add AGENTS.md AGENTS-DEEP.md && git commit -m "agent-spec: improve"
-
-        2. **Read ARCHITECTURE.md**: Understand the 4-agent pipeline
-           (Scout, Design, Listing, Ledger).
-
-        3. **Read _resources/setup-guides.md**: Step-by-step Etsy, Printify,
-           and fal.ai setup instructions.
-
-        4. **Check fleet status**: Fleet nodes (fnet1-fnet7) should be online
-           for deployment tasks. Use fleet-resource-manager status.
-
-        ## Current Phase: 1 — Fork & Configure
-
-        ### Automated tasks:
-        - Configure environment variables
-        - Deploy Supabase on fnet3 via Dokploy
-        - Deploy Windmill on fnet1 via Dokploy
-        - Run local end-to-end test with mock APIs
-
-        ### Human-blocked tasks:
-        - Create Etsy shop account ($15)
-        - Create Printify account (free)
-        - Provision fal.ai API key ($20)
-        - Choose Etsy shop name
-        - Define niche seed list (10-20 niches)
-
-        ## After Completing Your Task
-        1. Close session: commit .frias artifacts, update FOCUS.md
-        2. Push branch: git push origin <branch>
-        STARTUP_EOF
-      description: Create agent startup directive for Presswork POD
+    # No STARTUP.md — agents read AGENTS.md for directives.
+    # .pi/ governance synced above. Project context is in AGENTS.md.
 
   archiveHooks:
     # Sync IKA governance .pi/ changes back to vault root.
