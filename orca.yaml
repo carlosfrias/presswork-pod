@@ -10,15 +10,25 @@ worktree:
     - node_modules
 
   setupHooks:
+    # Sync IKA governance files from carlos-desktop vault root.
+    # Copies .pi/agents/, .pi/skills/, .pi/APPEND_SYSTEM.md, .pi/settings.json
+    # from the vault root into this worktree (without overwriting project-specific files).
+    - command: |
+        VAULT_ROOT="/Users/friasc/Cloud/carlos-desktop"
+        mkdir -p .pi/agents .pi/skills
+        rsync -a --ignore-existing "$VAULT_ROOT/.pi/agents/" .pi/agents/ 2>/dev/null || true
+        rsync -a --ignore-existing "$VAULT_ROOT/.pi/skills/" .pi/skills/ 2>/dev/null || true
+        cp -n "$VAULT_ROOT/.pi/APPEND_SYSTEM.md" .pi/ 2>/dev/null || true
+        cp -n "$VAULT_ROOT/.pi/settings.json" .pi/ 2>/dev/null || true
+      description: Sync IKA governance .pi/ from vault root (agents, skills, settings, APPEND_SYSTEM)
+
     # Install Node.js dependencies (Listing + Ledger agents are TypeScript)
+    # Uses pnpm with global store — near-instant for worktrees (hardlinks, no duplication)
     - command: |
         if [ -f package.json ]; then
-          npm install --prefix . 2>/dev/null || true
+          pnpm install 2>/dev/null || true
         fi
-        if [ -f packages/dashboard/package.json ]; then
-          npm install --prefix packages/dashboard 2>/dev/null || true
-        fi
-      description: Install Node.js dependencies for Presswork agents
+      description: Install Node.js dependencies via pnpm for Presswork agents
 
     # Install Python dependencies (Scout + Design agents are Python)
     - command: |
@@ -83,6 +93,13 @@ worktree:
       description: Create agent startup directive for Presswork POD
 
   archiveHooks:
+    # Sync IKA governance .pi/ changes back to vault root.
+    - command: |
+        VAULT_ROOT="/Users/friasc/Cloud/carlos-desktop"
+        rsync -a --ignore-existing .pi/agents/ "$VAULT_ROOT/.pi/agents/" 2>/dev/null || true
+        rsync -a --ignore-existing .pi/skills/ "$VAULT_ROOT/.pi/skills/" 2>/dev/null || true
+      description: Sync IKA governance .pi/ changes back to vault root
+
     # Commit .frias artifacts
     - command: |
         if [ -d .frias ] && ! git check-ignore .frias/ >/dev/null 2>&1; then
