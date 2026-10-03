@@ -1,0 +1,4 @@
+
+[submodule ".pi/sessions"]
+	path = .pi/sessions
+	url = git@github.com:carlosfrias/presswork-pod-sessions.git
