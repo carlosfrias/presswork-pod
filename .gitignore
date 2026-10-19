@@ -40,3 +40,4 @@ Thumbs.db
 
 # Large binary fixtures — host externally, not in git
 scripts/shirt-template.png
+.pi/
